@@ -1,0 +1,7 @@
+Pillow>=9.0
+PyAudio>=0.2.14
+prometheus-client>=0.20
+pystray>=0.19.5
+requests>=2.31
+psutil>=5.9
+mcp>=2.3

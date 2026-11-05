@@ -1,0 +1,587 @@
+"""Configuración de monitores: desactivar, extender y duplicar.
+
+Usa la API CCD de Windows (QueryDisplayConfig / SetDisplayConfig), la misma que
+Configuración > Pantalla. Las topologías se aplican con SDC_TOPOLOGY_SUPPLIED:
+Jarvis indica qué monitores se encienden y cuáles comparten imagen, y Windows
+elige las resoluciones guardadas para esa combinación.
+
+Seguridad:
+- ``validar`` usa los mismos flags que la aplicación real con SDC_VALIDATE: comprueba sin aplicar nada.
+- Antes de aplicar se guarda la configuración actual (``ConfiguracionGuardada``)
+  para poder revertirla exactamente.
+- Nunca se deja el equipo sin ningún monitor activo.
+- Numeración: la de Windows (\\\\.\\DISPLAYN) mientras el monitor está activo; se
+  recuerda por monitor físico para poder reactivar uno desactivado.
+"""
+
+import ctypes
+import json
+import logging
+import os
+import re
+from collections.abc import Callable
+from ctypes import wintypes
+from dataclasses import dataclass
+
+QDC_ALL_PATHS = 0x1
+QDC_ONLY_ACTIVE_PATHS = 0x2
+SDC_TOPOLOGY_SUPPLIED = 0x10
+SDC_USE_SUPPLIED_DISPLAY_CONFIG = 0x20
+SDC_VALIDATE = 0x40
+SDC_APPLY = 0x80
+SDC_SAVE_TO_DATABASE = 0x200
+SDC_ALLOW_CHANGES = 0x400
+SDC_ALLOW_PATH_ORDER_CHANGES = 0x2000
+DISPLAYCONFIG_PATH_ACTIVE = 0x1
+MODE_IDX_INVALID = 0xFFFFFFFF
+GET_SOURCE_NAME = 1
+GET_TARGET_NAME = 2
+ERROR_SUCCESS = 0
+ERROR_INSUFFICIENT_BUFFER = 122
+
+PREFERENCIA_MAPA = "mapa_monitores"
+# Decisión del usuario (2026-11-05): solo los monitores 1 (KG271U) y 3 (Smart TV)
+# pueden ser el principal.
+MONITORES_PRINCIPALES_PERMITIDOS = (1, 3)
+
+_ERRORES = {
+    87: "Windows rechazó la configuración (parámetro no válido)",
+    50: "el controlador de video no admite esa configuración",
+    31: "el dispositivo no respondió",
+    5: "acceso denegado",
+    1610: "la configuración de pantalla está bloqueada",
+}
+
+
+class LUID(ctypes.Structure):
+    _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+
+class RATIONAL(ctypes.Structure):
+    _fields_ = [("Numerator", ctypes.c_uint32), ("Denominator", ctypes.c_uint32)]
+
+
+class PATH_SOURCE_INFO(ctypes.Structure):
+    _fields_ = [
+        ("adapterId", LUID),
+        ("id", ctypes.c_uint32),
+        ("modeInfoIdx", ctypes.c_uint32),
+        ("statusFlags", ctypes.c_uint32),
+    ]
+
+
+class PATH_TARGET_INFO(ctypes.Structure):
+    _fields_ = [
+        ("adapterId", LUID),
+        ("id", ctypes.c_uint32),
+        ("modeInfoIdx", ctypes.c_uint32),
+        ("outputTechnology", ctypes.c_uint32),
+        ("rotation", ctypes.c_uint32),
+        ("scaling", ctypes.c_uint32),
+        ("refreshRate", RATIONAL),
+        ("scanLineOrdering", ctypes.c_uint32),
+        ("targetAvailable", wintypes.BOOL),
+        ("statusFlags", ctypes.c_uint32),
+    ]
+
+
+class PATH_INFO(ctypes.Structure):
+    _fields_ = [
+        ("sourceInfo", PATH_SOURCE_INFO),
+        ("targetInfo", PATH_TARGET_INFO),
+        ("flags", ctypes.c_uint32),
+    ]
+
+
+class MODE_INFO(ctypes.Structure):
+    _fields_ = [
+        ("infoType", ctypes.c_uint32),
+        ("id", ctypes.c_uint32),
+        ("adapterId", LUID),
+        ("data", ctypes.c_byte * 48),
+    ]
+
+
+class DEVICE_INFO_HEADER(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_uint32),
+        ("size", ctypes.c_uint32),
+        ("adapterId", LUID),
+        ("id", ctypes.c_uint32),
+    ]
+
+
+class SOURCE_DEVICE_NAME(ctypes.Structure):
+    _fields_ = [("header", DEVICE_INFO_HEADER), ("viewGdiDeviceName", wintypes.WCHAR * 32)]
+
+
+class TARGET_DEVICE_NAME(ctypes.Structure):
+    _fields_ = [
+        ("header", DEVICE_INFO_HEADER),
+        ("flags", ctypes.c_uint32),
+        ("outputTechnology", ctypes.c_uint32),
+        ("edidManufactureId", ctypes.c_uint16),
+        ("edidProductCodeId", ctypes.c_uint16),
+        ("connectorInstance", ctypes.c_uint32),
+        ("monitorFriendlyDeviceName", wintypes.WCHAR * 64),
+        ("monitorDevicePath", wintypes.WCHAR * 128),
+    ]
+
+
+assert ctypes.sizeof(PATH_INFO) == 72 and ctypes.sizeof(MODE_INFO) == 64
+
+
+class ErrorPantalla(Exception):
+    """Error al leer o cambiar la configuración de monitores."""
+
+
+@dataclass(frozen=True)
+class Pantalla:
+    clave: str  # identificador estable del monitor físico (ruta del dispositivo)
+    nombre: str  # nombre comercial (EDID), p. ej. «KG271U N3»
+    adapter: tuple[int, int]
+    target_id: int
+    activa: bool
+    numero: int | None  # número de Windows (DISPLAYN) o el recordado
+    source_id: int | None  # fuente actual si está activa
+
+    @property
+    def descripcion(self) -> str:
+        etiqueta = f"monitor {self.numero}" if self.numero is not None else "monitor sin número"
+        return f"{etiqueta} ({self.nombre})"
+
+
+@dataclass(frozen=True)
+class ConfiguracionGuardada:
+    """Copia exacta de la configuración activa para poder revertirla."""
+
+    paths: bytes
+    modes: bytes
+    num_paths: int
+    num_modes: int
+
+
+def _user32():
+    if os.name != "nt":
+        raise ErrorPantalla("La configuración de monitores solo está disponible en Windows.")
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetDisplayConfigBufferSizes.argtypes = [
+        ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32),
+    ]
+    user32.GetDisplayConfigBufferSizes.restype = ctypes.c_long
+    user32.QueryDisplayConfig.argtypes = [
+        ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(PATH_INFO),
+        ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(MODE_INFO), ctypes.c_void_p,
+    ]
+    user32.QueryDisplayConfig.restype = ctypes.c_long
+    user32.SetDisplayConfig.argtypes = [
+        ctypes.c_uint32, ctypes.POINTER(PATH_INFO), ctypes.c_uint32,
+        ctypes.POINTER(MODE_INFO), ctypes.c_uint32,
+    ]
+    user32.SetDisplayConfig.restype = ctypes.c_long
+    user32.DisplayConfigGetDeviceInfo.argtypes = [ctypes.POINTER(DEVICE_INFO_HEADER)]
+    user32.DisplayConfigGetDeviceInfo.restype = ctypes.c_long
+    return user32
+
+
+def _consultar(flags: int) -> tuple[list[PATH_INFO], list[MODE_INFO]]:
+    user32 = _user32()
+    for _ in range(3):  # la configuración puede cambiar entre llamadas
+        num_paths, num_modes = ctypes.c_uint32(), ctypes.c_uint32()
+        resultado = user32.GetDisplayConfigBufferSizes(flags, ctypes.byref(num_paths), ctypes.byref(num_modes))
+        if resultado != ERROR_SUCCESS:
+            raise ErrorPantalla(f"No pude leer la configuración de pantallas (error {resultado}).")
+        paths = (PATH_INFO * num_paths.value)()
+        modes = (MODE_INFO * num_modes.value)()
+        resultado = user32.QueryDisplayConfig(
+            flags, ctypes.byref(num_paths), paths, ctypes.byref(num_modes), modes, None
+        )
+        if resultado == ERROR_INSUFFICIENT_BUFFER:
+            continue
+        if resultado != ERROR_SUCCESS:
+            raise ErrorPantalla(f"No pude leer la configuración de pantallas (error {resultado}).")
+        return list(paths[: num_paths.value]), list(modes[: num_modes.value])
+    raise ErrorPantalla("La configuración de pantallas cambió mientras se leía; inténtalo de nuevo.")
+
+
+def _nombre_fuente(adapter: LUID, source_id: int) -> str:
+    info = SOURCE_DEVICE_NAME()
+    info.header.type = GET_SOURCE_NAME
+    info.header.size = ctypes.sizeof(info)
+    info.header.adapterId = adapter
+    info.header.id = source_id
+    if _user32().DisplayConfigGetDeviceInfo(ctypes.byref(info.header)) != ERROR_SUCCESS:
+        return ""
+    return info.viewGdiDeviceName
+
+
+def _nombre_destino(adapter: LUID, target_id: int) -> tuple[str, str]:
+    info = TARGET_DEVICE_NAME()
+    info.header.type = GET_TARGET_NAME
+    info.header.size = ctypes.sizeof(info)
+    info.header.adapterId = adapter
+    info.header.id = target_id
+    if _user32().DisplayConfigGetDeviceInfo(ctypes.byref(info.header)) != ERROR_SUCCESS:
+        return "", ""
+    return info.monitorFriendlyDeviceName, info.monitorDevicePath
+
+
+def _clave_adapter(luid: LUID) -> tuple[int, int]:
+    return (int(luid.LowPart), int(luid.HighPart))
+
+
+def listar_pantallas(
+    mapa: dict[str, int] | None = None,
+) -> tuple[list[Pantalla], dict[str, int]]:
+    """Monitores conectados (activos o no) y el mapa número↔monitor actualizado."""
+    mapa = dict(mapa or {})
+    activos, _ = _consultar(QDC_ONLY_ACTIVE_PATHS)
+    todos, _ = _consultar(QDC_ALL_PATHS)
+    activos_por_destino = {
+        (_clave_adapter(p.targetInfo.adapterId), p.targetInfo.id): p for p in activos
+    }
+    vistos: dict[tuple[tuple[int, int], int], Pantalla] = {}
+    for path in todos:
+        if not path.targetInfo.targetAvailable:
+            continue
+        clave_destino = (_clave_adapter(path.targetInfo.adapterId), path.targetInfo.id)
+        if clave_destino in vistos:
+            continue
+        nombre, ruta = _nombre_destino(path.targetInfo.adapterId, path.targetInfo.id)
+        if not ruta:
+            continue
+        activo = activos_por_destino.get(clave_destino)
+        numero = None
+        source_id = None
+        if activo is not None:
+            source_id = int(activo.sourceInfo.id)
+            gdi = _nombre_fuente(activo.sourceInfo.adapterId, activo.sourceInfo.id)
+            match = re.search(r"(\d+)$", gdi)
+            if match:
+                numero = int(match.group(1))
+                # El número se libera de cualquier otro monitor que lo tuviera recordado.
+                for otra, valor in list(mapa.items()):
+                    if valor == numero and otra != ruta:
+                        del mapa[otra]
+                mapa[ruta] = numero
+        if numero is None:
+            numero = mapa.get(ruta)
+        vistos[clave_destino] = Pantalla(
+            clave=ruta,
+            nombre=nombre or "monitor",
+            adapter=clave_destino[0],
+            target_id=clave_destino[1],
+            activa=activo is not None,
+            numero=numero,
+            source_id=source_id,
+        )
+    pantallas = sorted(vistos.values(), key=lambda p: (p.numero is None, p.numero or 0, p.nombre))
+    return pantallas, mapa
+
+
+def guardar_configuracion() -> ConfiguracionGuardada:
+    paths, modes = _consultar(QDC_ONLY_ACTIVE_PATHS)
+    return ConfiguracionGuardada(
+        paths=b"".join(bytes(p) for p in paths),
+        modes=b"".join(bytes(m) for m in modes),
+        num_paths=len(paths),
+        num_modes=len(modes),
+    )
+
+
+def restaurar_configuracion(guardada: ConfiguracionGuardada, solo_validar: bool = False) -> None:
+    paths = (PATH_INFO * guardada.num_paths).from_buffer_copy(guardada.paths)
+    modes = (MODE_INFO * guardada.num_modes).from_buffer_copy(guardada.modes) if guardada.num_modes else None
+    resultado = _user32().SetDisplayConfig(
+        guardada.num_paths, paths, guardada.num_modes, modes,
+        flags_para(FLAGS_EXPLICITO, solo_validar),
+    )
+    if resultado != ERROR_SUCCESS:
+        # Último recurso: dejar que Windows restaure la última configuración extendida conocida.
+        logging.error("No se pudo restaurar la configuración exacta (error %s).", resultado)
+        raise ErrorPantalla(_mensaje_error(resultado))
+
+
+def _mensaje_error(codigo: int) -> str:
+    return f"{_ERRORES.get(codigo, 'Windows no aceptó la configuración')} (código {codigo})."
+
+
+# --- Construcción de topologías ---------------------------------------------------
+
+def _buscar(pantallas: list[Pantalla], numero: int) -> Pantalla:
+    for pantalla in pantallas:
+        if pantalla.numero == numero:
+            return pantalla
+    conocidos = ", ".join(
+        f"{p.numero}{'' if p.activa else ' (desactivado)'}" for p in pantallas if p.numero is not None
+    )
+    raise ErrorPantalla(f"No conozco el monitor {numero}. Monitores conocidos: {conocidos or 'ninguno'}.")
+
+
+def _topologia(
+    activos_deseados: dict[tuple[tuple[int, int], int], int | None],
+    todos: list[PATH_INFO],
+) -> list[PATH_INFO]:
+    """Construye los paths para {destino: source_id fijo o None (cualquiera libre)}."""
+    usados: dict[tuple[int, int], set[int]] = {}
+    for (adapter, _target), source in activos_deseados.items():
+        if source is not None:
+            usados.setdefault(adapter, set()).add(source)
+    resultado: list[PATH_INFO] = []
+    for (adapter, target), source in activos_deseados.items():
+        candidatos = [
+            p for p in todos
+            if _clave_adapter(p.targetInfo.adapterId) == adapter and p.targetInfo.id == target
+            and _clave_adapter(p.sourceInfo.adapterId) == adapter
+        ]
+        if source is None:
+            libres = [p for p in candidatos if p.sourceInfo.id not in usados.get(adapter, set())]
+            if not libres:
+                raise ErrorPantalla("La tarjeta de video no tiene salidas libres para otro monitor.")
+            elegido = libres[0]
+            usados.setdefault(adapter, set()).add(int(elegido.sourceInfo.id))
+        else:
+            coincidentes = [p for p in candidatos if p.sourceInfo.id == source]
+            if not coincidentes:
+                raise ErrorPantalla("Esos monitores no se pueden duplicar en esta tarjeta de video.")
+            elegido = coincidentes[0]
+        path = PATH_INFO.from_buffer_copy(bytes(elegido))
+        path.flags = DISPLAYCONFIG_PATH_ACTIVE
+        path.sourceInfo.modeInfoIdx = MODE_IDX_INVALID
+        path.targetInfo.modeInfoIdx = MODE_IDX_INVALID
+        path.sourceInfo.statusFlags = 0
+        path.targetInfo.statusFlags = 0
+        resultado.append(path)
+    return resultado
+
+
+def planificar(accion: str, numeros: tuple[int, ...], pantallas: list[Pantalla]) -> tuple[
+    dict[tuple[tuple[int, int], int], int | None], str
+]:
+    """Devuelve la topología deseada {destino: fuente} y una descripción en español."""
+    deseado: dict[tuple[tuple[int, int], int], int | None] = {
+        (p.adapter, p.target_id): p.source_id for p in pantallas if p.activa
+    }
+    if accion == "disable":
+        objetivo = _buscar(pantallas, numeros[0])
+        if not objetivo.activa:
+            raise ErrorPantalla(f"El {objetivo.descripcion} ya está desactivado.")
+        if len(deseado) <= 1:
+            raise ErrorPantalla("No puedo desactivar el único monitor activo.")
+        # Si estaba duplicado, el otro monitor sigue mostrando esa misma imagen.
+        del deseado[(objetivo.adapter, objetivo.target_id)]
+        return deseado, f"Desactivé el {objetivo.descripcion}."
+    if accion == "extend":
+        objetivo = _buscar(pantallas, numeros[0])
+        clave = (objetivo.adapter, objetivo.target_id)
+        fuente = objetivo.source_id
+        duplicado = fuente is not None and sum(1 for s in deseado.values() if s == fuente) > 1
+        if objetivo.activa and not duplicado:
+            raise ErrorPantalla(f"El {objetivo.descripcion} ya está extendido.")
+        deseado[clave] = None  # se le asigna una fuente propia
+        return deseado, f"Extendí el escritorio al {objetivo.descripcion}."
+    if accion == "duplicate":
+        if len(numeros) != 2 or numeros[0] == numeros[1]:
+            raise ErrorPantalla("Para duplicar indica dos monitores distintos, por ejemplo «duplica 1 y 3».")
+        primero, segundo = (_buscar(pantallas, n) for n in numeros)
+        if primero.adapter != segundo.adapter:
+            raise ErrorPantalla("Solo puedo duplicar monitores conectados a la misma tarjeta de video.")
+        if primero.activa and segundo.activa and primero.source_id == segundo.source_id:
+            raise ErrorPantalla(
+                f"El {primero.descripcion} y el {segundo.descripcion} ya están duplicados."
+            )
+        # El duplicado se arma con modos explícitos (ver _config_duplicado); aquí solo
+        # se indica qué monitores deben estar activos antes de duplicar.
+        for pantalla in (primero, segundo):
+            deseado.setdefault((pantalla.adapter, pantalla.target_id), None)
+        return deseado, f"Dupliqué el {primero.descripcion} y el {segundo.descripcion}."
+    if accion == "set_primary":
+        if numeros[0] not in MONITORES_PRINCIPALES_PERMITIDOS:
+            permitidos = " y ".join(str(n) for n in MONITORES_PRINCIPALES_PERMITIDOS)
+            raise ErrorPantalla(f"Solo puedo poner como principal los monitores {permitidos}.")
+        objetivo = _buscar(pantallas, numeros[0])
+        if not objetivo.activa:
+            raise ErrorPantalla(
+                f"El {objetivo.descripcion} está desactivado; actívalo antes de hacerlo principal."
+            )
+        return deseado, f"El {objetivo.descripcion} ahora es el monitor principal."
+    raise ErrorPantalla(f"Acción de pantalla desconocida: {accion}")
+
+
+class SOURCE_MODE(ctypes.Structure):
+    _fields_ = [
+        ("width", ctypes.c_uint32),
+        ("height", ctypes.c_uint32),
+        ("pixelFormat", ctypes.c_uint32),
+        ("x", ctypes.c_long),
+        ("y", ctypes.c_long),
+    ]
+
+
+def _config_duplicado(base: Pantalla, copia: Pantalla) -> tuple[list[PATH_INFO], list[MODE_INFO]]:
+    """Configuración activa con ``copia`` compartiendo la imagen de ``base``.
+
+    Con SDC_TOPOLOGY_SUPPLIED el driver rechaza duplicar monitores sin un modo
+    común guardado (p. ej. 2560×1440 con 1920×1080, error 31). Por eso la imagen
+    compartida usa la resolución del monitor más pequeño del par y la tarjeta la
+    escala en el otro, como hace Windows al duplicar a mano.
+    """
+    paths, modes = _consultar(QDC_ONLY_ACTIVE_PATHS)
+    paths = [PATH_INFO.from_buffer_copy(bytes(p)) for p in paths]
+    modes = [MODE_INFO.from_buffer_copy(bytes(m)) for m in modes]
+
+    def path_de(pantalla: Pantalla) -> PATH_INFO:
+        for path in paths:
+            if (_clave_adapter(path.targetInfo.adapterId) == pantalla.adapter
+                    and path.targetInfo.id == pantalla.target_id):
+                return path
+        raise ErrorPantalla(f"El {pantalla.descripcion} no está activo.")
+
+    path_base, path_copia = path_de(base), path_de(copia)
+    modo_base = SOURCE_MODE.from_buffer(modes[path_base.sourceInfo.modeInfoIdx].data)
+    modo_copia = SOURCE_MODE.from_buffer(modes[path_copia.sourceInfo.modeInfoIdx].data)
+    ancho, alto = min(
+        ((modo_base.width, modo_base.height), (modo_copia.width, modo_copia.height)),
+        key=lambda tam: tam[0] * tam[1],
+    )
+    modo_base.width, modo_base.height = ancho, alto
+    path_copia.sourceInfo.id = path_base.sourceInfo.id
+    path_copia.sourceInfo.modeInfoIdx = path_base.sourceInfo.modeInfoIdx
+    return paths, modes
+
+
+# Flags reales de cada forma de aplicar. La validación usa EXACTAMENTE los mismos
+# cambiando SDC_APPLY por SDC_VALIDATE: antes se validaba sin SDC_SAVE_TO_DATABASE
+# y al aplicar Windows devolvía 87, porque ese flag no se admite con
+# SDC_TOPOLOGY_SUPPLIED (en ese modo Windows ya guarda la topología por su cuenta).
+FLAGS_TOPOLOGIA = SDC_APPLY | SDC_TOPOLOGY_SUPPLIED | SDC_ALLOW_PATH_ORDER_CHANGES
+FLAGS_EXPLICITO = (
+    SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES | SDC_SAVE_TO_DATABASE
+)
+
+
+def flags_para(flags_reales: int, solo_validar: bool) -> int:
+    return (flags_reales & ~SDC_APPLY) | SDC_VALIDATE if solo_validar else flags_reales
+
+
+def _aplicar_explicito(
+    paths: list[PATH_INFO], modes: list[MODE_INFO], solo_validar: bool = False
+) -> None:
+    arreglo_paths = (PATH_INFO * len(paths))(*paths)
+    arreglo_modes = (MODE_INFO * len(modes))(*modes)
+    resultado = _user32().SetDisplayConfig(
+        len(paths), arreglo_paths, len(modes), arreglo_modes,
+        flags_para(FLAGS_EXPLICITO, solo_validar),
+    )
+    if resultado != ERROR_SUCCESS:
+        raise ErrorPantalla(_mensaje_error(resultado))
+
+
+def _aplicar(deseado, solo_validar: bool = False) -> None:
+    todos, _ = _consultar(QDC_ALL_PATHS)
+    paths = _topologia(deseado, todos)
+    arreglo = (PATH_INFO * len(paths))(*paths)
+    resultado = _user32().SetDisplayConfig(
+        len(paths), arreglo, 0, None, flags_para(FLAGS_TOPOLOGIA, solo_validar)
+    )
+    if resultado != ERROR_SUCCESS:
+        raise ErrorPantalla(_mensaje_error(resultado))
+
+
+MODE_INFO_TYPE_SOURCE = 1
+
+
+def _config_principal(nuevo: Pantalla) -> tuple[list[PATH_INFO], list[MODE_INFO]]:
+    """Configuración activa desplazada para que ``nuevo`` quede en (0, 0).
+
+    En Windows el monitor principal es el que empieza en el origen del
+    escritorio; se mueven todas las imágenes lo mismo, así la disposición
+    relativa de los monitores no cambia.
+    """
+    paths, modes = _consultar(QDC_ONLY_ACTIVE_PATHS)
+    paths = [PATH_INFO.from_buffer_copy(bytes(p)) for p in paths]
+    modes = [MODE_INFO.from_buffer_copy(bytes(m)) for m in modes]
+    path = next(
+        (p for p in paths
+         if _clave_adapter(p.targetInfo.adapterId) == nuevo.adapter
+         and p.targetInfo.id == nuevo.target_id),
+        None,
+    )
+    if path is None:
+        raise ErrorPantalla(f"El {nuevo.descripcion} no está activo.")
+    origen = SOURCE_MODE.from_buffer(modes[path.sourceInfo.modeInfoIdx].data)
+    dx, dy = origen.x, origen.y
+    if dx == 0 and dy == 0:
+        raise ErrorPantalla(f"El {nuevo.descripcion} ya es el monitor principal.")
+    for modo in modes:
+        if modo.infoType == MODE_INFO_TYPE_SOURCE:
+            fuente = SOURCE_MODE.from_buffer(modo.data)
+            fuente.x -= dx
+            fuente.y -= dy
+    return paths, modes
+
+
+def _par(numeros: tuple[int, ...], pantallas: list[Pantalla]) -> tuple[Pantalla, Pantalla]:
+    """Para duplicar: la base es el primer monitor mencionado que esté activo."""
+    primero, segundo = (_buscar(pantallas, n) for n in numeros)
+    return (primero, segundo) if primero.activa or not segundo.activa else (segundo, primero)
+
+
+def validar(accion: str, numeros: tuple[int, ...], mapa: dict[str, int] | None = None) -> str:
+    """Comprueba con SDC_VALIDATE que Windows acepta el cambio, sin aplicarlo.
+
+    Si para duplicar hay que activar antes un monitor, solo se valida ese
+    primer paso (el segundo depende de la configuración resultante).
+    """
+    pantallas, _ = listar_pantallas(mapa)
+    deseado, descripcion = planificar(accion, numeros, pantallas)
+    if accion == "set_primary":
+        _aplicar_explicito(*_config_principal(_buscar(pantallas, numeros[0])), solo_validar=True)
+        return descripcion
+    if accion == "duplicate":
+        base, copia = _par(numeros, pantallas)
+        if base.activa and copia.activa:
+            _aplicar_explicito(*_config_duplicado(base, copia), solo_validar=True)
+            return descripcion
+    _aplicar(deseado, solo_validar=True)
+    return descripcion
+
+
+def aplicar(
+    accion: str,
+    numeros: tuple[int, ...],
+    mapa: dict[str, int] | None = None,
+) -> tuple[str, ConfiguracionGuardada, dict[str, int]]:
+    """Aplica el cambio y devuelve (descripción, configuración previa, mapa actualizado)."""
+    pantallas, mapa = listar_pantallas(mapa)
+    deseado, descripcion = planificar(accion, numeros, pantallas)
+    validar(accion, numeros, mapa)
+    previa = guardar_configuracion()
+    # La red de seguridad debe funcionar antes de tocar nada.
+    restaurar_configuracion(previa, solo_validar=True)
+    if accion == "set_primary":
+        _aplicar_explicito(*_config_principal(_buscar(pantallas, numeros[0])))
+    elif accion == "duplicate":
+        base, copia = _par(numeros, pantallas)
+        if not (base.activa and copia.activa):
+            # Paso 1: activar el monitor que faltaba; paso 2: duplicar.
+            _aplicar(deseado)
+            pantallas, mapa = listar_pantallas(mapa)
+            base, copia = _par(numeros, pantallas)
+        _aplicar_explicito(*_config_duplicado(base, copia))
+    else:
+        _aplicar(deseado)
+    logging.info("Configuración de pantallas aplicada: %s %s", accion, numeros)
+    return descripcion, previa, mapa
+
+
+def cargar_mapa(obtener: Callable[[str], str | None]) -> dict[str, int]:
+    try:
+        datos = json.loads(obtener(PREFERENCIA_MAPA) or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return {str(k): int(v) for k, v in datos.items() if isinstance(v, int)} if isinstance(datos, dict) else {}
+
+
+def guardar_mapa(guardar: Callable[[str, str], None], mapa: dict[str, int]) -> None:
+    guardar(PREFERENCIA_MAPA, json.dumps(mapa, ensure_ascii=False))

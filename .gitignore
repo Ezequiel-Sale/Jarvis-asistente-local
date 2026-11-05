@@ -1,0 +1,43 @@
+# --- Entornos y cachés de Python ---
+.venv/
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# --- Artefactos de PyInstaller ---
+build/
+dist/
+
+# --- Datos personales generados en tiempo de ejecución ---
+# Conversaciones, recuerdos, rutinas, historial de acciones y preferencias.
+jarvis_memory.db
+*.db-journal
+*.db-wal
+*.db-shm
+# Audios de las respuestas de Jarvis.
+responses/
+# Registros (pueden contener rutas y errores del equipo).
+logs/
+*.log
+# Configuración local de integraciones (incluye rutas del usuario); se crea sola.
+integraciones.json
+
+# --- Secretos ---
+.env
+.env.*
+!.env.example
+
+# --- Modelos pesados (se descargan aparte; ver PROJECT_CONTEXT.md) ---
+whisper-models/
+piper-voices/
+ollama-data/
+*.onnx
+
+# --- Editores y sistema ---
+.vscode/
+.idea/
+.claude/settings.local.json
+Thumbs.db
+desktop.ini

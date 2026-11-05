@@ -1,0 +1,50 @@
+services:
+  # 1. ENTENDIMIENTO DE VOZ (STT)
+  stt:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    container_name: jarvis-stt
+    ports:
+      - "9000:8000"
+    volumes:
+      - ./whisper-models:/home/ubuntu/.cache/huggingface/hub
+
+  # 2. CEREBRO (LLM)
+  llm:
+    image: ollama/ollama:latest
+    container_name: jarvis-llm
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama-data:/root/.ollama # Persiste modelos y conversaciones
+    command: ["ollama", "serve"]
+
+  # 3. VOZ (TTS)
+  tts:
+    image: rhasspy/wyoming-piper:latest
+    container_name: jarvis-tts
+    ports:
+      - "5555:10200"
+    volumes:
+      - ./piper-voices:/data
+    command: ["--voice", "es_ES-davefx-medium"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: jarvis-prom
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: jarvis-graf
+    ports:
+      - "3000:3000"
+    environment:
+      # Definida en .env (no se sube a git); ver .env.example.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+    depends_on:
+      - prometheus

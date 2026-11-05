@@ -1,0 +1,73 @@
+CREATE TABLE IF NOT EXISTS preferencias (
+    clave TEXT PRIMARY KEY,
+    valor TEXT NOT NULL,
+    actualizado TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS rutinas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT NOT NULL UNIQUE,
+    hora TEXT NOT NULL,
+    accion TEXT NOT NULL,
+    activa INTEGER NOT NULL DEFAULT 1 CHECK (activa IN (0, 1)),
+    dias_semana TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
+    ultima_ejecucion TEXT,
+    -- 'hora' (usa hora/dias_semana) o un evento: 'auriculares_conectados', 'auriculares_desconectados'
+    disparador TEXT NOT NULL DEFAULT 'hora',
+    -- 'preguntar' o 'automatica' (solo si todas las acciones son de riesgo bajo)
+    modo_permiso TEXT NOT NULL DEFAULT 'preguntar'
+);
+
+CREATE TABLE IF NOT EXISTS permisos (
+    recurso TEXT PRIMARY KEY,
+    nivel TEXT CHECK(nivel IN ('lectura','escritura','ejecucion')),
+    requiere_confirmacion INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS conversaciones (
+    id TEXT PRIMARY KEY,
+    titulo TEXT NOT NULL DEFAULT 'Nueva conversación',
+    creado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+    actualizado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS mensajes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversacion_id TEXT NOT NULL REFERENCES conversaciones(id) ON DELETE CASCADE,
+    rol TEXT NOT NULL CHECK(rol IN ('user', 'assistant')),
+    contenido TEXT NOT NULL,
+    creado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS memorias (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contenido TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    creado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_mensajes_conversacion
+    ON mensajes(conversacion_id, id);
+
+-- Registro de acciones ejecutadas (se conservan solo las últimas 500)
+CREATE TABLE IF NOT EXISTS acciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    herramienta TEXT NOT NULL,
+    etiqueta TEXT NOT NULL,
+    origen TEXT NOT NULL,
+    estado TEXT NOT NULL CHECK(estado IN (
+        'exito', 'error', 'tiempo_agotado', 'cancelada', 'no_verificada'
+    )),
+    argumentos TEXT NOT NULL DEFAULT '{}',
+    resultado TEXT,
+    error TEXT,
+    verificacion TEXT,
+    duracion_ms INTEGER NOT NULL,
+    creado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+);
+
+-- Inserciones iniciales seguras
+INSERT OR IGNORE INTO preferencias (clave, valor) VALUES ('idioma', 'español');
+INSERT OR IGNORE INTO preferencias (clave, valor) VALUES ('tono', 'directo y útil');
+INSERT OR IGNORE INTO preferencias (clave, valor) VALUES ('unidad_temperatura', '°C');
+
+INSERT OR IGNORE INTO permisos (recurso, nivel, requiere_confirmacion) VALUES ('archivos_personales', 'lectura', 1);
