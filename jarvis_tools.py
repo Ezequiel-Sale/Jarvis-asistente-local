@@ -5,6 +5,7 @@ from jarvis_actions import Verificador
 from jarvis_commands import normalizar_url_web
 import jarvis_routines
 import jarvis_health
+import jarvis_power
 import jarvis_system_info
 from jarvis_tool_registry import ActionRecorder, ToolRegistry, ToolRisk
 
@@ -217,6 +218,7 @@ def crear_registro_herramientas(
         timeout_seconds=60,
     )
     _registrar_consultas_sistema(registry)
+    _registrar_energia(registry)
     jarvis_routines.registrar_herramienta(
         registry,
         host,
@@ -303,4 +305,60 @@ def _registrar_consultas_sistema(registry: ToolRegistry) -> None:
         jarvis_health.consultar_diagnostico,
         label="Diagnóstico de Jarvis",
         timeout_seconds=15,
+    )
+
+
+def _registrar_energia(registry: ToolRegistry) -> None:
+    """Apagar, reiniciar, suspender y bloquear el equipo.
+
+    Apagar, reiniciar y suspender son de riesgo alto: siempre piden
+    confirmación, también como comando directo. Bloquear y cancelar un
+    apagado programado no pierden trabajo, así que son de riesgo bajo.
+    """
+    registry.register(
+        "power_control",
+        (
+            "Apaga (shutdown), reinicia (restart) o suspende (sleep) el equipo. "
+            f"Apagar y reiniciar se programan con {jarvis_power.ESPERA_APAGADO} segundos de margen para cancelarlos. "
+            "Úsala solo si el usuario lo pide explícitamente."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": list(jarvis_power.ACCIONES_ENERGIA)}
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+        jarvis_power.ejecutar_accion_energia,
+        risk=ToolRisk.HIGH,
+        requires_confirmation=True,
+        label="Apagar, reiniciar o suspender el equipo",
+        timeout_seconds=15,
+    )
+    registry.register(
+        "cancel_power_action",
+        "Cancela un apagado o reinicio del equipo que esté programado.",
+        {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        jarvis_power.cancelar_apagado,
+        label="Cancelar apagado o reinicio",
+        timeout_seconds=15,
+    )
+    registry.register(
+        "lock_computer",
+        "Bloquea la sesión de Windows (pantalla de bloqueo). No cierra programas.",
+        {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        jarvis_power.bloquear_equipo,
+        label="Bloquear el equipo",
+        timeout_seconds=10,
     )

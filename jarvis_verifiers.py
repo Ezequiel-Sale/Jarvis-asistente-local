@@ -10,6 +10,9 @@ Sin verificador a propósito:
 - ``launch_game``: muchos juegos arrancan mediante lanzadores que terminan
   enseguida, así que comprobar el proceso daría falsos negativos.
 - ``manage_window``: depende del estado de Tk o de ventanas ajenas.
+- ``power_control``, ``cancel_power_action`` y ``lock_computer``: el handler ya
+  comprueba el código de Windows, y después de apagar, suspender o bloquear
+  no hay nada que Jarvis pueda comprobar.
 """
 
 import time

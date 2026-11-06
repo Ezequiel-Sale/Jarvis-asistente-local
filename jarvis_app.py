@@ -15,6 +15,7 @@ import jarvis_actions
 import jarvis_core as core
 import jarvis_health
 import jarvis_displays
+import jarvis_power
 import jarvis_vision
 import jarvis_memory
 import jarvis_routines
@@ -40,6 +41,7 @@ from jarvis_commands import (
     detectar_comando_navegacion_web,
     detectar_comando_nueva_pestana,
     detectar_comando_volumen,
+    detectar_comando_energia,
     detectar_comando_monitores,
     detectar_consulta_sistema,
     detectar_borrado_historial,
@@ -323,6 +325,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         system_query = (
             detectar_consulta_sistema(text)
             or detectar_comando_monitores(text)
+            or detectar_comando_energia(text)
             or self.plugins.detectar_comando(text)
         )
         if system_query is not None:
@@ -516,8 +519,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             if porcentaje is not None:
                 self.events.put(("volume_action", porcentaje, transcript))
                 return
-            system_query = detectar_consulta_sistema(transcript) or detectar_comando_monitores(
-                transcript
+            system_query = (
+                detectar_consulta_sistema(transcript)
+                or detectar_comando_monitores(transcript)
+                or detectar_comando_energia(transcript)
             )
             plugins = getattr(self, "plugins", None)
             if system_query is None and isinstance(plugins, GestorPlugins):
@@ -713,6 +718,18 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             return reply.get(timeout=120)
         except queue.Empty:
             logging.warning("Expiró la confirmación de la herramienta %s.", tool.name)
+            return False
+
+    def _request_simple_confirmation(self, title: str, question: str) -> bool:
+        """Pregunta sí/no al usuario desde un hilo secundario (False si expira)."""
+        if self._closing:
+            return False
+        reply: queue.Queue[bool] = queue.Queue(maxsize=1)
+        self.events.put(("simple_confirmation", title, question, reply))
+        try:
+            return reply.get(timeout=120)
+        except queue.Empty:
+            logging.warning("Expiró la confirmación: %s.", title)
             return False
 
     def _request_plan_confirmation(
@@ -1214,6 +1231,17 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                 ),
                                 parent=self.root,
                                 icon="warning" if risk == "high" else "question",
+                            )
+                        reply.put(approved)
+                    elif event[0] == "simple_confirmation":
+                        _, title, question, reply = event
+                        if self._closing:
+                            approved = False
+                        else:
+                            if self.root.state() == "withdrawn":
+                                self._show_from_tray()
+                            approved = messagebox.askyesno(
+                                title, question, parent=self.root, icon="warning"
                             )
                         reply.put(approved)
                     elif event[0] == "plan_confirmation":
@@ -1795,6 +1823,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "list_top_processes": "MIDIENDO PROCESOS…",
         "get_system_status": "REVISANDO EL EQUIPO…",
         "configure_display": "CAMBIANDO LA CONFIGURACIÓN DE MONITORES…",
+        "power_control": "ESPERANDO CONFIRMACIÓN…",
+        "cancel_power_action": "CANCELANDO EL APAGADO…",
+        "lock_computer": "BLOQUEANDO EL EQUIPO…",
     }
 
     def _execute_volume_action(self, porcentaje: int, command: str) -> None:
@@ -1949,6 +1980,15 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             label = self.tool_registry.get(tool_name).display_name
         except ToolError:
             label = tool_name
+        if tool_name == "power_control" and not self._request_simple_confirmation(
+            "Confirmar " + label.lower(),
+            jarvis_power.PREGUNTAS_CONFIRMACION.get(
+                str(arguments.get("action")), f"¿Autorizas «{label}»?"
+            ),
+        ):
+            # Riesgo alto: aunque sea un comando directo, siempre se confirma.
+            self.events.put(("direct_action_error", tool_name, "Cancelé la acción; el equipo sigue igual."))
+            return
         try:
             result = self.tool_registry.execute(
                 tool_name,

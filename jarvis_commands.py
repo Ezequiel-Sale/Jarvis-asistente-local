@@ -754,3 +754,62 @@ def detectar_comando_monitores(texto: str) -> tuple[str, dict[str, object]] | No
             "second_monitor": _numero_monitor(match.group(2)),
         }
     return None
+
+
+_EQUIPO = (
+    r"(?:el\s+|la\s+|mi\s+|este\s+|esta\s+)?"
+    r"(?:equipo|pc|ordenador|computadora|computador|compu|maquina|sistema|windows)"
+)
+_ACCIONES_ENERGIA_DIRECTAS = (
+    (
+        re.compile(r"^(?:apaga|apagar|apagame|apagues)\s+" + _EQUIPO + r"(?:\s+ahora)?$"),
+        "power_control",
+        {"action": "shutdown"},
+    ),
+    (
+        re.compile(
+            r"^(?:reinicia|reiniciar|reiniciame|reinicies|resetea|resetear)\s+"
+            + _EQUIPO + r"(?:\s+ahora)?$"
+        ),
+        "power_control",
+        {"action": "restart"},
+    ),
+    (
+        re.compile(
+            r"^(?:(?:suspende|suspender|suspendeme|duerme|dormir)\s+" + _EQUIPO
+            + r"|(?:pon|poner|manda|mandar|deja|dejar)\s+" + _EQUIPO
+            + r"\s+(?:en|a)\s+(?:suspension|suspender|reposo|modo\s+(?:suspension|reposo)))$"
+        ),
+        "power_control",
+        {"action": "sleep"},
+    ),
+    (
+        re.compile(
+            r"^(?:(?:bloquea|bloquear|bloqueame)\s+(?:" + _EQUIPO
+            + r"|(?:la\s+)?(?:sesion|pantalla))"
+            + r"|(?:bloqueo|bloqueo\s+de)\s+(?:la\s+)?(?:sesion|pantalla))$"
+        ),
+        "lock_computer",
+        {},
+    ),
+    (
+        re.compile(
+            r"^(?:cancela|cancelar|anula|anular|deten|detener|para|parar|aborta|abortar)\s+"
+            r"(?:el\s+)?(?:apagado|reinicio)(?:\s+(?:del?\s+)?" + _EQUIPO + r")?$"
+            r"|^no\s+(?:lo\s+)?(?:apagues|reinicies)(?:\s+" + _EQUIPO + r")?$"
+        ),
+        "cancel_power_action",
+        {},
+    ),
+)
+
+
+def detectar_comando_energia(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«apaga el equipo», «reinicia la pc», «suspende el equipo», «bloquea la pc»,
+    «cancela el apagado». Solo frases completas, para no confundir «apaga el
+    monitor 3» con apagar el equipo."""
+    consulta = _normalizar_consulta(texto)
+    for patron, herramienta, argumentos in _ACCIONES_ENERGIA_DIRECTAS:
+        if patron.fullmatch(consulta):
+            return herramienta, dict(argumentos)
+    return None

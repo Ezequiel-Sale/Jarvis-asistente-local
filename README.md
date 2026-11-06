@@ -12,6 +12,7 @@ Puedes hablarle (F9 o el botón del micrófono) o escribirle, y además de conve
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
 | **Consultas del sistema** (solo lectura) | «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» |
 | **Rutinas y automatizaciones** | «Programa una rutina llamada Inicio a las 09:00 de lunes a viernes y pon el volumen al 30 %», «cuando conecte los auriculares, cambia la salida a auriculares automáticamente» (detecta cuando enciendes o apagas el G533, sin quitar el receptor) |
+| **Energía** | «Apaga el equipo», «reinicia la PC», «suspende el equipo», «bloquea la pantalla», «cancela el apagado» |
 | **Monitores** | «Desactiva el monitor 3», «extiende el monitor 3», «duplica los monitores 1 y 3», «pon el monitor 3 como principal» |
 | **Visión de pantalla** | «Mira el monitor 2 y dime qué error sale» (con vista previa y confirmación) |
 | **Integraciones** | Clima (Open-Meteo, sin cuenta) y lectura de archivos de Documentos vía [MCP](https://modelcontextprotocol.io) |
@@ -22,6 +23,7 @@ Puedes hablarle (F9 o el botón del micrófono) o escribirle, y además de conve
 - **Todo local**: Whisper, Ollama y Piper corren en tu PC. Solo el plugin de clima consulta un servicio externo (envía únicamente el nombre de la ciudad).
 - **Permisos según el riesgo**: las acciones delicadas (navegar, abrir juegos, gestionar ventanas o monitores) piden confirmación cuando las propone el asistente; los planes de varios pasos se aprueban completos antes de ejecutarse.
 - **Automatizaciones**: solo pueden ejecutarse sin preguntar si todas sus acciones son de riesgo bajo.
+- **Apagar, reiniciar y suspender**: siempre piden confirmación, aunque lo digas directamente; apagar y reiniciar esperan 10 s para que puedas decir «cancela el apagado».
 - **Cambios de monitores**: se validan antes de aplicarse y se revierten solos a los 15 s si no los confirmas.
 - **Visión**: solo captura cuando lo pides, muestra una vista previa y la imagen nunca se guarda en disco.
 - **Archivos (MCP)**: solo lectura y solo dentro de la carpeta configurada.
