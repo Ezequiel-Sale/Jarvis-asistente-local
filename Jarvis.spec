@@ -10,7 +10,8 @@ a = Analysis(
     # (descargados con openwakeword.utils.download_models; ver README).
     datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.')]
     + collect_data_files('openwakeword'),
-    hiddenimports=['pystray._win32', 'pystray._util.win32'],
+    hiddenimports=['pystray._win32', 'pystray._util.win32',
+                   'winrt.windows.media.control', 'winrt.windows.foundation'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

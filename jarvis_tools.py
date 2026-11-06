@@ -6,6 +6,7 @@ from jarvis_commands import normalizar_url_web
 import jarvis_routines
 import jarvis_health
 import jarvis_headset
+import jarvis_media
 import jarvis_power
 import jarvis_reminders
 import jarvis_system_info
@@ -221,6 +222,7 @@ def crear_registro_herramientas(
     )
     _registrar_consultas_sistema(registry)
     _registrar_energia(registry)
+    jarvis_media.registrar_herramientas(registry, verificadores)
     jarvis_reminders.registrar_herramientas(
         registry, verificador=verificadores.get("set_reminder")
     )

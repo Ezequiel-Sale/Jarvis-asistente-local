@@ -46,6 +46,7 @@ from jarvis_commands import (
     detectar_comando_nueva_pestana,
     detectar_comando_volumen,
     detectar_comando_energia,
+    detectar_comando_multimedia,
     detectar_consulta_bateria,
     detectar_consulta_fecha_hora,
     detectar_comando_escucha,
@@ -390,6 +391,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             detectar_consulta_fecha_hora(text)
             or jarvis_reminders.detectar_comando(text)
             or detectar_consulta_bateria(text)
+            or detectar_comando_multimedia(text)
             or detectar_consulta_sistema(text)
             or detectar_comando_monitores(text)
             or detectar_comando_energia(text)
@@ -597,6 +599,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 detectar_consulta_fecha_hora(transcript)
                 or jarvis_reminders.detectar_comando(transcript)
                 or detectar_consulta_bateria(transcript)
+                or detectar_comando_multimedia(transcript)
                 or detectar_consulta_sistema(transcript)
                 or detectar_comando_monitores(transcript)
                 or detectar_comando_energia(transcript)
@@ -2128,6 +2131,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         {
             "get_current_datetime",
             "get_headset_battery",
+            "get_now_playing",
             "set_reminder",
             "list_reminders",
             "cancel_reminder",
@@ -2148,6 +2152,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "power_control": "ESPERANDO CONFIRMACIÓN…",
         "cancel_power_action": "CANCELANDO EL APAGADO…",
         "lock_computer": "BLOQUEANDO EL EQUIPO…",
+        "media_control": "CONTROLANDO LA REPRODUCCIÓN…",
+        "set_app_volume": "AJUSTANDO VOLUMEN DE LA APLICACIÓN…",
     }
 
     def _execute_volume_action(self, porcentaje: int, command: str) -> None:

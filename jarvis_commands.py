@@ -916,3 +916,11 @@ def detectar_consulta_bateria(texto: str) -> tuple[str, dict[str, object]] | Non
     if _BATERIA_AURICULARES.fullmatch(_normalizar_consulta(texto)):
         return "get_headset_battery", {}
     return None
+
+
+def detectar_comando_multimedia(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«pausa la música», «siguiente canción», «¿qué está sonando?»,
+    «pon el volumen de Spotify al 30», «silencia Discord» (ver jarvis_media)."""
+    import jarvis_media
+
+    return jarvis_media.detectar_comando(_normalizar_consulta(texto))

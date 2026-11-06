@@ -7,3 +7,7 @@ psutil>=5.9
 mcp>=2.3
 hidapi>=0.14
 openwakeword>=0.6
+pycaw>=20240316
+winrt-runtime>=2.0
+winrt-Windows.Foundation>=2.0
+winrt-Windows.Media.Control>=2.0

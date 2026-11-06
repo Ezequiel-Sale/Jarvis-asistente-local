@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
+import jarvis_media
 import jarvis_reminders
 import jarvis_routines
 from jarvis_actions import Verificacion, Verificador
@@ -90,6 +91,46 @@ def verificar_aviso_guardado(_arguments: Mapping[str, object], _result: object) 
     return Verificacion(False, "el aviso no aparece como pendiente en la base de datos.")
 
 
+def verificar_reproduccion(
+    arguments: Mapping[str, object],
+    _result: object,
+    *,
+    leer: Callable[[], object] = jarvis_media.sesion_actual,
+    espera: float = 1.0,
+) -> Verificacion:
+    """Tras pausar o reanudar, Windows debe informar ese estado."""
+    esperado = {"pause": "pausado", "play": "reproduciendo"}.get(str(arguments.get("action")))
+    if esperado is None:
+        return Verificacion(None, "No se comprueba el salto de pista.")
+    deadline = time.monotonic() + espera
+    while True:
+        sesion = leer()
+        if sesion is None:
+            return Verificacion(None, "No hay sesión multimedia para comprobar.")
+        if sesion.estado == esperado:
+            return Verificacion(True, f"{sesion.app} está {esperado}.")
+        if time.monotonic() >= deadline:
+            return Verificacion(False, f"{sesion.app} sigue {sesion.estado}.")
+        time.sleep(0.2)
+
+
+def verificar_volumen_app(
+    arguments: Mapping[str, object],
+    result: object,
+    *,
+    leer: Callable[[str], int | None] = jarvis_media.leer_volumen_aplicacion,
+) -> Verificacion:
+    if arguments.get("percentage") is None or str(result).startswith("No encuentro"):
+        return Verificacion(None, "Nada que comprobar.")
+    esperado = int(arguments["percentage"])  # type: ignore[arg-type]
+    actual = leer(str(arguments["app"]))
+    if actual is None:
+        return Verificacion(None, "La aplicación ya no tiene audio.")
+    if abs(actual - esperado) <= TOLERANCIA_VOLUMEN:
+        return Verificacion(True, f"Windows reporta el volumen de la aplicación en {actual}%.")
+    return Verificacion(False, f"se pidió {esperado}%, pero Windows reporta {actual}%.")
+
+
 def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
     def verificar_audio_jarvis(arguments: Mapping[str, object], _result: object) -> Verificacion:
         esperado = bool(arguments["enabled"])
@@ -108,4 +149,6 @@ def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
         "search_youtube": verificar_ventana_brave,
         "schedule_routine": verificar_rutina_guardada,
         "set_reminder": verificar_aviso_guardado,
+        "media_control": verificar_reproduccion,
+        "set_app_volume": verificar_volumen_app,
     }
