@@ -10,7 +10,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 
 | Área | Ejemplos |
 |---|---|
-| **Conversación con memoria** | «Recuerda que prefiero Brave», «¿qué recuerdas sobre mi navegador?» |
+| **Conversación con memoria** | «Recuerda que prefiero Brave», «¿qué recuerdas sobre mi navegador?». Busca recuerdos por significado y **aprende solo** de las conversaciones («¿qué aprendiste de mí?», «desactiva el aprendizaje automático») |
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
 | **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» |
 | **Multimedia** | «Pausa la música», «siguiente canción», «la anterior», «¿qué está sonando?», «pon el volumen de Spotify al 30», «silencia Discord» |
@@ -35,6 +35,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 - **Visión**: solo captura cuando lo pides, muestra una vista previa y la imagen nunca se guarda en disco.
 - **Archivos (MCP)**: solo lectura y solo dentro de la carpeta configurada.
 - **Seguimiento**: cada acción tiene tiempo máximo, se puede cancelar (botón *Cancelar* o Esc), se verifica cuando es posible y queda en un historial.
+- **Aprendizaje automático**: solo guarda datos duraderos que tú dijiste, nunca contraseñas, datos bancarios, documentos ni salud; te avisa en el chat de cada cosa que aprende y puedes borrarla o apagar la función.
 - **Datos mínimos**: los registros no guardan lo que dices; solo se conservan los últimos 30 audios y puedes borrar el historial con «borra el historial de conversaciones».
 
 ## Arquitectura
@@ -64,7 +65,10 @@ flowchart LR
   ```bash
   ollama pull qwen3.6:27b
   ```
-  (el segundo solo es necesario para la visión de pantalla)
+  ```bash
+  ollama pull embeddinggemma
+  ```
+  (el segundo solo es necesario para la visión de pantalla; el tercero, para buscar recuerdos por significado)
 - [Node.js](https://nodejs.org) (para el servidor MCP de archivos)
 - Opcional: navegador Brave para las funciones web
 

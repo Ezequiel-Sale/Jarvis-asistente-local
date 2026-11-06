@@ -128,12 +128,45 @@ def _tool_message(
     }
 
 
-def _request_chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:
+TextCallback = Callable[[str | None], None]
+
+
+class _CompuertaTexto:
+    """Deja pasar el texto del modelo salvo que sea una llamada a herramienta en
+    JSON (algunos modelos la escriben en el contenido): eso no se lee en voz alta."""
+
+    def __init__(self, destino: TextCallback) -> None:
+        self.destino = destino
+        self._inicio = ""
+        self._decidido: bool | None = None  # True = transmitir, False = callar
+
+    def __call__(self, trozo: str) -> None:
+        if self._decidido is False or not trozo:
+            return
+        if self._decidido is None:
+            self._inicio += trozo
+            visible = self._inicio.lstrip()
+            if not visible:
+                return
+            self._decidido = visible[0] not in "{[`"
+            if self._decidido:
+                self.destino(visible)
+            return
+        self.destino(trozo)
+
+
+def _request_chat(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    on_text: TextCallback | None = None,
+) -> dict[str, Any]:
+    """Consulta /api/chat. Con ``on_text`` la respuesta llega a trozos y cada
+    trozo de texto se entrega en cuanto llega (para hablar mientras se genera)."""
     endpoint = core.LLM_URL.rsplit("/", 1)[0] + "/chat"
     payload: dict[str, Any] = {
         "model": core.MODEL_LLM,
         "messages": messages,
-        "stream": False,
+        "stream": on_text is not None,
         "keep_alive": "30m",
         "options": {
             # Las ~19 herramientas ocupan ~1.700 tokens; con instrucciones, historial
@@ -147,8 +180,12 @@ def _request_chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -
         payload["tools"] = tools
     started = time.perf_counter()
     try:
-        response = requests.post(endpoint, json=payload, timeout=OLLAMA_TIMEOUT)
+        response = requests.post(
+            endpoint, json=payload, timeout=OLLAMA_TIMEOUT, stream=on_text is not None
+        )
         response.raise_for_status()
+        if on_text is not None:
+            return _leer_stream(response, _CompuertaTexto(on_text), started)
     except requests.RequestException as error:
         core.registrar_latencia("llm", time.perf_counter() - started, ok=False)
         core.ERROR_COUNTER.labels(modulo="LLM").inc()
@@ -177,15 +214,49 @@ def _request_chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -
     return message
 
 
+def _leer_stream(response, entregar: Callable[[str], None], started: float) -> dict[str, Any]:
+    contenido: list[str] = []
+    tool_calls: list[Any] = []
+    primero: float | None = None
+    for linea in response.iter_lines():
+        if not linea:
+            continue
+        datos = json.loads(linea)
+        if datos.get("error"):
+            raise RuntimeError(f"Ollama rechazó la solicitud: {datos['error']}")
+        mensaje = datos.get("message") or {}
+        trozo = mensaje.get("content") or ""
+        if trozo:
+            if primero is None:
+                primero = time.perf_counter() - started
+            contenido.append(trozo)
+            entregar(trozo)
+        if mensaje.get("tool_calls"):
+            tool_calls.extend(mensaje["tool_calls"])
+        if datos.get("done"):
+            break
+    total = time.perf_counter() - started
+    core.registrar_latencia("llm", total)
+    if primero is not None:
+        logging.info("⏱️ LLM: %.2fs (primer texto a los %.2fs)", total, primero)
+    else:
+        logging.info("⏱️ LLM: %.2fs", total)
+    resultado: dict[str, Any] = {"role": "assistant", "content": "".join(contenido)}
+    if tool_calls:
+        resultado["tool_calls"] = tool_calls
+    return resultado
+
+
 def _solicitar_chat(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     cancel_token: CancellationToken | None,
+    on_text: TextCallback | None = None,
 ) -> dict[str, Any]:
     """Consulta a Ollama sin bloquear la cancelación del usuario."""
     try:
         return ejecutar_con_limites(
-            lambda: _request_chat(messages, tools),
+            lambda: _request_chat(messages, tools, on_text),
             timeout=OLLAMA_TIMEOUT + 10,
             descripcion="consulta a Ollama",
             cancel_token=cancel_token,
@@ -219,7 +290,11 @@ def procesar_con_herramientas(
     max_tool_calls: int = 5,
     cancel_token: CancellationToken | None = None,
     max_total_seconds: float = DEFAULT_MAX_TOTAL_SECONDS,
+    on_text: TextCallback | None = None,
 ) -> str:
+    """``on_text`` recibe el texto de la respuesta a medida que se genera (solo
+    en las rondas que pueden ser la respuesta final) y ``None`` al empezar cada
+    nueva ronda; se usa para hablar mientras el modelo escribe."""
     if max_tool_rounds < 1 or max_tool_calls < 1:
         raise ValueError("Los límites de llamadas a herramientas deben ser positivos.")
     if not max_total_seconds > 0:
@@ -238,6 +313,7 @@ def procesar_con_herramientas(
             deadline=time.monotonic() + max_total_seconds,
             max_total_seconds=max_total_seconds,
             completadas=completadas,
+            on_text=on_text,
         )
     except OperacionCancelada:
         logging.info("El usuario canceló la consulta (%s caracteres).", len(texto))
@@ -257,6 +333,7 @@ def _procesar_con_herramientas(
     deadline: float,
     max_total_seconds: float,
     completadas: list[str],
+    on_text: TextCallback | None = None,
 ) -> str:
     fallos: list[str] = []
 
@@ -326,7 +403,15 @@ def _procesar_con_herramientas(
                 f"{max_total_seconds:g} s. " + _resumen_completadas(completadas),
                 fallos,
             )
-        assistant_message = _solicitar_chat(messages, available_tools, cancel_token)
+        # Solo se transmite cuando esta ronda puede ser la respuesta final: si aún
+        # faltan acciones pedidas, el texto se descartaría para reintentar.
+        espera_herramientas = bool(
+            requested_action_count and calls_made < requested_action_count and not plan_stopped
+        )
+        transmitir = on_text if on_text is not None and not espera_herramientas else None
+        if transmitir is not None:
+            transmitir(None)
+        assistant_message = _solicitar_chat(messages, available_tools, cancel_token, transmitir)
         tool_calls = _extract_tool_calls(assistant_message)
 
         content = assistant_message.get("content", "")

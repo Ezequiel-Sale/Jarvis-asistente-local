@@ -1,3 +1,4 @@
+import logging
 import re
 import unicodedata
 
@@ -115,12 +116,14 @@ def _validar_contenido(contenido: str) -> str:
     return contenido
 
 
-def guardar_recuerdo(contenido: str) -> tuple[int, bool]:
+def guardar_recuerdo(contenido: str, origen: str = "usuario") -> tuple[int, bool]:
     contenido = _validar_contenido(contenido)
+    if origen not in {"usuario", "automatica"}:
+        raise ValueError("Origen de recuerdo no válido.")
     with core.conexion_db() as connection:
         cursor = connection.execute(
-            "INSERT OR IGNORE INTO memorias (contenido) VALUES (?)",
-            (contenido,),
+            "INSERT OR IGNORE INTO memorias (contenido, origen) VALUES (?, ?)",
+            (contenido, origen),
         )
         inserted = cursor.rowcount == 1
         row = connection.execute(
@@ -129,6 +132,8 @@ def guardar_recuerdo(contenido: str) -> tuple[int, bool]:
         ).fetchone()
     if row is None:
         raise RuntimeError("No se pudo guardar ni recuperar el recuerdo.")
+    if inserted:
+        _guardar_vectores([(int(row[0]), contenido)])
     return int(row[0]), inserted
 
 
@@ -147,17 +152,25 @@ def actualizar_recuerdo(identifier: int, contenido: str) -> bool:
             "UPDATE memorias SET contenido = ? WHERE id = ?",
             (contenido, identifier),
         )
+    if cursor.rowcount == 1:
+        _guardar_vectores([(identifier, contenido)])
     return cursor.rowcount == 1
 
 
-def listar_recuerdos(limite: int = 100) -> list[tuple[int, str]]:
+def listar_recuerdos(limite: int = 100, origen: str | None = None) -> list[tuple[int, str]]:
     if limite < 1:
         raise ValueError("El límite debe ser positivo.")
     with core.conexion_db() as connection:
-        rows = connection.execute(
-            "SELECT id, contenido FROM memorias ORDER BY id DESC LIMIT ?",
-            (limite,),
-        ).fetchall()
+        if origen is None:
+            rows = connection.execute(
+                "SELECT id, contenido FROM memorias ORDER BY id DESC LIMIT ?",
+                (limite,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT id, contenido FROM memorias WHERE origen = ? ORDER BY id DESC LIMIT ?",
+                (origen, limite),
+            ).fetchall()
     return [(int(identifier), str(content)) for identifier, content in rows]
 
 
@@ -169,21 +182,114 @@ def eliminar_recuerdo(identifier: int) -> bool:
     return cursor.rowcount == 1
 
 
+# Similitud mínima consulta→recuerdo para considerarlo relevante (medido con
+# embeddinggemma: relevantes ~0,5; sin relación < 0,27).
+UMBRAL_RELEVANCIA = 0.35
+
+
 def buscar_recuerdos(consulta: str, limite: int = 5) -> list[tuple[int, str]]:
+    """Búsqueda mixta: por significado (embeddings) y por palabras en común.
+
+    Sin el modelo de embeddings funciona como antes, solo por palabras.
+    """
     if limite < 1:
         raise ValueError("El límite debe ser positivo.")
     query_tokens = _tokens(consulta)
-    if not query_tokens:
+    recuerdos = listar_recuerdos(limite=1000)
+    similitudes = _similitudes(consulta, recuerdos, consulta_usuario=True)
+    if not query_tokens and similitudes is None:
         return []
 
-    recuerdos = listar_recuerdos(limite=1000)
-    ranked: list[tuple[int, int, str]] = []
+    ranked: list[tuple[float, int, str]] = []
     for identifier, content in recuerdos:
-        overlap = query_tokens.intersection(_tokens(content))
-        if overlap:
-            ranked.append((len(overlap), identifier, content))
+        overlap = len(query_tokens.intersection(_tokens(content)))
+        similitud = similitudes.get(identifier, 0.0) if similitudes is not None else 0.0
+        if overlap == 0 and similitud < UMBRAL_RELEVANCIA:
+            continue
+        ranked.append((similitud + 0.05 * overlap, identifier, content))
     ranked.sort(key=lambda result: (-result[0], -result[1]))
     return [(identifier, content) for _, identifier, content in ranked[:limite]]
+
+
+def buscar_parecidos(texto: str, limite: int = 5, minimo: float = 0.5) -> list[tuple[int, str, float]]:
+    """Recuerdos de significado parecido a un texto (para no duplicar al aprender)."""
+    recuerdos = listar_recuerdos(limite=1000)
+    similitudes = _similitudes(texto, recuerdos, consulta_usuario=False)
+    if not similitudes:
+        return []
+    parecidos = [
+        (identifier, content, similitudes[identifier])
+        for identifier, content in recuerdos
+        if similitudes.get(identifier, 0.0) >= minimo
+    ]
+    parecidos.sort(key=lambda r: -r[2])
+    return parecidos[:limite]
+
+
+def _guardar_vectores(recuerdos: list[tuple[int, str]]) -> int:
+    """Calcula y guarda los vectores; si el modelo no responde, se hará luego."""
+    import jarvis_embeddings
+
+    if not recuerdos:
+        return 0
+    matriz = jarvis_embeddings.vectorizar([content for _, content in recuerdos])
+    if matriz is None:
+        return 0
+    with core.conexion_db() as connection:
+        connection.executemany(
+            "INSERT OR REPLACE INTO memorias_vectores (memoria_id, modelo, vector) VALUES (?, ?, ?)",
+            [
+                (identifier, jarvis_embeddings.MODELO, jarvis_embeddings.a_bytes(vector))
+                for (identifier, _), vector in zip(recuerdos, matriz)
+            ],
+        )
+    return len(recuerdos)
+
+
+def sincronizar_vectores() -> int:
+    """Vectoriza los recuerdos que no tienen vector (o lo tienen de otro modelo)."""
+    import jarvis_embeddings
+
+    with core.conexion_db() as connection:
+        faltan = connection.execute(
+            "SELECT m.id, m.contenido FROM memorias m LEFT JOIN memorias_vectores v "
+            "ON v.memoria_id = m.id WHERE v.memoria_id IS NULL OR v.modelo != ?",
+            (jarvis_embeddings.MODELO,),
+        ).fetchall()
+    total = 0
+    for inicio in range(0, len(faltan), 64):
+        lote = [(int(i), str(c)) for i, c in faltan[inicio : inicio + 64]]
+        guardados = _guardar_vectores(lote)
+        if guardados == 0:
+            break
+        total += guardados
+    if total:
+        logging.info("Se vectorizaron %s recuerdos.", total)
+    return total
+
+
+def _similitudes(
+    texto: str, recuerdos: list[tuple[int, str]], *, consulta_usuario: bool
+) -> dict[int, float] | None:
+    import jarvis_embeddings
+
+    if not recuerdos:
+        return {}
+    consulta = jarvis_embeddings.vectorizar([texto], consulta=consulta_usuario)
+    if consulta is None:
+        return None
+    sincronizar_vectores()
+    with core.conexion_db() as connection:
+        filas = connection.execute(
+            "SELECT memoria_id, vector FROM memorias_vectores WHERE modelo = ?",
+            (jarvis_embeddings.MODELO,),
+        ).fetchall()
+    if not filas:
+        return {}
+    ids = [int(f[0]) for f in filas]
+    matriz = jarvis_embeddings.np.vstack([jarvis_embeddings.de_bytes(f[1]) for f in filas])
+    valores = matriz @ consulta[0]
+    return {identifier: float(valor) for identifier, valor in zip(ids, valores)}
 
 
 def _format_recuerdos(recuerdos: list[tuple[int, str]]) -> str:

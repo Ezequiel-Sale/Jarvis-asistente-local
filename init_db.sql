@@ -42,7 +42,16 @@ CREATE TABLE IF NOT EXISTS mensajes (
 CREATE TABLE IF NOT EXISTS memorias (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     contenido TEXT NOT NULL COLLATE NOCASE UNIQUE,
-    creado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+    creado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+    -- 'usuario' (lo pidió con «recuerda que…») o 'automatica' (aprendizaje automático)
+    origen TEXT NOT NULL DEFAULT 'usuario'
+);
+
+-- Vector de significado de cada recuerdo (jarvis_embeddings.py), float32 normalizado.
+CREATE TABLE IF NOT EXISTS memorias_vectores (
+    memoria_id INTEGER PRIMARY KEY REFERENCES memorias(id) ON DELETE CASCADE,
+    modelo TEXT NOT NULL,
+    vector BLOB NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_mensajes_conversacion

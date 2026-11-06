@@ -18,7 +18,9 @@ import jarvis_health
 import jarvis_displays
 import jarvis_ollama_gpu
 import jarvis_power
+import jarvis_aprendizaje
 import jarvis_reminders
+import jarvis_voz_stream
 import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
@@ -80,7 +82,7 @@ from jarvis_system import (
     localizar_ejecutable_juego,
     navegar_en_ventana_brave,
 )
-from jarvis_theme import BG, CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT
+from jarvis_theme import BG, CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET
 from jarvis_ui import JarvisUIMixin
 from jarvis_player import AudioPlayerMixin
 from jarvis_tool_registry import (
@@ -111,6 +113,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._pending_plan_reply: queue.Queue[bool] | None = None
         self._pending_approval_kind: str | None = None
         self._pending_power_action: str | None = None
+        self._spoken_audio: set[str] = set()  # respuestas que ya se dijeron en vivo
+        self._live_row = None
+        self._live_label = None
+        self._live_text = ""
         self._plan_dialog: tk.Toplevel | None = None
         self._plan_voice_button: tk.Button | None = None
         self._plan_approve_button: tk.Button | None = None
@@ -192,6 +198,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._vision: dict | None = None
         self.root.after(100, self._poll_events)
         self.root.after(5000, self._check_scheduled_routines)
+        self._learning_running = False
+        self._vectors_synced = False
+        self.root.after(30000, self._check_learning)
         self._set_status("INICIANDO SERVICIOS DOCKER…", CYAN)
         threading.Thread(
             target=self._docker_start_worker,
@@ -272,6 +281,34 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.events.put(("announce_audio", audio))
 
         threading.Thread(target=sonar_y_hablar, name="JarvisAviso", daemon=True).start()
+
+    # --- Aprendizaje automático ---------------------------------------------
+
+    _LEARNING_INTERVAL_MS = 60000
+
+    def _check_learning(self) -> None:
+        """Cada minuto: si hay conversaciones inactivas sin revisar, aprende de ellas."""
+        if self._closing:
+            return
+        self.root.after(self._LEARNING_INTERVAL_MS, self._check_learning)
+        if self._learning_running or self.busy:
+            return
+        self._learning_running = True
+        threading.Thread(target=self._learning_worker, name="JarvisAprendizaje", daemon=True).start()
+
+    def _learning_worker(self) -> None:
+        try:
+            if not self._vectors_synced:
+                jarvis_memory.sincronizar_vectores()
+                self._vectors_synced = True
+            avisos = jarvis_aprendizaje.procesar_pendientes()
+        except Exception:
+            logging.exception("Falló el aprendizaje automático.")
+            avisos = []
+        finally:
+            self._learning_running = False
+        if avisos:
+            self.events.put(("learned", avisos))
 
     def _ollama_gpu_worker(self) -> None:
         """Si Ollama arrancó sin la tarjeta gráfica, lo reinicia (ver jarvis_ollama_gpu)."""
@@ -694,8 +731,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         cancel_token: CancellationToken | None = None,
     ) -> tuple[str | None, str | None]:
         core.REQUEST_COUNTER.labels(tipo=kind).inc()
+        hablador: jarvis_voz_stream.HabladorEnVivo | None = None
         try:
             answer = jarvis_memory.procesar_comando(text)
+            if answer is None:
+                answer = jarvis_aprendizaje.procesar_comando(text)
             if answer is None:
                 answer = jarvis_actions.procesar_comando(text)
             if answer is None:
@@ -738,6 +778,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                 f"No guardé la rutina «{routine_request.name}»."
                             )
                     else:
+                        hablador = self._new_live_speaker()
                         answer = procesar_con_herramientas(
                             text,
                             conversation_id,
@@ -745,6 +786,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             self._request_tool_confirmation,
                             approve_plan=self._request_plan_confirmation,
                             cancel_token=cancel_token,
+                            on_text=self._live_text_callback(hablador),
                         )
             core.guardar_turno(conversation_id, text, answer)
         except Exception:
@@ -754,6 +796,22 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             raise
 
         audio_path = None
+        if hablador is not None and hablador.empezo:
+            # La respuesta ya se está diciendo en vivo: terminar y unir el audio.
+            response_id = core.guardar_respuesta(answer)
+            audio_path = hablador.terminar(
+                answer,
+                str(core.RESPONSES_DIR / f"{response_id}.wav"),
+                cancelar_si=(lambda: cancel_token.cancelled) if cancel_token is not None else None,
+            )
+            if audio_path:
+                self._spoken_audio.add(audio_path)
+            if hablador.primera_voz is not None:
+                logging.info("⏱️ Primera voz a los %.2fs.", hablador.primera_voz - started)
+            core.registrar_latencia("total", time.perf_counter() - started)
+            return answer, audio_path
+        if hablador is not None:
+            hablador.cancelar()
         try:
             response_id = core.guardar_respuesta(answer)
             audio_path = ejecutar_con_limites(
@@ -782,6 +840,61 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             except Exception:
                 logging.exception("No se pudieron limpiar las respuestas antiguas.")
         return answer, audio_path
+
+    # --- Respuesta en vivo (texto y voz mientras el modelo escribe) -------------
+
+    def _new_live_speaker(self) -> "jarvis_voz_stream.HabladorEnVivo | None":
+        if not self.audio_enabled:
+            return None
+        return jarvis_voz_stream.HabladorEnVivo(
+            lambda frase, identificador: core.generar_audio_tts(frase, identificador)
+        )
+
+    def _live_text_callback(self, hablador):
+        def recibir(trozo: str | None) -> None:
+            if hablador is not None:
+                hablador.alimentar(trozo)
+            self.events.put(("answer_delta", trozo))
+
+        return recibir
+
+    def _show_live_answer(self, trozo: str | None) -> None:
+        """Burbuja provisional que crece mientras el modelo escribe."""
+        if trozo is None:  # nueva ronda del modelo: empezar de cero
+            self._live_text = ""
+            if self._live_label is not None:
+                self._live_label.configure(text="…")
+            return
+        self._live_text += trozo
+        if (
+            self._live_row is None
+            or self._live_label is None
+            or not self._live_row.winfo_exists()
+        ):
+            self._clear_live_answer(keep_text=True)
+            fila = tk.Frame(self.messages, bg=PANEL)
+            fila.pack(fill="x", padx=14, pady=8)
+            self._live_row = fila
+            burbuja = tk.Frame(fila, bg=PANEL_LIGHT, padx=14, pady=10)
+            burbuja.pack(side="left", anchor="w")
+            tk.Label(
+                burbuja, text="JARVIS", bg=PANEL_LIGHT, fg=VIOLET, font=("Consolas", 8, "bold")
+            ).pack(anchor="w", pady=(0, 5))
+            self._live_label = tk.Label(
+                burbuja, text="", bg=PANEL_LIGHT, fg=TEXT, justify="left", anchor="w",
+                wraplength=650, font=("Segoe UI", 11),
+            )
+            self._live_label.pack(anchor="w")
+        self._live_label.configure(text=self._live_text.strip() or "…")
+        self._scroll_chat_to_bottom()
+
+    def _clear_live_answer(self, *, keep_text: bool = False) -> None:
+        if self._live_row is not None and self._live_row.winfo_exists():
+            self._live_row.destroy()
+        self._live_row = None
+        self._live_label = None
+        if not keep_text:
+            self._live_text = ""
 
     def _request_tool_confirmation(
         self,
@@ -1432,6 +1545,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._set_idle()
                         self._confirm_clear_history()
                     elif event[0] == "cancelled":
+                        self._clear_live_answer()
                         self._add_message("assistant", event[1])
                         self._set_status("OPERACIÓN CANCELADA", MUTED)
                         self._set_idle()
@@ -1584,6 +1698,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         audio = event[1]
                         if self.audio_enabled and self.recorder is None and Path(audio).is_file():
                             self._play_audio(audio)
+                    elif event[0] == "learned":
+                        self._add_message(
+                            "assistant",
+                            "🧠 " + "\n".join(event[1])
+                            + "\n(Si algo no es correcto, di «olvida el recuerdo N».)",
+                        )
                     elif event[0] == "ollama_gpu_notice":
                         self._add_message("assistant", event[1])
                     elif event[0] == "docker_services_ready":
@@ -1707,8 +1827,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                 command,
                                 self.conversation_id,
                             )
+                    elif event[0] == "answer_delta":
+                        self._show_live_answer(event[1])
                     elif event[0] == "answer":
                         _, answer, audio, elapsed = event
+                        self._clear_live_answer()
                         if answer is None:
                             self._add_message(
                                 "assistant",
@@ -1721,7 +1844,14 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                 audio if audio and Path(audio).exists() else None,
                             )
                             self._set_status(f"LISTO  ·  {elapsed:.1f} S", CYAN)
-                            if self.audio_enabled and audio and Path(audio).is_file():
+                            ya_dicho = audio in self._spoken_audio
+                            self._spoken_audio.discard(audio)
+                            if (
+                                self.audio_enabled
+                                and not ya_dicho
+                                and audio
+                                and Path(audio).is_file()
+                            ):
                                 self._play_audio(audio)
                         self._set_idle()
                     elif event[0] == "empty_transcript":

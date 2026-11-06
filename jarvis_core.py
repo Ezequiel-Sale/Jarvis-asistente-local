@@ -241,6 +241,14 @@ def inicializar_base_datos() -> None:
                 connection.execute(
                     "ALTER TABLE rutinas ADD COLUMN disparador TEXT NOT NULL DEFAULT 'hora'"
                 )
+            memory_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(memorias)").fetchall()
+            }
+            if "origen" not in memory_columns:
+                connection.execute(
+                    "ALTER TABLE memorias ADD COLUMN origen TEXT NOT NULL DEFAULT 'usuario'"
+                )
             if "modo_permiso" not in routine_columns:
                 connection.execute(
                     "ALTER TABLE rutinas ADD COLUMN modo_permiso TEXT NOT NULL "

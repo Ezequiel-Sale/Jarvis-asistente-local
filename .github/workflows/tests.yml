@@ -27,5 +27,16 @@ jobs:
       - name: Instalar dependencias
         run: python -m pip install -r requirements.txt
 
+      - name: Buscar nombres sin definir
+        # Un nombre sin importar (p. ej. un color del tema) solo falla al ejecutarse
+        # esa línea; pyflakes lo detecta sin ejecutar nada.
+        shell: pwsh
+        run: |
+          python -m pip install pyflakes==4.1.0
+          $archivos = Get-ChildItem -Path jarvis_*.py, audio_capture.py, plugins/*.py
+          $errores = python -m pyflakes $archivos | Select-String "undefined name"
+          if ($errores) { $errores; exit 1 }
+          exit 0
+
       - name: Ejecutar tests
         run: python -m unittest discover -s tests -v

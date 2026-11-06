@@ -9,6 +9,8 @@ class _AppWorkerHost:
     tool_registry = object()
     _request_tool_confirmation = Mock(return_value=False)
     _request_plan_confirmation = Mock(return_value=True)
+    _new_live_speaker = Mock(return_value=None)  # sin voz en vivo
+    _live_text_callback = Mock(return_value=None)
 
 
 class AppMemoryRoutingTests(unittest.TestCase):
