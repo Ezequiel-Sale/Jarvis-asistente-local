@@ -875,3 +875,28 @@ def detectar_comando_escucha(texto: str) -> bool | None:
     if _ESCUCHA_OFF.fullmatch(consulta):
         return False
     return None
+
+
+_PIDE = r"(?:(?:me\s+)?(?:dices|decis|das|puedes\s+decir|podes\s+decir)\s+|dime\s+|decime\s+|sabes\s+)?"
+_FECHA_HORA = (
+    (re.compile(
+        r"^" + _PIDE + r"(?:que\s+(?:dia|fecha)\s+y\s+(?:que\s+)?hora\s+es(?:\s+hoy)?"
+        r"|la\s+fecha\s+y\s+(?:la\s+)?hora)$"
+    ), "both"),
+    (re.compile(
+        r"^" + _PIDE + r"(?:que\s+hora\s+(?:es|tenemos|son)(?:\s+ahora)?|la\s+hora)$"
+    ), "time"),
+    (re.compile(
+        r"^" + _PIDE + r"(?:(?:que|en\s+que|a\s+que)\s+(?:dia|fecha)\s+(?:es|estamos)(?:\s+hoy)?"
+        r"|que\s+dia\s+de\s+la\s+semana\s+es(?:\s+hoy)?|la\s+fecha(?:\s+de\s+hoy)?)$"
+    ), "date"),
+)
+
+
+def detectar_consulta_fecha_hora(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«¿qué hora es?», «¿qué día es hoy?», «dime la fecha y la hora»."""
+    consulta = _normalizar_consulta(texto)
+    for patron, que in _FECHA_HORA:
+        if patron.fullmatch(consulta):
+            return "get_current_datetime", {"what": que}
+    return None

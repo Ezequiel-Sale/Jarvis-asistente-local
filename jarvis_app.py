@@ -44,6 +44,7 @@ from jarvis_commands import (
     detectar_comando_nueva_pestana,
     detectar_comando_volumen,
     detectar_comando_energia,
+    detectar_consulta_fecha_hora,
     detectar_comando_escucha,
     detectar_decision_energia,
     detectar_comando_monitores,
@@ -351,7 +352,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._execute_volume_action(porcentaje, text)
             return
         system_query = (
-            detectar_consulta_sistema(text)
+            detectar_consulta_fecha_hora(text)
+            or detectar_consulta_sistema(text)
             or detectar_comando_monitores(text)
             or detectar_comando_energia(text)
             or self.plugins.detectar_comando(text)
@@ -555,7 +557,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 self.events.put(("volume_action", porcentaje, transcript))
                 return
             system_query = (
-                detectar_consulta_sistema(transcript)
+                detectar_consulta_fecha_hora(transcript)
+                or detectar_consulta_sistema(transcript)
                 or detectar_comando_monitores(transcript)
                 or detectar_comando_energia(transcript)
             )
@@ -2043,6 +2046,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             daemon=True,
         ).start()
 
+    _DIRECT_SPOKEN_TOOLS = frozenset({"get_current_datetime"})
+
     _DIRECT_ACTION_BUSY = {
         "set_system_volume": "AJUSTANDO VOLUMEN…",
         "set_output_device": "CAMBIANDO SALIDA DE AUDIO…",
@@ -2207,6 +2212,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         conversation_id: str,
         cancel_token: CancellationToken | None,
     ) -> None:
+        started = time.perf_counter()
         try:
             label = self.tool_registry.get(tool_name).display_name
         except ToolError:
@@ -2246,6 +2252,15 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except Exception as error:
             logging.exception("La acción se ejecutó, pero no se pudo guardar en memoria.")
             response += f" No pude guardar la acción en la memoria: {error}"
+        if tool_name in JarvisApp._DIRECT_SPOKEN_TOOLS:
+            # Respuestas cortas que se esperan habladas («¿qué hora es?»).
+            try:
+                audio = core.generar_audio_tts(response)
+            except Exception:
+                logging.exception("No se pudo generar el audio de %s.", tool_name)
+                audio = None
+            self.events.put(("answer", response, audio, time.perf_counter() - started))
+            return
         self.events.put(("direct_action_done", tool_name, response))
 
     def _new_conversation(self) -> None:

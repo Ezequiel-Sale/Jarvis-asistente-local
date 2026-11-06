@@ -341,3 +341,42 @@ def consultar_procesos(sort_by: str = "memory", limit: int = 5) -> str:
 
 def consultar_estado_equipo() -> str:
     return formatear_estado(obtener_estado_equipo())
+
+
+# --- Fecha y hora -------------------------------------------------------------
+
+DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+MESES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+)
+
+
+def describir_fecha(ahora: datetime) -> str:
+    return (
+        f"{DIAS_SEMANA[ahora.weekday()]} {ahora.day} de {MESES[ahora.month - 1]} "
+        f"de {ahora.year}"
+    )
+
+
+def describir_hora(ahora: datetime) -> str:
+    return f"{ahora.hour}:{ahora.minute:02d}"
+
+
+def consultar_fecha_hora(que: str = "both", *, ahora: datetime | None = None) -> str:
+    """Fecha y/o hora del reloj de Windows, en español (sin depender del locale)."""
+    ahora = ahora or datetime.now()
+    articulo = "Es la" if ahora.hour == 1 else "Son las"
+    hora = f"{articulo} {describir_hora(ahora)}."
+    fecha = f"Hoy es {describir_fecha(ahora)}."
+    if que == "time":
+        return hora
+    if que == "date":
+        return fecha
+    return f"{fecha} {hora}"
+
+
+def contexto_fecha_hora(ahora: datetime | None = None) -> str:
+    """Línea para el prompt del agente: el modelo no tiene reloj propio."""
+    ahora = ahora or datetime.now()
+    return f"Fecha y hora actuales: {describir_fecha(ahora)}, {describir_hora(ahora)}."

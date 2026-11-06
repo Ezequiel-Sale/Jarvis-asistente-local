@@ -10,6 +10,7 @@ import requests
 
 import jarvis_core as core
 import jarvis_memory
+import jarvis_system_info
 from jarvis_actions import (
     CancellationToken,
     OperacionCancelada,
@@ -273,6 +274,7 @@ def _procesar_con_herramientas(
             "role": "system",
             "content": (
                 f"{core.cargar_contexto_db()}\n"
+                f"{jarvis_system_info.contexto_fecha_hora()}\n"
                 f"{memoria_contextual}\n"
                 "Eres JARVIS, un asistente local. Responde en español y de forma clara. "
                 "Usa herramientas únicamente cuando el usuario solicite explícitamente "

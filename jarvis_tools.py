@@ -290,6 +290,20 @@ def _registrar_consultas_sistema(registry: ToolRegistry) -> None:
         record_result=False,
     )
     registry.register(
+        "get_current_datetime",
+        "Solo lectura. Devuelve la fecha (date), la hora (time) o ambas (both) del reloj del equipo.",
+        {
+            "type": "object",
+            "properties": {"what": {"type": "string", "enum": ["date", "time", "both"]}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        lambda what="both": jarvis_system_info.consultar_fecha_hora(what),
+        label="Consultar fecha y hora",
+        timeout_seconds=5,
+        record_result=False,
+    )
+    registry.register(
         "get_jarvis_diagnostics",
         (
             "Solo lectura. Diagnóstico del propio Jarvis: si Ollama, la voz a texto y "
