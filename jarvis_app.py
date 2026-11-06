@@ -15,7 +15,9 @@ import jarvis_actions
 import jarvis_core as core
 import jarvis_health
 import jarvis_displays
+import jarvis_ollama_gpu
 import jarvis_power
+import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
 import jarvis_routines
@@ -42,6 +44,8 @@ from jarvis_commands import (
     detectar_comando_nueva_pestana,
     detectar_comando_volumen,
     detectar_comando_energia,
+    detectar_comando_escucha,
+    detectar_decision_energia,
     detectar_comando_monitores,
     detectar_consulta_sistema,
     detectar_borrado_historial,
@@ -101,6 +105,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._recording_for_plan_approval = False
         self._pending_plan_reply: queue.Queue[bool] | None = None
         self._pending_approval_kind: str | None = None
+        self._pending_power_action: str | None = None
         self._plan_dialog: tk.Toplevel | None = None
         self._plan_voice_button: tk.Button | None = None
         self._plan_approve_button: tk.Button | None = None
@@ -170,6 +175,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.global_hotkey_listener.start()
         self.headphones_watcher = HeadphonesWatcher(self.events)
         self.headphones_watcher.start()
+        self.wakeword_detector: jarvis_wakeword.DetectorPalabraActivacion | None = None
+        if self._wakeword_preferida():
+            self._start_wakeword()
         self._routines_panel: RoutinesPanel | None = None
         self._vision: dict | None = None
         self.root.after(100, self._poll_events)
@@ -178,6 +186,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         threading.Thread(
             target=self._docker_start_worker,
             name="JarvisDockerStartup",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self._ollama_gpu_worker,
+            name="JarvisOllamaGPU",
             daemon=True,
         ).start()
         threading.Thread(
@@ -223,6 +236,16 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.root.lift()
         self.root.focus_force()
 
+    def _ollama_gpu_worker(self) -> None:
+        """Si Ollama arrancó sin la tarjeta gráfica, lo reinicia (ver jarvis_ollama_gpu)."""
+        try:
+            aviso = jarvis_ollama_gpu.asegurar_gpu()
+        except Exception:
+            logging.exception("No se pudo comprobar si Ollama usa la tarjeta gráfica.")
+            return
+        if aviso:
+            self.events.put(("ollama_gpu_notice", aviso))
+
     def _docker_start_worker(self) -> None:
         try:
             core.iniciar_servicios_docker()
@@ -231,6 +254,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.events.put(("docker_services_error", str(error)))
         else:
             self.events.put(("docker_services_ready",))
+            core.precalentar_stt()
         finally:
             self._docker_start_finished.set()
 
@@ -313,6 +337,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         audio_enabled = detectar_comando_audio(text)
         if audio_enabled is not None:
             self._execute_audio_toggle(audio_enabled, text)
+            return
+        escucha = detectar_comando_escucha(text)
+        if escucha is not None:
+            self._execute_wakeword_toggle(escucha, text)
             return
         dispositivo = detectar_comando_dispositivo_salida(text)
         if dispositivo is not None:
@@ -484,6 +512,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     decision_detector = {
                         "routine_save": detectar_decision_guardar_rutina,
                         "vision": detectar_decision_vision,
+                        "power": lambda texto: detectar_decision_energia(
+                            texto, self._pending_power_action or ""
+                        ),
                     }.get(approval_kind, detectar_decision_aprobacion_plan)
                     decision = decision_detector(transcript)
                     logging.info(
@@ -510,6 +541,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             audio_enabled = detectar_comando_audio(transcript)
             if audio_enabled is not None:
                 self.events.put(("audio_toggle", audio_enabled, transcript))
+                return
+            escucha = detectar_comando_escucha(transcript)
+            if escucha is not None:
+                self.events.put(("wakeword_toggle", escucha, transcript))
                 return
             dispositivo = detectar_comando_dispositivo_salida(transcript)
             if dispositivo is not None:
@@ -710,6 +745,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     ) -> bool:
         if self._closing:
             return False
+        if tool.name == "power_control":
+            # Mismo diálogo (con voz) que el comando directo.
+            return self._request_power_confirmation(str(arguments.get("action")))
         reply: queue.Queue[bool] = queue.Queue(maxsize=1)
         self.events.put(
             ("tool_confirmation", tool.name, tool.description, tool.risk.value, arguments, reply)
@@ -720,16 +758,20 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             logging.warning("Expiró la confirmación de la herramienta %s.", tool.name)
             return False
 
-    def _request_simple_confirmation(self, title: str, question: str) -> bool:
-        """Pregunta sí/no al usuario desde un hilo secundario (False si expira)."""
+    def _request_power_confirmation(self, action: str) -> bool:
+        """Pide «sí/no» (botones, teclado o voz con F9) para apagar, reiniciar o suspender.
+
+        Se llama desde un hilo secundario; False si se rechaza o expira.
+        """
         if self._closing:
             return False
         reply: queue.Queue[bool] = queue.Queue(maxsize=1)
-        self.events.put(("simple_confirmation", title, question, reply))
+        self.events.put(("power_confirmation", action, reply))
         try:
             return reply.get(timeout=120)
         except queue.Empty:
-            logging.warning("Expiró la confirmación: %s.", title)
+            logging.warning("Expiró la confirmación de energía (%s).", action)
+            self.events.put(("plan_confirmation_timeout", reply))
             return False
 
     def _request_plan_confirmation(
@@ -972,6 +1014,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             return
         self._pending_plan_reply = None
         self._pending_approval_kind = None
+        self._pending_power_action = None
         if self._recording_for_plan_approval and self.recorder is not None:
             try:
                 self.recorder.cancelar()
@@ -1191,6 +1234,67 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         dialog.focus_force()
         self._set_plan_voice_controls(recording=False)
 
+    def _show_power_confirmation(self, action: str, reply: queue.Queue[bool]) -> None:
+        """Diálogo «¿Apago el equipo?» que acepta botones, teclado o voz (F9)."""
+        if self._closing or self._pending_plan_reply is not None:
+            if self._pending_plan_reply is not None:
+                logging.error("Se pidió confirmar energía con otra aprobación pendiente.")
+            reply.put(False)
+            return
+        self._pending_plan_reply = reply
+        self._pending_approval_kind = "power"
+        self._pending_power_action = action
+        pregunta = jarvis_power.PREGUNTAS_CONFIRMACION.get(action, "¿Confirmas la acción?")
+
+        dialog = tk.Toplevel(self.root)
+        self._plan_dialog = dialog
+        dialog.title("Confirmar acción de energía")
+        dialog.configure(bg=BG)
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
+        container = tk.Frame(dialog, bg=BG, padx=24, pady=20)
+        container.pack(fill="both", expand=True)
+        tk.Label(
+            container, text="CONFIRMAR", bg=BG, fg=ERROR, font=("Consolas", 12, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            container, text=pregunta, bg=BG, fg=TEXT, font=("Segoe UI", 12),
+            wraplength=460, justify="left",
+        ).pack(anchor="w", pady=(10, 12))
+        tk.Label(
+            container,
+            text="Di «sí» o «no» (F9 para hablar). ENTER confirma · ESC cancela.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(0, 12))
+        buttons = tk.Frame(container, bg=BG)
+        buttons.pack(fill="x")
+        estilo = dict(relief="flat", padx=12, pady=9, font=("Consolas", 9, "bold"), cursor="hand2")
+        self._plan_voice_button = tk.Button(
+            buttons, text="🎙  HABLAR (F9)", command=self._toggle_recording,
+            bg=PANEL_LIGHT, fg=CYAN, **estilo,
+        )
+        self._plan_voice_button.pack(side="left")
+        self._plan_reject_button = tk.Button(
+            buttons, text="NO", command=lambda: self._resolve_plan_approval(False),
+            bg=PANEL_LIGHT, fg=TEXT, **estilo,
+        )
+        self._plan_reject_button.pack(side="right")
+        self._plan_approve_button = tk.Button(
+            buttons, text="SÍ", command=lambda: self._resolve_plan_approval(True),
+            bg=ERROR, fg=BG, **estilo,
+        )
+        self._plan_approve_button.pack(side="right", padx=(0, 8))
+        dialog.bind("<Return>", lambda _e: self._resolve_plan_approval(True))
+        dialog.bind("<Escape>", lambda _e: self._resolve_plan_approval(False))
+        dialog.update_idletasks()
+        self._center_over_jarvis(dialog)
+        dialog.grab_set()
+        dialog.lift()
+        dialog.focus_force()
+        self._set_plan_voice_controls(recording=False)
+        self._set_status(self._approval_hint("power"), CYAN)
+
     def _request_tool_ui_action(self, action: str, value: object = None) -> str:
         if self._closing:
             raise RuntimeError("Jarvis se está cerrando; se canceló la acción.")
@@ -1233,17 +1337,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                 icon="warning" if risk == "high" else "question",
                             )
                         reply.put(approved)
-                    elif event[0] == "simple_confirmation":
-                        _, title, question, reply = event
-                        if self._closing:
-                            approved = False
-                        else:
-                            if self.root.state() == "withdrawn":
-                                self._show_from_tray()
-                            approved = messagebox.askyesno(
-                                title, question, parent=self.root, icon="warning"
-                            )
-                        reply.put(approved)
+                    elif event[0] == "power_confirmation":
+                        _, action, reply = event
+                        if self.root.state() == "withdrawn":
+                            self._show_from_tray()
+                        self._show_power_confirmation(action, reply)
                     elif event[0] == "plan_confirmation":
                         _, goal, actions, reply = event
                         if self.root.state() == "withdrawn" and not self._closing:
@@ -1368,6 +1466,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                         "CAPTURA DESCARTADA POR VOZ",
                                         "ANALIZANDO LA CAPTURA…",
                                     ),
+                                    "power": (
+                                        "CANCELADO POR VOZ",
+                                        "CONFIRMADO POR VOZ",
+                                    ),
                                 }.get(
                                     approval_kind,
                                     ("PLAN RECHAZADO POR VOZ", "PLAN APROBADO POR VOZ"),
@@ -1423,6 +1525,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     elif event[0] == "global_hotkey_unavailable":
                         logging.error("No se pudo registrar el atajo global F9: %s", event[1])
                         self._set_status("F9 NO DISPONIBLE; USA EL BOTÓN MIC", ERROR)
+                    elif event[0] == "ollama_gpu_notice":
+                        self._add_message("assistant", event[1])
                     elif event[0] == "docker_services_ready":
                         logging.info("Servicios Docker de STT y TTS listos.")
                         if not self._closing and not self.busy and self.recorder is None:
@@ -1473,6 +1577,27 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         _, enabled, command = event
                         self._set_idle()
                         self._execute_audio_toggle(enabled, command)
+                    elif event[0] == "wakeword_toggle":
+                        _, enabled, command = event
+                        self._set_idle()
+                        self._execute_wakeword_toggle(enabled, command)
+                    elif event[0] == "wakeword_ready":
+                        logging.info("Escuchando «Hey Jarvis».")
+                    elif event[0] == "wakeword_detected":
+                        self._on_wakeword_detected()
+                    elif event[0] == "wakeword_no_command":
+                        if not self.busy and self._pending_plan_reply is None:
+                            self._set_status("NO OÍ NINGUNA ORDEN", MUTED)
+                    elif event[0] == "wakeword_command":
+                        self._on_wakeword_command(event[1])
+                    elif event[0] == "wakeword_error":
+                        self.wakeword_detector = None
+                        self._add_message(
+                            "assistant",
+                            f"La palabra de activación dejó de funcionar: {event[1]}. "
+                            "Puedes seguir usando F9.",
+                        )
+                        self._set_status("PALABRA DE ACTIVACIÓN NO DISPONIBLE", ERROR)
                     elif event[0] == "game_action":
                         _, game_name, command = event
                         self._set_idle()
@@ -1812,6 +1937,112 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             CYAN if enabled else MUTED,
         )
 
+    # --- Palabra de activación «Hey Jarvis» -------------------------------------
+
+    _PREFERENCIA_WAKEWORD = "palabra_activacion"
+
+    def _wakeword_preferida(self) -> bool:
+        try:
+            return core.obtener_preferencia(self._PREFERENCIA_WAKEWORD) != "0"
+        except Exception:
+            logging.exception("No se pudo leer la preferencia de la palabra de activación.")
+            return False
+
+    def _can_listen_for_wakeword(self) -> bool:
+        """Se consulta desde el hilo del detector: solo lee atributos, sin Tk."""
+        if self._closing or self.recorder is not None:
+            return False
+        if self.busy and self._pending_plan_reply is None:
+            return False
+        player = getattr(self, "player_thread", None)
+        reproduciendo = (
+            player is not None and player.is_alive() and not getattr(self, "player_paused", False)
+        )
+        return not reproduciendo
+
+    def _start_wakeword(self) -> bool:
+        if self.wakeword_detector is not None and self.wakeword_detector.is_alive():
+            return True
+        if not jarvis_wakeword.disponible():
+            logging.warning("openWakeWord no está instalado; sin palabra de activación.")
+            return False
+        self.wakeword_detector = jarvis_wakeword.DetectorPalabraActivacion(
+            self.events, self._can_listen_for_wakeword
+        )
+        self.wakeword_detector.start()
+        return True
+
+    def _stop_wakeword(self) -> None:
+        detector = getattr(self, "wakeword_detector", None)
+        self.wakeword_detector = None
+        if detector is not None:
+            detector.stop()
+
+    def _execute_wakeword_toggle(self, enabled: bool, command: str) -> None:
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_WAKEWORD, "1" if enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia de la palabra de activación.")
+        if enabled:
+            if self._start_wakeword():
+                respuesta = "Palabra de activación activada. Di «Hey Jarvis» y luego tu orden."
+            else:
+                respuesta = (
+                    "No pude activar la palabra de activación: falta openWakeWord. "
+                    "Sigue disponible F9."
+                )
+        else:
+            self._stop_wakeword()
+            respuesta = "Palabra de activación desactivada. Usa F9 para hablar."
+        try:
+            core.guardar_turno(self.conversation_id, command, respuesta)
+        except Exception:
+            logging.exception("No se pudo guardar el cambio de escucha en memoria.")
+        self._add_message("assistant", respuesta)
+        self._set_status(
+            "ESCUCHANDO «HEY JARVIS»" if enabled and self.wakeword_detector else "F9 PARA HABLAR",
+            CYAN,
+        )
+
+    def _on_wakeword_detected(self) -> None:
+        try:
+            jarvis_wakeword.reproducir_pitido()
+        except Exception:
+            logging.exception("No se pudo reproducir el pitido de activación.")
+        if self._pending_plan_reply is not None:
+            self._set_plan_voice_controls(recording=True)
+            self._set_status("TE ESCUCHO… " + self._approval_hint(
+                self._pending_approval_kind or "plan"
+            ), ERROR)
+        else:
+            self._set_status("TE ESCUCHO…", ERROR)
+
+    def _on_wakeword_command(self, audio_path: str) -> None:
+        """Procesa la orden dicha tras «Hey Jarvis» como una grabación de F9."""
+        plan_approval = self._pending_plan_reply is not None
+        if self._closing or self.recorder is not None or (self.busy and not plan_approval):
+            limpiar_audio(audio_path)
+            return
+        approval_kind = self._pending_approval_kind or "plan"
+        if plan_approval:
+            self._set_plan_voice_controls(recording=False, recognizing=True)
+            self.mic_button.configure(state="disabled")
+            self._set_status("RECONOCIENDO CONFIRMACIÓN…", CYAN)
+        else:
+            self._start_busy("TRANSCRIBIENDO AUDIO…")
+        threading.Thread(
+            target=self._voice_worker,
+            args=(
+                audio_path,
+                time.perf_counter(),
+                self.conversation_id,
+                plan_approval,
+                approval_kind,
+                self.cancel_token,
+            ),
+            daemon=True,
+        ).start()
+
     _DIRECT_ACTION_BUSY = {
         "set_system_volume": "AJUSTANDO VOLUMEN…",
         "set_output_device": "CAMBIANDO SALIDA DE AUDIO…",
@@ -1980,11 +2211,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             label = self.tool_registry.get(tool_name).display_name
         except ToolError:
             label = tool_name
-        if tool_name == "power_control" and not self._request_simple_confirmation(
-            "Confirmar " + label.lower(),
-            jarvis_power.PREGUNTAS_CONFIRMACION.get(
-                str(arguments.get("action")), f"¿Autorizas «{label}»?"
-            ),
+        if tool_name == "power_control" and not self._request_power_confirmation(
+            str(arguments.get("action"))
         ):
             # Riesgo alto: aunque sea un comando directo, siempre se confirma.
             self.events.put(("direct_action_error", tool_name, "Cancelé la acción; el equipo sigue igual."))
@@ -2043,6 +2271,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "plan": ("EJECUTAR PLAN", "NO EJECUTAR PLAN"),
         "routine_save": ("GUARDAR RUTINA", "NO GUARDAR RUTINA"),
         "vision": ("ANALIZAR", "CANCELAR"),
+        "power": ("SÍ", "NO"),
     }
 
     def _approval_hint(self, kind: str) -> str:
@@ -2313,6 +2542,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.global_hotkey_listener.stop()
         self.global_hotkey_listener.join(timeout=1)
         self.headphones_watcher.stop()
+        self._stop_wakeword()
         if self._routines_panel is not None:
             self._routines_panel.close()
         self._stop_player(wait=True)

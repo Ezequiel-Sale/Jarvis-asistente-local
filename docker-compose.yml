@@ -3,6 +3,13 @@ services:
   stt:
     image: ghcr.io/speaches-ai/speaches:latest-cpu
     container_name: jarvis-stt
+    environment:
+      # Mantener el modelo cargado: si se descarga tras 5 min sin uso, la
+      # siguiente frase tarda ~6 s más en transcribirse.
+      - WHISPER__TTL=-1
+      # int8 en CPU: más rápido y con la misma calidad práctica.
+      - WHISPER__COMPUTE_TYPE=int8
+      - WHISPER__CPU_THREADS=8
     ports:
       - "9000:8000"
     volumes:

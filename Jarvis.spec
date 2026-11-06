@@ -1,11 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 
 
 a = Analysis(
     ['jarvis_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.')],
+    # collect_data_files('openwakeword') incluye los modelos de «Hey Jarvis»
+    # (descargados con openwakeword.utils.download_models; ver README).
+    datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.')]
+    + collect_data_files('openwakeword'),
     hiddenimports=['pystray._win32', 'pystray._util.win32'],
     hookspath=[],
     hooksconfig={},

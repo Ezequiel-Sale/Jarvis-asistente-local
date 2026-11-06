@@ -813,3 +813,65 @@ def detectar_comando_energia(texto: str) -> tuple[str, dict[str, object]] | None
         if patron.fullmatch(consulta):
             return herramienta, dict(argumentos)
     return None
+
+
+_VERBOS_ENERGIA = {
+    "shutdown": r"apaga|apagalo|apagala|apagar|apagarlo",
+    "restart": r"reinicia|reinicialo|reiniciala|reiniciar|reiniciarlo",
+    "sleep": r"suspende|suspendelo|suspendela|suspender|suspenderlo",
+}
+
+
+def detectar_decision_energia(texto: str, accion: str) -> bool | None:
+    """Respuesta por voz a «¿Apago/Reinicio/Suspendo el equipo?».
+
+    Acepta «sí», «confirmo», «adelante», «hazlo» o el verbo de la acción pedida
+    («apágalo» si se preguntó por apagar; «reinícialo» no aprueba un apagado).
+    Cualquier respuesta que empiece por «no», «cancela» o «mejor no» rechaza.
+    """
+    frase = " ".join(re.findall(r"[a-z0-9]+", _normalizar_consulta(texto)))
+    if not frase:
+        return None
+    if re.fullmatch(
+        r"(?:mejor\s+)?(?:no|nop|cancela|cancelar|cancelalo|deja|dejalo|para|espera|olvidalo)"
+        r"(?:\s+.*)?",
+        frase,
+    ):
+        return False
+    verbos = _VERBOS_ENERGIA.get(accion)
+    nucleo = r"si|confirmo|confirmado|adelante|hazlo|dale|de\s+acuerdo|ok|okay|vale"
+    if verbos:
+        nucleo += "|" + verbos
+    if re.fullmatch(
+        r"(?:si\s+)?(?:" + nucleo + r")"
+        r"(?:\s+(?:" + (verbos or "si") + r"))?"
+        r"(?:\s+(?:el\s+|la\s+)?(?:equipo|pc|ordenador|computadora))?"
+        r"(?:\s+(?:ya|ahora))?(?:\s+por\s+favor)?",
+        frase,
+    ):
+        return True
+    return None
+
+
+_ESCUCHA = (
+    r"(?:la\s+)?(?:palabra\s+(?:de\s+)?(?:activacion|clave)|escucha(?:\s+continua)?"
+    r"|activacion\s+por\s+voz|hey\s+jarvis|oye\s+jarvis)"
+)
+_ESCUCHA_ON = re.compile(
+    r"^(?:activa|activar|enciende|encender|habilita|habilitar|reactiva|reactivar)\s+"
+    + _ESCUCHA + r"$|^(?:escuchame|escucha)\s+(?:siempre|todo\s+el\s+tiempo)$"
+)
+_ESCUCHA_OFF = re.compile(
+    r"^(?:desactiva|desactivar|apaga|apagar|deshabilita|deshabilitar|quita|quitar)\s+"
+    + _ESCUCHA + r"$|^(?:deja|dejar)\s+de\s+escuchar(?:me)?(?:\s+siempre)?$"
+)
+
+
+def detectar_comando_escucha(texto: str) -> bool | None:
+    """«activa la palabra de activación» → True; «deja de escucharme» → False."""
+    consulta = _normalizar_consulta(texto)
+    if _ESCUCHA_ON.fullmatch(consulta):
+        return True
+    if _ESCUCHA_OFF.fullmatch(consulta):
+        return False
+    return None

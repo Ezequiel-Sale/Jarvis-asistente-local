@@ -6,7 +6,11 @@ from unittest.mock import Mock, patch
 
 import jarvis_power as power
 from jarvis_app import JarvisApp
-from jarvis_commands import detectar_comando_energia, detectar_comando_monitores
+from jarvis_commands import (
+    detectar_comando_energia,
+    detectar_comando_monitores,
+    detectar_decision_energia,
+)
 from jarvis_tool_registry import ToolRisk
 from jarvis_tools import crear_registro_herramientas
 
@@ -130,7 +134,7 @@ class DirectPowerConfirmationTests(unittest.TestCase):
         host = Mock()
         host.tool_registry = crear_registro_herramientas(Mock())
         host.tool_registry.execute = Mock(return_value="Apagaré el equipo en 30 segundos.")
-        host._request_simple_confirmation = Mock(return_value=aprueba)
+        host._request_power_confirmation = Mock(return_value=aprueba)
         return host
 
     def test_direct_shutdown_asks_and_stops_if_rejected(self) -> None:
@@ -138,8 +142,8 @@ class DirectPowerConfirmationTests(unittest.TestCase):
         JarvisApp._direct_tool_worker(
             host, "power_control", {"action": "shutdown"}, "apaga el equipo", "c1", None
         )
-        host._request_simple_confirmation.assert_called_once()
-        self.assertIn("¿Apago el equipo?", host._request_simple_confirmation.call_args.args[1])
+        host._request_power_confirmation.assert_called_once()
+        self.assertEqual(host._request_power_confirmation.call_args.args[0], "shutdown")
         host.tool_registry.execute.assert_not_called()
         evento = host.events.put.call_args.args[0]
         self.assertEqual(evento[0], "direct_action_error")
@@ -158,8 +162,52 @@ class DirectPowerConfirmationTests(unittest.TestCase):
         host = self._host(False)
         with patch("jarvis_app.core.guardar_turno"):
             JarvisApp._direct_tool_worker(host, "lock_computer", {}, "bloquea la pc", "c1", None)
-        host._request_simple_confirmation.assert_not_called()
+        host._request_power_confirmation.assert_not_called()
         host.tool_registry.execute.assert_called_once()
+
+
+class PowerVoiceDecisionTests(unittest.TestCase):
+    def test_approvals(self) -> None:
+        for texto, accion in (
+            ("Sí.", "shutdown"),
+            ("Jarvis, sí", "shutdown"),
+            ("sí, apágalo", "shutdown"),
+            ("Apágalo ya", "shutdown"),
+            ("confirmo", "restart"),
+            ("reinícialo", "restart"),
+            ("adelante", "sleep"),
+            ("sí, suspende el equipo por favor", "sleep"),
+        ):
+            with self.subTest(texto=texto):
+                self.assertTrue(detectar_decision_energia(texto, accion))
+
+    def test_rejections(self) -> None:
+        for texto in ("no", "No, cancela", "mejor no", "no lo apagues", "cancelar", "espera"):
+            with self.subTest(texto=texto):
+                self.assertFalse(detectar_decision_energia(texto, "shutdown"))
+
+    def test_unclear_answers_do_nothing(self) -> None:
+        for texto, accion in (
+            ("Gracias.", "shutdown"),
+            ("apaga la luz", "shutdown"),
+            ("reinícialo", "shutdown"),  # verbo de otra acción
+            ("", "shutdown"),
+        ):
+            with self.subTest(texto=texto):
+                self.assertIsNone(detectar_decision_energia(texto, accion))
+
+
+class AgentPowerConfirmationTests(unittest.TestCase):
+    def test_agent_power_tool_uses_power_dialog(self) -> None:
+        host = Mock()
+        host._closing = False
+        host._request_power_confirmation = Mock(return_value=True)
+        tool = crear_registro_herramientas(Mock()).get("power_control")
+        self.assertTrue(
+            JarvisApp._request_tool_confirmation(host, tool, {"action": "restart"})
+        )
+        host._request_power_confirmation.assert_called_once_with("restart")
+        host.events.put.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -392,6 +392,46 @@ def guardar_turno(conversacion_id: str, usuario: str, asistente: str) -> None:
             (titulo, conversacion_id),
         )
 
+def _wav_silencio(segundos: float = 1.0, frecuencia: int = 16000) -> bytes:
+    import io
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(frecuencia)
+        wav.writeframes(b"\x00\x00" * int(segundos * frecuencia))
+    return buffer.getvalue()
+
+
+def precalentar_stt(intentos: int = 30, espera: float = 2.0) -> bool:
+    """Carga el modelo de Whisper con un segundo de silencio.
+
+    La primera transcripción tras arrancar el contenedor tarda varios segundos
+    más porque carga el modelo; así ese coste no lo paga la primera frase del
+    usuario. Reintenta mientras el contenedor termina de arrancar.
+    """
+    audio = _wav_silencio()
+    for _ in range(max(1, intentos)):
+        inicio = time.perf_counter()
+        try:
+            res = requests.post(
+                STT_URL,
+                data={"model": STT_MODEL, "language": "es"},
+                files={"file": ("silencio.wav", audio, "audio/wav")},
+                timeout=(5, STT_TIMEOUT),
+            )
+            res.raise_for_status()
+        except requests.RequestException:
+            time.sleep(espera)
+            continue
+        logging.info("Modelo de voz a texto cargado en %.2fs.", time.perf_counter() - inicio)
+        return True
+    logging.warning("No pude precargar el modelo de voz a texto.")
+    return False
+
+
 def procesar_stt(ruta_audio: str) -> str:
     inicio = time.perf_counter()
     try:
