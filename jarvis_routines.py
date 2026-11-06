@@ -13,6 +13,9 @@ from jarvis_tool_registry import ToolDefinition, ToolError, ToolRegistry, ToolRi
 
 # Disparadores (valores guardados en rutinas.disparador)
 DISPARADOR_HORA = "hora"
+# Comando personalizado: se ejecuta al decir o escribir una de sus frases.
+DISPARADOR_FRASE = "frase"
+MAX_PASOS = 10
 DISPARADOR_AURICULARES_CONECTADOS = "auriculares_conectados"
 DISPARADOR_AURICULARES_DESCONECTADOS = "auriculares_desconectados"
 DISPARADORES_EVENTO = frozenset(
@@ -53,6 +56,22 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "launch_game",
         "manage_window",
         "search_youtube",
+        "media_control",
+        "set_app_volume",
+        "lock_computer",
+        # Riesgo alto: en una rutina no pide aprobación, avisa con cuenta atrás
+        # (ver requiere_cuenta_atras y JarvisApp._routine_worker).
+        "power_control",
+        "cancel_power_action",
+        "open_program",
+        "configure_display",
+        "set_reminder",
+        "get_current_datetime",
+        "get_headset_battery",
+        "get_now_playing",
+        "get_system_status",
+        "get_jarvis_diagnostics",
+        "get_weather",
     }
 )
 _LIST_PATTERN = re.compile(
@@ -74,8 +93,15 @@ _CREATE_ROUTINE_INTENT = re.compile(
 _CREATE_ROUTINE_HEADER = re.compile(
     r"\b(?:programa|programar|agenda|agendar|crea|crear)\s+"
     r"(?:una\s+)?rutina\s+(?:llamada|denominada|de nombre)\s+"
-    r"(?P<name>.+?)\s+a\s+las\s+"
-    r"(?P<hour>\d{1,2})(?:\s*(?::|\.|y)\s*|\s+)(?P<minute>\d{1,2})\b",
+    r"(?P<name>.+?)\s+a\s+las?\s+"
+    r"(?P<hour>\d{1,2})"
+    # Minutos opcionales: «23:00», «23.30», «23 y 15», «7 y media», «7 y cuarto».
+    r"(?:(?:\s*(?::|\.)\s*|\s+y\s+|\s+)(?P<minute>\d{2})\b"
+    r"|\s+y\s+(?P<fraction>media|cuarto))?"
+    # «23 horas», «11 de la noche», «7 de la mañana», «3 pm».
+    r"(?:\s+(?:hs|h|horas|en\s+punto)\b"
+    r"|\s+(?:de\s+la\s+)?(?P<period>ma[nñ]ana|tarde|noche|madrugada)\b"
+    r"|\s*(?P<ampm>am|pm)\b)?",
     re.IGNORECASE,
 )
 _DAY_RANGE = re.compile(
@@ -87,15 +113,27 @@ _EVERY_DAY = re.compile(
     re.IGNORECASE,
 )
 _WEEKDAY = re.compile(
-    r"\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b",
+    r"\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bados?|domingos?)\b",
     re.IGNORECASE,
 )
 _ROUTINE_STEP = re.compile(
-    r"(?P<volume>"
+    r"(?P<power>(?P<power_verb>apaga|apagar|suspende|suspender|reinicia|reiniciar)"
+    r"\s+(?:el\s+|la\s+)?(?:equipo|pc|ordenador|computadora))"
+    r"|(?P<lock>bloquea(?:r)?\s+(?:el\s+|la\s+)?"
+    r"(?:equipo|pc|ordenador|computadora|pantalla|sesi[oó]n))"
+    r"|(?P<media_pause>(?:pausa|pausar|pon\s+pausa\s+a|det[eé]n|detener)\s+(?:la\s+)?"
+    r"(?:m[uú]sica|reproducci[oó]n|canci[oó]n))"
+    r"|(?P<media_play>(?:reanuda|reanudar|contin[uú]a|continuar)\s+(?:la\s+)?"
+    r"(?:m[uú]sica|reproducci[oó]n))"
+    r"|(?P<media_next>(?:(?:pasa|salta|pon)\s+(?:a\s+)?(?:la\s+)?)?siguiente\s+canci[oó]n)"
+    r"|(?P<volume>"
     r"(?:sube|subir|aumenta|aumentar|baja|bajar|reduce|reducir|"
     r"ajusta|ajustar|establece|establecer|pon|poner)"
     r"\s+(?:el\s+)?volumen(?:\s+del\s+sistema)?\s+(?:al|a|en)\s+"
     r"(?P<percentage>\d{1,3})\s*(?:%|por\s+ciento|porciento))"
+    r"|(?P<appvol>(?:pon|poner|baja|bajar|sube|subir|ajusta|ajustar|deja|dejar)"
+    r"\s+(?:el\s+)?volumen\s+(?:de|del)\s+(?P<app>[a-z0-9]+)\s+(?:a|al|en)\s+"
+    r"(?P<app_percentage>\d{1,3})\s*(?:%|por\s+ciento|porciento)?)"
     r"|(?P<new_tab>"
     r"(?:abre|abrir|abr[ií])\s+(?:una\s+)?(?:nueva\s+)?pesta[nñ]a)"
     r"|(?P<output>"
@@ -138,6 +176,7 @@ class RoutineHost(Protocol):
         steps_json: str = "",
         trigger: str = "time",
         automatic: bool = False,
+        once: bool = False,
     ) -> str: ...
 
 
@@ -156,6 +195,7 @@ class Routine:
     steps: tuple[RoutineStep, ...]
     trigger: str = DISPARADOR_HORA
     permission: str = PERMISO_PREGUNTAR
+    phrases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +210,8 @@ class RoutineInfo:
     trigger: str
     permission: str
     steps: tuple[RoutineStep, ...]
+    phrases: tuple[str, ...] = ()
+    once: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +222,7 @@ class RoutineCreationRequest:
     steps_json: str
     trigger: str = "time"
     automatic: bool = False
+    once: bool = False
 
     def tool_arguments(self) -> dict[str, object]:
         """Argumentos para schedule_routine (solo incluye los no predeterminados)."""
@@ -194,6 +237,8 @@ class RoutineCreationRequest:
             arguments["trigger"] = self.trigger
         if self.automatic:
             arguments["automatic"] = True
+        if self.once:
+            arguments["once"] = True
         return arguments
 
 
@@ -237,8 +282,8 @@ def _validate_steps_json(value: object, registry: ToolRegistry) -> str:
         steps = json.loads(value)
     except json.JSONDecodeError as error:
         raise ValueError("los pasos deben ser una lista JSON válida.") from error
-    if not isinstance(steps, list) or not 1 <= len(steps) <= 5:
-        raise ValueError("la rutina debe tener entre 1 y 5 pasos.")
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_PASOS:
+        raise ValueError(f"la rutina debe tener entre 1 y {MAX_PASOS} pasos.")
 
     normalized_steps: list[dict[str, object]] = []
     for index, step in enumerate(steps, start=1):
@@ -268,7 +313,7 @@ def _decode_steps(value: str) -> tuple[RoutineStep, ...]:
         payload = json.loads(value)
     except json.JSONDecodeError as error:
         raise ValueError("La rutina guardada contiene pasos JSON inválidos.") from error
-    if not isinstance(payload, list) or not 1 <= len(payload) <= 5:
+    if not isinstance(payload, list) or not 1 <= len(payload) <= MAX_PASOS:
         raise ValueError("La rutina guardada no tiene una cantidad válida de pasos.")
     steps: list[RoutineStep] = []
     for index, step in enumerate(payload, start=1):
@@ -288,7 +333,7 @@ def _validate_trigger(value: object) -> str:
     if isinstance(value, str):
         if value in _TRIGGER_FROM_TOOL:
             return _TRIGGER_FROM_TOOL[value]
-        if value == DISPARADOR_HORA or value in DISPARADORES_EVENTO:
+        if value == DISPARADOR_HORA or value in DISPARADORES_EVENTO or value == DISPARADOR_FRASE:
             return value
     raise ValueError(
         "el disparador debe ser time, headphones_connected o headphones_disconnected."
@@ -315,7 +360,11 @@ def _error_automatica(bloqueantes: list[str]) -> ValueError:
     )
 
 
-def describir_disparador(trigger: str, time: str, days: tuple[int, ...]) -> str:
+def describir_disparador(
+    trigger: str, time: str, days: tuple[int, ...], phrases: tuple[str, ...] = ()
+) -> str:
+    if trigger == DISPARADOR_FRASE:
+        return "al decir " + " o ".join(f"«{p}»" for p in phrases) if phrases else "al decir su frase"
     if trigger in _TRIGGER_LABELS:
         return _TRIGGER_LABELS[trigger]
     return f"a las {time}, {_routine_days_label(days)}"
@@ -343,7 +392,28 @@ def _parsear_pasos(remainder: str) -> list[dict[str, object]]:
             raise ValueError(
                 f"No pude interpretar esta parte de la rutina: «{gap.strip()}»."
             )
-        if step_match.group("volume") is not None:
+        if step_match.group("power") is not None:
+            verbo = step_match.group("power_verb").casefold()
+            accion = "sleep" if verbo.startswith("susp") else "restart" if verbo.startswith("rein") else "shutdown"
+            step = {"tool": "power_control", "arguments": {"action": accion}}
+        elif step_match.group("lock") is not None:
+            step = {"tool": "lock_computer", "arguments": {}}
+        elif step_match.group("media_pause") is not None:
+            step = {"tool": "media_control", "arguments": {"action": "pause"}}
+        elif step_match.group("media_play") is not None:
+            step = {"tool": "media_control", "arguments": {"action": "play"}}
+        elif step_match.group("media_next") is not None:
+            step = {"tool": "media_control", "arguments": {"action": "next"}}
+        elif step_match.group("appvol") is not None:
+            app = step_match.group("app").casefold()
+            percentage = int(step_match.group("app_percentage"))
+            if app in {"sistema", "equipo", "windows"}:
+                step = {"tool": "set_system_volume", "arguments": {"percentage": percentage}}
+            else:
+                step = {"tool": "set_app_volume", "arguments": {"app": app, "percentage": percentage}}
+            if not 0 <= percentage <= 100:
+                raise ValueError("El volumen de la rutina debe estar entre 0 y 100%.")
+        elif step_match.group("volume") is not None:
             percentage = int(step_match.group("percentage"))
             if not 0 <= percentage <= 100:
                 raise ValueError("El volumen de la rutina debe estar entre 0 y 100%.")
@@ -376,8 +446,10 @@ def _parsear_pasos(remainder: str) -> list[dict[str, object]]:
 
     if not steps:
         raise ValueError(
-            "No reconocí acciones compatibles. Por ahora puedes pedir ajustar "
-            "el volumen, abrir una pestaña o navegar a una dirección web."
+            "No reconocí acciones compatibles. Puedes pedir ajustar el volumen "
+            "(general o de una aplicación), cambiar la salida de audio, pausar, "
+            "reanudar o pasar la música, abrir una pestaña, navegar a una web, "
+            "bloquear, apagar, reiniciar o suspender el equipo."
         )
     if _ACTION_SEPARATOR.fullmatch(remainder[cursor:]) is None:
         raise ValueError(
@@ -414,6 +486,86 @@ def _parsear_rutina_evento(
     )
 
 
+_POWER_SHORTCUT = re.compile(
+    r"^\s*(?:(?:oye\s+)?jarvis[,:\s]+)?(?:por\s+favor\s+)?"
+    r"(?P<verbo>apaga|apagar|ap[aá]game|suspende|suspender|reinicia|reiniciar)\s+"
+    r"(?:el\s+|la\s+|mi\s+)?(?:equipo|pc|ordenador|computadora)\s+(?P<resto>.+?)\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_POWER_NAMES = {"shutdown": "Apagado", "restart": "Reinicio", "sleep": "Suspensión"}
+
+
+def _dias_recurrentes(texto: str) -> tuple[str | None, str]:
+    """Días de «todos los días», «de lunes a viernes» o «los martes y jueves».
+
+    Devuelve ``(días, texto sin esas palabras)``; días es None si no hay recurrencia.
+    """
+    if _DAY_RANGE.search(texto):
+        return "1,2,3,4,5", _DAY_RANGE.sub(" ", texto, count=1)
+    if _EVERY_DAY.search(texto):
+        return _ALL_DAYS, _EVERY_DAY.sub(" ", texto, count=1)
+    numeros = {"lunes": 1, "martes": 2, "miercoles": 3, "jueves": 4, "viernes": 5, "sabado": 6, "domingo": 7}
+    encontrados = {
+        numeros[m.group(1).casefold().replace("é", "e").replace("á", "a").removesuffix("s")
+                if m.group(1).casefold().endswith(("bados", "ingos"))
+                else m.group(1).casefold().replace("é", "e").replace("á", "a")]
+        for m in _WEEKDAY.finditer(texto)
+    }
+    if encontrados:
+        # Quitar solo la expresión de días («los martes y jueves»), no el resto
+        # de la frase («a las 4 de la mañana»).
+        texto = _FRASE_DIAS.sub(" ", texto)
+        return ",".join(map(str, sorted(encontrados))), texto
+    return None, texto
+
+
+_DIA = r"(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bados?|domingos?)"
+_FRASE_DIAS = re.compile(
+    rf"\b(?:(?:los|el)\s+)?{_DIA}(?:\s*(?:,|y)\s*(?:(?:los|el)\s+)?{_DIA})*\b",
+    re.IGNORECASE,
+)
+
+
+def _nombre_libre(base: str) -> str:
+    existentes = {name.casefold() for _, name, _, _, _ in listar_rutinas()}
+    if base.casefold() not in existentes:
+        return base
+    numero = 2
+    while f"{base} {numero}".casefold() in existentes:
+        numero += 1
+    return f"{base} {numero}"
+
+
+def _parsear_atajo_energia(
+    match: re.Match[str], ahora: datetime | None = None
+) -> RoutineCreationRequest | None:
+    """«apaga el equipo a las 2» (una vez) o «… todos los días a las 23:30»."""
+    import jarvis_reminders
+
+    verbo = match.group("verbo").casefold()
+    accion = "sleep" if verbo.startswith("susp") else "restart" if verbo.startswith("rein") else "shutdown"
+    dias, resto = _dias_recurrentes(match.group("resto"))
+    normalizado, _ = jarvis_reminders._normalizar_con_mapa(resto)
+    cuando = re.search(jarvis_reminders.CUANDO_ABS, normalizado)
+    if cuando is None:
+        return None
+    sobrante = (normalizado[: cuando.start()] + normalizado[cuando.end():]).strip()
+    if sobrante:
+        return None  # hay más cosas en la frase: que lo interprete el modelo
+    ahora = ahora or datetime.now()
+    momento = jarvis_reminders.momento_de(cuando, ahora)
+    hora = f"{momento.hour:02d}:{momento.minute:02d}"
+    pasos = json.dumps([{"tool": "power_control", "arguments": {"action": accion}}], separators=(",", ":"))
+    una_vez = dias is None
+    return RoutineCreationRequest(
+        name=_nombre_libre(f"{_POWER_NAMES[accion]} {hora}"),
+        time=hora,
+        days=str(momento.isoweekday()) if una_vez else dias,
+        steps_json=pasos,
+        once=una_vez,
+    )
+
+
 def parsear_solicitud_creacion(
     text: str,
     registry: ToolRegistry | None = None,
@@ -421,6 +573,15 @@ def parsear_solicitud_creacion(
     event_match = _EVENT_ROUTINE.search(text)
     if event_match is not None:
         return _parsear_rutina_evento(event_match, registry)
+
+    power_match = _POWER_SHORTCUT.match(text)
+    if power_match is not None:
+        try:
+            atajo = _parsear_atajo_energia(power_match)
+        except ValueError as error:
+            raise ValueError(f"No pude interpretar la hora: {error}") from error
+        if atajo is not None:
+            return atajo
 
     if _CREATE_ROUTINE_INTENT.search(text) is None:
         return None
@@ -434,7 +595,15 @@ def parsear_solicitud_creacion(
 
     name = _validate_name(match.group("name").strip(" ,.;:"))
     hour = int(match.group("hour"))
-    minute = int(match.group("minute"))
+    if match.group("minute"):
+        minute = int(match.group("minute"))
+    else:
+        minute = {"media": 30, "cuarto": 15}.get((match.group("fraction") or "").casefold(), 0)
+    periodo = (match.group("period") or match.group("ampm") or "").casefold()
+    if periodo in {"tarde", "noche", "pm"} and hour < 12:
+        hour += 12
+    elif periodo in {"mañana", "manana", "madrugada", "am"} and hour == 12:
+        hour = 0
     if hour > 23 or minute > 59:
         raise ValueError("La hora debe estar entre 00:00 y 23:59.")
     scheduled_time = f"{hour:02d}:{minute:02d}"
@@ -469,9 +638,11 @@ def parsear_solicitud_creacion(
                 .replace("é", "e")
                 .replace("á", "a")
             )
+            if day_name.endswith(("bados", "ingos")):
+                day_name = day_name[:-1]  # «los sábados», «los domingos»
             selected.add(day_numbers[day_name])
         days = ",".join(map(str, sorted(selected)))
-        remainder = _WEEKDAY.sub(" ", remainder)
+        remainder = _FRASE_DIAS.sub(" ", remainder)  # también «los» de «los sábados»
         remainder = re.sub(r"\b(?:de|a)\b", " ", remainder, flags=re.IGNORECASE)
     else:
         days = _ALL_DAYS
@@ -500,13 +671,18 @@ def crear_rutina(
     *,
     trigger: str = "time",
     automatic: bool = False,
+    once: bool = False,
+    phrases: Iterable[str] = (),
 ) -> int:
+    """``once``: se desactiva sola tras ejecutarse (p. ej. «apaga el equipo a las 2»).
+    ``phrases``: frases que activan una rutina con disparador «frase»."""
     name = _validate_name(name)
     trigger = _validate_trigger(trigger)
     if trigger == DISPARADOR_HORA:
         time = _validate_time(time)
     else:
         time = ""
+    frases_json = _validate_phrases(phrases, trigger)
     days = _validate_days(days or _ALL_DAYS)
     steps_json = _validate_steps_json(steps_json, registry)
     if automatic:
@@ -523,12 +699,135 @@ def crear_rutina(
         ).fetchone()
         if existing is not None:
             raise ValueError(f"Ya existe una rutina llamada «{name}».")
+        _comprobar_frases_libres(connection, frases_json, None)
         cursor = connection.execute(
             "INSERT INTO rutinas (nombre, hora, accion, activa, dias_semana, "
-            "disparador, modo_permiso) VALUES (?, ?, ?, 1, ?, ?, ?)",
-            (name, time, steps_json, days, trigger, permission),
+            "disparador, modo_permiso, una_vez, frases) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
+            (name, time, steps_json, days, trigger, permission, int(bool(once)), frases_json),
         )
         return int(cursor.lastrowid)
+
+
+def actualizar_rutina(
+    identifier: int,
+    name: str,
+    time: str,
+    days: str,
+    steps_json: str,
+    registry: ToolRegistry,
+    *,
+    trigger: str = "time",
+    automatic: bool = False,
+    once: bool = False,
+    phrases: Iterable[str] = (),
+) -> None:
+    """Reemplaza la configuración de una rutina (formulario de edición)."""
+    name = _validate_name(name)
+    trigger = _validate_trigger(trigger)
+    time = _validate_time(time) if trigger == DISPARADOR_HORA else ""
+    days = _validate_days(days or _ALL_DAYS)
+    steps_json = _validate_steps_json(steps_json, registry)
+    frases_json = _validate_phrases(phrases, trigger)
+    if automatic:
+        bloqueantes = acciones_con_permiso((s["tool"] for s in json.loads(steps_json)), registry)
+        if bloqueantes:
+            raise _error_automatica(bloqueantes)
+    with core.conexion_db() as connection:
+        otro = connection.execute(
+            "SELECT id FROM rutinas WHERE nombre = ? COLLATE NOCASE AND id <> ?",
+            (name, identifier),
+        ).fetchone()
+        if otro is not None:
+            raise ValueError(f"Ya existe otra rutina llamada «{name}».")
+        _comprobar_frases_libres(connection, frases_json, identifier)
+        cursor = connection.execute(
+            "UPDATE rutinas SET nombre = ?, hora = ?, accion = ?, dias_semana = ?, "
+            "disparador = ?, modo_permiso = ?, una_vez = ?, frases = ?, ultima_ejecucion = NULL "
+            "WHERE id = ?",
+            (
+                name, time, steps_json, days, trigger,
+                PERMISO_AUTOMATICA if automatic else PERMISO_PREGUNTAR,
+                int(bool(once)), frases_json, identifier,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("No encontré esa rutina.")
+
+
+def normalizar_frase(texto: str) -> str:
+    """Forma comparable de una frase: sin tildes, signos ni «Hey Jarvis» delante."""
+    import unicodedata
+
+    texto = unicodedata.normalize("NFKD", texto.casefold())
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r"[^a-z0-9]+", " ", texto).strip()
+    return re.sub(r"^(?:(?:hey|oye|ey)\s+)?(?:jarvis\s+)?(?:por\s+favor\s+)?", "", texto).strip()
+
+
+def _validate_phrases(phrases: Iterable[str], trigger: str) -> str:
+    frases: list[str] = []
+    vistas: set[str] = set()
+    for frase in phrases or ():
+        frase = " ".join(str(frase).split())
+        clave = normalizar_frase(frase)
+        if not clave:
+            continue
+        if len(clave) < 3 or len(frase) > 80:
+            raise ValueError(f"La frase «{frase}» debe tener entre 3 y 80 caracteres.")
+        if clave not in vistas:
+            vistas.add(clave)
+            frases.append(frase)
+    if trigger == DISPARADOR_FRASE and not frases:
+        raise ValueError("Indica al menos una frase para activar el comando.")
+    if trigger != DISPARADOR_FRASE:
+        frases = []
+    return json.dumps(frases, ensure_ascii=False)
+
+
+def _comprobar_frases_libres(connection, frases_json: str, propio: int | None) -> None:
+    nuevas = {normalizar_frase(f) for f in json.loads(frases_json)}
+    if not nuevas:
+        return
+    for identifier, name, frases in connection.execute(
+        "SELECT id, nombre, frases FROM rutinas WHERE disparador = ?", (DISPARADOR_FRASE,)
+    ).fetchall():
+        if propio is not None and int(identifier) == propio:
+            continue
+        usadas = {normalizar_frase(f) for f in _leer_frases(frases)}
+        repetidas = nuevas & usadas
+        if repetidas:
+            raise ValueError(f"La frase «{sorted(repetidas)[0]}» ya la usa la rutina «{name}».")
+
+
+def _leer_frases(valor: object) -> tuple[str, ...]:
+    try:
+        datos = json.loads(str(valor or "[]"))
+    except json.JSONDecodeError:
+        return ()
+    return tuple(str(f) for f in datos if isinstance(f, str)) if isinstance(datos, list) else ()
+
+
+def buscar_rutina_por_frase(texto: str) -> Routine | None:
+    """Rutina activa cuya frase coincide exactamente con lo dicho o escrito."""
+    clave = normalizar_frase(texto)
+    if len(clave) < 3:
+        return None
+    with core.conexion_db() as connection:
+        filas = connection.execute(
+            "SELECT id, nombre, hora, accion, dias_semana, disparador, modo_permiso, frases "
+            "FROM rutinas WHERE activa = 1 AND disparador = ? ORDER BY id",
+            (DISPARADOR_FRASE,),
+        ).fetchall()
+        for fila in filas:
+            frases = _leer_frases(fila[7])
+            if clave in {normalizar_frase(f) for f in frases}:
+                rutina = _routine_from_row(connection, fila[:7])
+                if rutina is not None:
+                    return Routine(
+                        rutina.identifier, rutina.name, rutina.time, rutina.days,
+                        rutina.steps, rutina.trigger, rutina.permission, frases,
+                    )
+    return None
 
 
 def _routine_from_row(connection, row) -> Routine | None:
@@ -591,8 +890,9 @@ def reclamar_rutinas_vencidas(ahora: datetime | None = None) -> list[Routine]:
             if routine is None or weekday not in routine.days:
                 continue
             cursor = connection.execute(
-                "UPDATE rutinas SET ultima_ejecucion = ? WHERE id = ? "
-                "AND (ultima_ejecucion IS NULL OR ultima_ejecucion <> ?)",
+                "UPDATE rutinas SET ultima_ejecucion = ?, "
+                "activa = CASE WHEN una_vez = 1 THEN 0 ELSE activa END "
+                "WHERE id = ? AND (ultima_ejecucion IS NULL OR ultima_ejecucion <> ?)",
                 (date_key, routine.identifier, date_key),
             )
             if cursor.rowcount == 1:
@@ -648,11 +948,11 @@ def listar_automatizaciones() -> list[RoutineInfo]:
     """Todas las rutinas con disparador, permiso y pasos (para el panel)."""
     with core.conexion_db() as connection:
         rows = connection.execute(
-            "SELECT id, nombre, hora, dias_semana, activa, disparador, modo_permiso, accion "
-            "FROM rutinas ORDER BY disparador <> 'hora', hora, id"
+            "SELECT id, nombre, hora, dias_semana, activa, disparador, modo_permiso, accion, "
+            "frases, una_vez FROM rutinas ORDER BY disparador <> 'hora', hora, id"
         ).fetchall()
     routines: list[RoutineInfo] = []
-    for identifier, name, time, days, active, trigger, permission, actions in rows:
+    for identifier, name, time, days, active, trigger, permission, actions, frases, una_vez in rows:
         try:
             steps = _decode_steps(str(actions))
             parsed_days = _parse_days(str(days))
@@ -668,6 +968,8 @@ def listar_automatizaciones() -> list[RoutineInfo]:
                 str(trigger),
                 str(permission),
                 steps,
+                _leer_frases(frases),
+                bool(una_vez),
             )
         )
     return routines
@@ -708,6 +1010,15 @@ def cambiar_permiso_rutina(identifier: int, automatica: bool, registry: ToolRegi
         )
 
 
+def requiere_cuenta_atras(steps) -> bool:
+    """Rutinas que apagan, reinician o suspenden: en vez de pedir aprobación
+    (nadie suele estar delante), avisan con una cuenta atrás cancelable."""
+    return any(
+        (step.tool if isinstance(step, RoutineStep) else step.get("tool")) == "power_control"
+        for step in steps
+    )
+
+
 def puede_ejecutarse_sin_preguntar(routine: Routine, registry: ToolRegistry) -> bool:
     """Se vuelve a comprobar en cada ejecución por si cambió el riesgo de una herramienta."""
     if routine.permission != PERMISO_AUTOMATICA:
@@ -721,10 +1032,15 @@ def puede_ejecutarse_sin_preguntar(routine: Routine, registry: ToolRegistry) -> 
 def _format_routines(routines: list[RoutineInfo]) -> str:
     if not routines:
         return "Todavía no hay rutinas guardadas."
+    def permiso(routine: RoutineInfo) -> str:
+        if requiere_cuenta_atras(routine.steps):
+            return "avisa con cuenta atrás"
+        return "automática" if routine.permission == PERMISO_AUTOMATICA else "pregunta antes"
+
     lines = [
         f"{routine.identifier}. {routine.name} — "
-        f"{describir_disparador(routine.trigger, routine.time, routine.days)}, "
-        f"{'automática' if routine.permission == PERMISO_AUTOMATICA else 'pregunta antes'} "
+        f"{describir_disparador(routine.trigger, routine.time, routine.days, routine.phrases)}, "
+        f"{permiso(routine)} "
         f"({'activa' if routine.active else 'pausada'})"
         for routine in routines
     ]
@@ -777,6 +1093,9 @@ def registrar_herramienta(
             "'[{\"tool\":\"set_system_volume\",\"arguments\":{\"percentage\":30}}]'. "
             "automatic=true solo si el usuario pide que se ejecute sin preguntar; "
             "únicamente se permite si todas las acciones son de riesgo bajo. "
+            "once=true para que se ejecute una sola vez (una hora concreta, no recurrente). "
+            "Si incluye power_control, al llegar la hora avisa con una cuenta atrás "
+            "cancelable en vez de pedir aprobación. "
             "Solo se ejecuta mientras Jarvis esté abierto."
         ),
         {
@@ -795,6 +1114,7 @@ def registrar_herramienta(
                     "enum": sorted(_TRIGGER_FROM_TOOL),
                 },
                 "automatic": {"type": "boolean"},
+                "once": {"type": "boolean"},
             },
             "required": ["name", "steps_json"],
             "additionalProperties": False,

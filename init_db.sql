@@ -15,7 +15,11 @@ CREATE TABLE IF NOT EXISTS rutinas (
     -- 'hora' (usa hora/dias_semana) o un evento: 'auriculares_conectados', 'auriculares_desconectados'
     disparador TEXT NOT NULL DEFAULT 'hora',
     -- 'preguntar' o 'automatica' (solo si todas las acciones son de riesgo bajo)
-    modo_permiso TEXT NOT NULL DEFAULT 'preguntar'
+    modo_permiso TEXT NOT NULL DEFAULT 'preguntar',
+    -- 1 = se desactiva sola después de ejecutarse (p. ej. «apaga el equipo a las 2»)
+    una_vez INTEGER NOT NULL DEFAULT 0,
+    -- Disparador 'frase': lista JSON de frases que la activan («modo juego»…)
+    frases TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS permisos (

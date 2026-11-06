@@ -404,6 +404,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         if detectar_borrado_historial(text):
             self._confirm_clear_history()
             return
+        rutina = self._find_phrase_routine(text)
+        if rutina is not None:
+            self._start_phrase_routine(rutina, text)
+            return
         vision = detectar_vision(text)
         if vision is not None:
             self._start_vision_capture(*vision, text)
@@ -611,6 +615,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.events.put(("transcript", transcript))
             if detectar_borrado_historial(transcript):
                 self.events.put(("clear_history_request",))
+                return
+            rutina = self._find_phrase_routine(transcript)
+            if rutina is not None:
+                self.events.put(("phrase_routine", rutina, transcript))
                 return
             vision = detectar_vision(transcript)
             if vision is not None:
@@ -916,6 +924,19 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             logging.warning("Expiró la confirmación de la herramienta %s.", tool.name)
             return False
 
+    def _request_power_countdown(self, routine_name: str, action: str) -> bool:
+        """Cuenta atrás de una rutina de energía. True si nadie la canceló."""
+        if self._closing:
+            return False
+        reply: queue.Queue[bool] = queue.Queue(maxsize=1)
+        self.events.put(("power_countdown", routine_name, action, reply))
+        try:
+            return reply.get(timeout=jarvis_power.CUENTA_ATRAS_RUTINA + 60)
+        except queue.Empty:
+            logging.warning("La cuenta atrás de la rutina %s no respondió.", routine_name)
+            self.events.put(("plan_confirmation_timeout", reply))
+            return False
+
     def _request_power_confirmation(self, action: str) -> bool:
         """Pide «sí/no» (botones, teclado o voz con F9) para apagar, reiniciar o suspender.
 
@@ -960,14 +981,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         action = PlannedAction(tool=tool, arguments=arguments)
         trigger = jarvis_routines._validate_trigger(request.trigger)
         days = jarvis_routines._parse_days(request.days)
+        cuando = jarvis_routines.describir_disparador(trigger, request.time, days)
+        if request.once:
+            cuando += ", una sola vez"
         goal = (
-            f"{request.name} — "
-            f"{jarvis_routines.describir_disparador(trigger, request.time, days)} — "
-            + (
-                "se ejecutará automáticamente, sin preguntar"
-                if request.automatic
-                else "pedirá aprobación antes de cada ejecución"
-            )
+            f"{request.name} — {cuando} — "
+            + self._routine_permission_text(request.steps_json, request.automatic).lower()
         )
         self.events.put(("routine_save_confirmation", goal, (action,), reply))
         try:
@@ -985,6 +1004,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         steps_json: str = "",
         trigger: str = "time",
         automatic: bool = False,
+        once: bool = False,
     ) -> str:
         jarvis_routines.crear_rutina(
             name,
@@ -994,6 +1014,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.tool_registry,
             trigger=trigger,
             automatic=automatic,
+            once=once,
         )
         disparador = jarvis_routines._validate_trigger(trigger)
         cuando = jarvis_routines.describir_disparador(
@@ -1001,15 +1022,26 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             time,
             jarvis_routines._parse_days(days or "1,2,3,4,5,6,7"),
         )
-        permiso = (
-            "Se ejecutará automáticamente"
-            if automatic
-            else "Pedirá aprobación cada vez que se active"
-        )
+        permiso = self._routine_permission_text(steps_json, automatic)
+        if once:
+            cuando = f"{cuando}, una sola vez"
         return (
             f"Guardé la rutina «{name}» ({cuando}). {permiso}, "
             "mientras Jarvis esté abierto. Puedes pausarla desde el panel de rutinas."
         )
+
+    @staticmethod
+    def _routine_permission_text(steps_json: str, automatic: bool) -> str:
+        try:
+            pasos = json.loads(steps_json)
+        except (TypeError, ValueError):
+            pasos = []
+        if jarvis_routines.requiere_cuenta_atras(pasos):
+            return (
+                f"Al llegar la hora avisará con {jarvis_power.CUENTA_ATRAS_RUTINA} s de "
+                "cuenta atrás y lo hará si nadie la cancela"
+            )
+        return "Se ejecutará automáticamente" if automatic else "Pedirá aprobación cada vez que se active"
 
     def _handle_device_event(self, trigger: str) -> None:
         try:
@@ -1026,6 +1058,73 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 else "AURICULARES DESCONECTADOS",
                 CYAN,
             )
+
+    # --- Comandos personalizados (rutinas con disparador «frase») -----------
+
+    def _find_phrase_routine(self, texto: str) -> "jarvis_routines.Routine | None":
+        try:
+            return jarvis_routines.buscar_rutina_por_frase(texto)
+        except Exception:
+            logging.exception("No se pudieron buscar los comandos personalizados.")
+            return None
+
+    def _start_phrase_routine(self, rutina: "jarvis_routines.Routine", command: str) -> None:
+        self._start_busy(f"COMANDO: {rutina.name.upper()}")
+        threading.Thread(
+            target=self._phrase_routine_worker,
+            args=(rutina, command, self.conversation_id, self.cancel_token),
+            name="JarvisComandoPersonalizado",
+            daemon=True,
+        ).start()
+
+    def _phrase_routine_worker(
+        self,
+        rutina: "jarvis_routines.Routine",
+        command: str,
+        conversation_id: str,
+        cancel_token: CancellationToken | None,
+    ) -> None:
+        """Lo pediste con tu frase: se ejecuta como un comando directo, sin
+        aprobar el plan; solo apagar/reiniciar/suspender pide confirmación."""
+        started = time.perf_counter()
+        resultados: list[str] = []
+        for paso in rutina.steps:
+            nombre = paso.tool
+            try:
+                nombre = self.tool_registry.get(paso.tool).display_name
+                if paso.tool == "power_control" and not self._request_power_confirmation(
+                    str(paso.arguments.get("action"))
+                ):
+                    resultados.append("No apagué, reinicié ni suspendí el equipo.")
+                    break
+                resultado = self.tool_registry.execute(
+                    paso.tool,
+                    paso.arguments,
+                    confirmed=True,
+                    origin="frase",
+                    cancel_token=cancel_token,
+                )
+                resultados.append(str(resultado))
+            except ToolCancelledError:
+                resultados.append("Cancelé el resto del comando.")
+                break
+            except Exception as error:
+                if not isinstance(error, ToolError):
+                    logging.exception("Falló un paso del comando %s.", rutina.name)
+                resultados.append(f"«{nombre}» falló: {error}")
+                break
+        respuesta = f"{rutina.name}: " + " ".join(r for r in resultados if r) if resultados else rutina.name
+        try:
+            core.guardar_turno(conversation_id, command, respuesta)
+        except Exception:
+            logging.exception("No se pudo guardar el comando personalizado en memoria.")
+        audio = None
+        if self.audio_enabled:
+            try:
+                audio = core.generar_audio_tts(respuesta)
+            except Exception:
+                logging.exception("No se pudo generar el audio del comando personalizado.")
+        self.events.put(("answer", respuesta, audio, time.perf_counter() - started))
 
     def _show_routines_panel(self) -> None:
         if self._routines_panel is not None and self._routines_panel.is_open():
@@ -1090,7 +1189,20 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 routine,
                 self.tool_registry,
             )
-            if automatic:
+            cuenta_atras = jarvis_routines.requiere_cuenta_atras(routine.steps)
+            if cuenta_atras:
+                accion = next(
+                    str(s.arguments.get("action"))
+                    for s in routine.steps
+                    if s.tool == "power_control"
+                )
+                if not self._request_power_countdown(routine.name, accion):
+                    self.events.put(
+                        ("routine_result", routine, False, "Cancelaste la rutina a tiempo.")
+                    )
+                    return
+                logging.info("Rutina %s: nadie canceló la cuenta atrás.", routine.name)
+            elif automatic:
                 logging.info("Rutina %s ejecutada sin preguntar (permiso automático).", routine.name)
             elif not self._request_plan_confirmation(goal, actions):
                 self.events.put(
@@ -1104,7 +1216,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     result = self.tool_registry.execute(
                         action.tool.name,
                         action.arguments,
-                        confirmed=action.tool.risk is ToolRisk.MEDIUM,
+                        # La cuenta atrás ya fue el aviso de la acción de energía.
+                        confirmed=action.tool.risk is ToolRisk.MEDIUM
+                        or (cuenta_atras and action.tool.name == "power_control"),
                         origin="rutina",
                         cancel_token=cancel_token,
                     )
@@ -1392,6 +1506,89 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         dialog.focus_force()
         self._set_plan_voice_controls(recording=False)
 
+    def _show_power_countdown(self, routine_name: str, action: str, reply: queue.Queue[bool]) -> None:
+        """«Apagaré el equipo en 60 s» con CANCELAR; si nadie responde, se ejecuta."""
+        if self._closing:
+            reply.put(False)
+            return
+        if self._pending_plan_reply is not None:
+            # Hay otra aprobación abierta: no se apaga sin poder avisar bien.
+            logging.warning("Cuenta atrás de energía omitida: había otra aprobación pendiente.")
+            reply.put(False)
+            return
+        if self.root.state() == "withdrawn":
+            self._show_from_tray()
+        self._pending_plan_reply = reply
+        self._pending_approval_kind = "power"
+        self._pending_power_action = action
+        restante = {"s": jarvis_power.CUENTA_ATRAS_RUTINA}
+
+        dialog = tk.Toplevel(self.root)
+        self._plan_dialog = dialog
+        dialog.title("Rutina de energía")
+        dialog.configure(bg=BG)
+        dialog.resizable(False, False)
+        dialog.attributes("-topmost", True)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
+        container = tk.Frame(dialog, bg=BG, padx=24, pady=20)
+        container.pack(fill="both", expand=True)
+        tk.Label(
+            container, text=f"RUTINA «{routine_name.upper()}»", bg=BG, fg=ERROR,
+            font=("Consolas", 12, "bold"),
+        ).pack(anchor="w")
+        etiqueta = tk.Label(
+            container, text="", bg=BG, fg=TEXT, font=("Segoe UI", 14), justify="left",
+        )
+        etiqueta.pack(anchor="w", pady=(10, 12))
+        tk.Label(
+            container,
+            text="Di «Hey Jarvis… cancela» o pulsa CANCELAR. ESC cancela · ENTER lo hace ya.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(0, 12))
+        buttons = tk.Frame(container, bg=BG)
+        buttons.pack(fill="x")
+        estilo = dict(relief="flat", padx=12, pady=9, font=("Consolas", 9, "bold"), cursor="hand2")
+        self._plan_voice_button = tk.Button(
+            buttons, text="🎙  HABLAR (F9)", command=self._toggle_recording,
+            bg=PANEL_LIGHT, fg=CYAN, **estilo,
+        )
+        self._plan_voice_button.pack(side="left")
+        self._plan_reject_button = tk.Button(
+            buttons, text="CANCELAR", command=lambda: self._resolve_plan_approval(False),
+            bg=CYAN, fg=BG, **estilo,
+        )
+        self._plan_reject_button.pack(side="right")
+        self._plan_approve_button = tk.Button(
+            buttons, text="HACERLO YA", command=lambda: self._resolve_plan_approval(True),
+            bg=PANEL_LIGHT, fg=ERROR, **estilo,
+        )
+        self._plan_approve_button.pack(side="right", padx=(0, 8))
+        dialog.bind("<Escape>", lambda _e: self._resolve_plan_approval(False))
+        dialog.bind("<Return>", lambda _e: self._resolve_plan_approval(True))
+
+        def tic() -> None:
+            if self._pending_plan_reply is not reply or not dialog.winfo_exists():
+                return
+            if restante["s"] <= 0:
+                self._resolve_plan_approval(True)  # nadie canceló
+                return
+            etiqueta.configure(text=jarvis_power.describir_cuenta_atras(action, restante["s"]))
+            restante["s"] -= 1
+            dialog.after(1000, tic)
+
+        tic()
+        dialog.update_idletasks()
+        self._center_over_jarvis(dialog)
+        dialog.lift()
+        dialog.focus_force()
+        self._set_plan_voice_controls(recording=False)
+        verbo = jarvis_power.VERBOS_RUTINA.get(action, "apagaré")
+        self._announce(
+            f"Rutina {routine_name}: {verbo} el equipo en "
+            f"{jarvis_power.CUENTA_ATRAS_RUTINA} segundos. Di «cancela» si no quieres.",
+            alarm=True,
+        )
+
     def _show_power_confirmation(self, action: str, reply: queue.Queue[bool]) -> None:
         """Diálogo «¿Apago el equipo?» que acepta botones, teclado o voz (F9)."""
         if self._closing or self._pending_plan_reply is not None:
@@ -1495,6 +1692,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                 icon="warning" if risk == "high" else "question",
                             )
                         reply.put(approved)
+                    elif event[0] == "power_countdown":
+                        _, nombre, accion, reply = event
+                        self._show_power_countdown(nombre, accion, reply)
                     elif event[0] == "power_confirmation":
                         _, action, reply = event
                         if self.root.state() == "withdrawn":
@@ -1783,6 +1983,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         _, game_name, command = event
                         self._set_idle()
                         self._execute_game_action(game_name, command)
+                    elif event[0] == "phrase_routine":
+                        _, rutina, command = event
+                        self._set_idle()
+                        self._start_phrase_routine(rutina, command)
                     elif event[0] == "system_query":
                         _, tool_name, arguments, command = event
                         self._set_idle()

@@ -9,6 +9,7 @@ import jarvis_headset
 import jarvis_media
 import jarvis_power
 import jarvis_reminders
+import jarvis_system
 import jarvis_system_info
 from jarvis_tool_registry import ActionRecorder, ToolRegistry, ToolRisk
 
@@ -222,6 +223,24 @@ def crear_registro_herramientas(
     )
     _registrar_consultas_sistema(registry)
     _registrar_energia(registry)
+    registry.register(
+        "open_program",
+        (
+            "Abre un programa, acceso directo (.lnk), documento o carpeta indicado por "
+            "su ruta completa en el equipo (target)."
+        ),
+        {
+            "type": "object",
+            "properties": {"target": {"type": "string", "minLength": 3, "maxLength": 400}},
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+        jarvis_system.abrir_programa,
+        risk=ToolRisk.MEDIUM,
+        requires_confirmation=True,
+        label="Abrir programa",
+        timeout_seconds=15,
+    )
     jarvis_media.registrar_herramientas(registry, verificadores)
     jarvis_reminders.registrar_herramientas(
         registry, verificador=verificadores.get("set_reminder")

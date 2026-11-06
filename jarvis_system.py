@@ -401,3 +401,10 @@ def iniciar_ejecutable_juego(executable: Path) -> None:
             raise ctypes.WinError(error_code) from error
 
 
+def abrir_programa(target: str) -> str:
+    """Abre un programa, acceso directo, documento o carpeta elegido por el usuario."""
+    ruta = Path(str(target).strip().strip('"')).expanduser()
+    if not ruta.exists():
+        raise FileNotFoundError(f"No encuentro «{ruta}».")
+    os.startfile(str(ruta))  # type: ignore[attr-defined]  # solo Windows
+    return f"Abrí «{ruta.stem or ruta.name}»."

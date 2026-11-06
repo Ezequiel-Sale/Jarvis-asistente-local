@@ -135,6 +135,8 @@ class SystemToolRegistrationTests(unittest.TestCase):
             self.assertIs(definition.risk, ToolRisk.LOW)
             self.assertFalse(definition.requires_confirmation)
             self.assertFalse(definition.record_result)
+        # Las que pueden mostrar títulos de ventanas o programas no van en rutinas.
+        for name in ("list_open_applications", "list_top_processes"):
             self.assertNotIn(name, jarvis_routines._ROUTINE_ALLOWED_TOOLS)
 
     def test_result_is_returned_but_not_recorded(self) -> None:

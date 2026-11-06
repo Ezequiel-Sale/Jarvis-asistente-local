@@ -16,7 +16,8 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Multimedia** | «Pausa la música», «siguiente canción», «la anterior», «¿qué está sonando?», «pon el volumen de Spotify al 30», «silencia Discord» |
 | **Temporizadores y recordatorios** | «Pon un temporizador de 10 minutos», «recuérdame en 20 minutos sacar la ropa», «recuérdame mañana a las 9 pagar la luz», «pon una alarma a las 7», «¿qué recordatorios tengo?», «cancela el temporizador» |
 | **Auriculares G533** | «¿Cuánta batería tienen los auriculares?»; aviso automático cuando baja del 15 % |
-| **Rutinas y automatizaciones** | «Programa una rutina llamada Inicio a las 09:00 de lunes a viernes y pon el volumen al 30 %», «cuando conecte los auriculares, cambia la salida a auriculares automáticamente» (detecta cuando enciendes o apagas el G533, sin quitar el receptor) |
+| **Comandos personalizados** | Desde ⏱ RUTINAS → «+ NUEVA»: elige una frase propia («modo juego») y las acciones (abrir un programa, cambiar la salida, pausar la música, volumen por app, monitores, apagar…); luego basta con decirla |
+| **Rutinas y automatizaciones** | «Programa una rutina llamada Inicio a las 09:00 de lunes a viernes y pon el volumen al 30 %», «apaga el equipo a las 2», «suspende el equipo todos los días a las 23:30», «programa una rutina llamada Noche a las 23:00, pausa la música y bloquea el equipo», «cuando conecte los auriculares, cambia la salida a auriculares automáticamente» (detecta cuando enciendes o apagas el G533, sin quitar el receptor) |
 | **Energía** | «Apaga el equipo», «reinicia la PC», «suspende el equipo», «bloquea la pantalla», «cancela el apagado» |
 | **Monitores** | «Desactiva el monitor 3», «extiende el monitor 3», «duplica los monitores 1 y 3», «pon el monitor 3 como principal» |
 | **Visión de pantalla** | «Mira el monitor 2 y dime qué error sale» (con vista previa y confirmación) |
@@ -30,6 +31,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 - **Permisos según el riesgo**: las acciones delicadas (navegar, abrir juegos, gestionar ventanas o monitores) piden confirmación cuando las propone el asistente; los planes de varios pasos se aprueban completos antes de ejecutarse.
 - **Automatizaciones**: solo pueden ejecutarse sin preguntar si todas sus acciones son de riesgo bajo.
 - **Palabra de activación**: la escucha de «Hey Jarvis» es local y se queda en memoria; solo se transcribe lo que dices después. Se desactiva con «deja de escucharme».
+- **Rutinas que apagan, reinician o suspenden**: al llegar la hora avisan por voz con 60 s de cuenta atrás y se cancelan con un clic o diciendo «cancela».
 - **Apagar, reiniciar y suspender**: siempre piden confirmación (con botones o diciendo «sí»/«no»), aunque lo digas directamente; apagar y reiniciar esperan 10 s para que puedas decir «cancela el apagado».
 - **Cambios de monitores**: se validan antes de aplicarse y se revierten solos a los 15 s si no los confirmas.
 - **Visión**: solo captura cuando lo pides, muestra una vista previa y la imagen nunca se guarda en disco.

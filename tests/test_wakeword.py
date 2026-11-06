@@ -50,6 +50,25 @@ class SegmenterTests(unittest.TestCase):
         self.assertFalse(seg.hablo)
         self.assertEqual(fin, 10)
 
+    def test_natural_pause_does_not_cut_long_command(self) -> None:
+        seg = ww.SegmentadorVoz(50)  # valores por defecto
+        # 2 s hablando, 1 s de pausa para pensar, 3 s más y luego silencio.
+        energias = [2000] * 25 + [10] * 12 + [2000] * 37 + [10] * 30
+        fin = -1
+        for indice, energia in enumerate(energias, start=1):
+            if seg.agregar(energia):
+                fin = indice
+                break
+        self.assertGreater(fin, 25 + 12 + 37)  # no cortó en la pausa
+
+    def test_long_command_fits(self) -> None:
+        self.assertGreaterEqual(ww.SegmentadorVoz(50).maximo, 20)
+
+    def test_noise_estimate_ignores_speech(self) -> None:
+        # 3 s de voz («Hey Jarvis») y 2 s de fondo: el ruido debe ser el fondo.
+        self.assertEqual(ww.estimar_ruido([2000] * 37 + [50] * 25), 50)
+        self.assertEqual(ww.estimar_ruido([]), 0.0)
+
     def test_maximum_length(self) -> None:
         seg = ww.SegmentadorVoz(50, maximo=2.0)
         self.assertEqual(self._alimentar(seg, [2000] * 100), 20)

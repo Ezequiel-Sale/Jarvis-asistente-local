@@ -133,3 +133,14 @@ PREGUNTAS_CONFIRMACION = {
     "restart": f"¿Reinicio el equipo? Tendrás {ESPERA_APAGADO} segundos para cancelarlo.",
     "sleep": "¿Suspendo el equipo?",
 }
+
+
+# Rutinas que apagan/reinician/suspenden: aviso antes de actuar (nadie suele
+# estar delante para aprobarlas; si nadie cancela, se ejecutan).
+CUENTA_ATRAS_RUTINA = 60
+VERBOS_RUTINA = {"shutdown": "apagaré", "restart": "reiniciaré", "sleep": "suspenderé"}
+
+
+def describir_cuenta_atras(action: str, segundos: int) -> str:
+    verbo = VERBOS_RUTINA.get(action, "apagaré")
+    return f"{verbo.capitalize()} el equipo en {segundos} s."

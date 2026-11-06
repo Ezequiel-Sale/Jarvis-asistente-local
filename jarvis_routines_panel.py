@@ -10,11 +10,13 @@ import tkinter as tk
 from tkinter import messagebox
 
 import jarvis_routines
+from jarvis_routine_form import RoutineForm
 from jarvis_theme import BG, CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET
 from jarvis_tool_registry import ToolError, ToolRegistry
 
 AYUDA = (
-    "Para crear una automatización, díselo a Jarvis. Ejemplos:\n"
+    "Pulsa «+ NUEVA» para crear una rutina o un comando personalizado con el formulario,\n"
+    "o díselo a Jarvis. Ejemplos:\n"
     "«Cuando conecte los auriculares, cambia la salida a auriculares automáticamente»\n"
     "«Cuando desconecte los auriculares, cambia la salida a parlantes automáticamente»\n"
     "«Programa una rutina llamada Inicio a las 09:00 de lunes a viernes y pon el volumen al 30%»"
@@ -26,6 +28,13 @@ _VALORES_LEGIBLES = {
     "speakers": "parlantes",
     "True": "sí",
     "False": "no",
+    "shutdown": "apagar",
+    "restart": "reiniciar",
+    "sleep": "suspender",
+    "pause": "pausar",
+    "play": "reanudar",
+    "next": "siguiente",
+    "previous": "anterior",
 }
 
 
@@ -48,6 +57,7 @@ class RoutinesPanel:
             font=("Segoe UI", 16, "bold"),
         ).pack(side="left")
         self._button(header, "⟳  ACTUALIZAR", self.refresh).pack(side="right")
+        self._button(header, "+  NUEVA", self._new_routine).pack(side="right", padx=(0, 8))
 
         body = tk.Frame(self.window, bg=PANEL)
         body.grid(row=1, column=0, sticky="nsew", padx=24)
@@ -152,7 +162,11 @@ class RoutinesPanel:
             info, text=f"{routine.identifier}. {routine.name}", bg=PANEL_LIGHT,
             fg=TEXT if routine.active else MUTED, font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w")
-        cuando = jarvis_routines.describir_disparador(routine.trigger, routine.time, routine.days)
+        cuando = jarvis_routines.describir_disparador(
+            routine.trigger, routine.time, routine.days, routine.phrases
+        )
+        if routine.once:
+            cuando += ", una sola vez"
         tk.Label(
             info, text=f"{cuando[:1].upper()}{cuando[1:]}  ·  {estado}", bg=PANEL_LIGHT,
             fg=CYAN if routine.active else MUTED, font=("Consolas", 8, "bold"),
@@ -172,7 +186,9 @@ class RoutinesPanel:
         except ToolError:
             bloqueantes = ["herramienta desconocida"]
         automatica = routine.permission == jarvis_routines.PERMISO_AUTOMATICA
-        if bloqueantes:
+        if jarvis_routines.requiere_cuenta_atras(routine.steps):
+            permiso = self._button(buttons, "⏳ CUENTA ATRÁS", None, state="disabled")
+        elif bloqueantes:
             permiso = self._button(buttons, "PREGUNTA (OBLIGATORIO)", None, state="disabled")
         else:
             permiso = self._button(
@@ -187,6 +203,9 @@ class RoutinesPanel:
             "⏸ PAUSAR" if routine.active else "▶ REANUDAR",
             lambda: self._toggle_active(routine),
         ).pack(side="left", padx=(0, 6))
+        self._button(buttons, "✎ EDITAR", lambda: self._edit_routine(routine)).pack(
+            side="left", padx=(0, 6)
+        )
         self._button(buttons, "✕ ELIMINAR", lambda: self._delete(routine), fg=ERROR).pack(
             side="left"
         )
@@ -198,6 +217,12 @@ class RoutinesPanel:
             ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
     # --- Acciones ---------------------------------------------------------------
+
+    def _new_routine(self) -> None:
+        RoutineForm(self.window, self.registry, self.refresh)
+
+    def _edit_routine(self, routine: jarvis_routines.RoutineInfo) -> None:
+        RoutineForm(self.window, self.registry, self.refresh, routine)
 
     def _toggle_permission(self, routine: jarvis_routines.RoutineInfo, automatica: bool) -> None:
         if automatica and not messagebox.askyesno(

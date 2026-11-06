@@ -249,6 +249,14 @@ def inicializar_base_datos() -> None:
                 connection.execute(
                     "ALTER TABLE memorias ADD COLUMN origen TEXT NOT NULL DEFAULT 'usuario'"
                 )
+            if "frases" not in routine_columns:
+                connection.execute(
+                    "ALTER TABLE rutinas ADD COLUMN frases TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "una_vez" not in routine_columns:
+                connection.execute(
+                    "ALTER TABLE rutinas ADD COLUMN una_vez INTEGER NOT NULL DEFAULT 0"
+                )
             if "modo_permiso" not in routine_columns:
                 connection.execute(
                     "ALTER TABLE rutinas ADD COLUMN modo_permiso TEXT NOT NULL "

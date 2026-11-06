@@ -54,8 +54,10 @@ class SegmentadorVoz:
 
     ruido: float
     espera_inicio: float = 4.0
-    silencio_final: float = 0.9
-    maximo: float = 12.0
+    # Pausa que cierra la orden: con 0,9 s se cortaban frases largas al hacer
+    # una pausa natural para pensar.
+    silencio_final: float = 1.3
+    maximo: float = 25.0
     factor: float = 3.0
     minimo_umbral: float = 300.0
     # El pitido de aviso suena justo al empezar: si el micrófono lo capta no
@@ -82,6 +84,17 @@ class SegmentadorVoz:
         if not self.hablo:
             return self.duracion >= self.espera_inicio - _EPS
         return self._silencio >= self.silencio_final - _EPS
+
+
+def estimar_ruido(energias) -> float:
+    """Ruido de fondo: percentil 20 de la energía de los últimos segundos.
+
+    No se usa la mediana: esos segundos incluyen el propio «Hey Jarvis» y, si
+    ocupa la mitad, el umbral de silencio quedaba a la altura de la voz y las
+    partes suaves de la orden contaban como silencio (la frase se cortaba).
+    """
+    valores = sorted(energias)
+    return valores[len(valores) // 5] if valores else 0.0
 
 
 def guardar_wav(bloques: list[bytes]) -> str:
@@ -186,7 +199,7 @@ class DetectorPalabraActivacion(threading.Thread):
         )
         logging.info("Palabra de activación «Hey Jarvis» lista.")
         self.events.put(("wakeword_ready",))
-        energias: deque[float] = deque(maxlen=int(3 / SEGUNDOS_POR_BLOQUE))
+        energias: deque[float] = deque(maxlen=int(5 / SEGUNDOS_POR_BLOQUE))
         bloqueado_hasta = 0.0
         registrar_desde = 0.0
         try:
@@ -205,7 +218,7 @@ class DetectorPalabraActivacion(threading.Thread):
                     continue
                 logging.info("Palabra de activación detectada (%.2f).", puntuacion)
                 self.events.put(("wakeword_detected",))
-                ruido = sorted(energias)[len(energias) // 2] if energias else 0.0
+                ruido = estimar_ruido(energias)
                 ruta = self._grabar_orden(stream, ruido)
                 modelo.reset()
                 bloqueado_hasta = time.monotonic() + ESPERA_TRAS_DETECCION
@@ -226,6 +239,14 @@ class DetectorPalabraActivacion(threading.Thread):
             bloques.append(bloque)
             if segmentador.agregar(rms(bloque)):
                 break
+        # Diagnóstico sin contenido, por si una orden se corta antes de tiempo.
+        logging.info(
+            "Orden grabada: %.1f s (%s; ruido %.0f, umbral %.0f).",
+            segmentador.duracion,
+            "máximo alcanzado" if segmentador.duracion >= segmentador.maximo - _EPS else "fin por silencio",
+            ruido,
+            segmentador.umbral,
+        )
         if not segmentador.hablo:
             return None
         return guardar_wav(bloques)
