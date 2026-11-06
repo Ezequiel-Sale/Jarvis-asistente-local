@@ -36,7 +36,7 @@
 | Build | PyInstaller (`Jarvis.spec`, modo ventana, sin consola) | |
 | Tests | `unittest` + `unittest.mock` (64 tests) | `tests/` |
 
-`requirements.txt` lista: Pillow, PyAudio, prometheus-client, pystray, requests, psutil, mcp, hidapi, openwakeword, pycaw, winrt-runtime, winrt-Windows.Foundation, winrt-Windows.Media.Control. Los modelos de openWakeWord no vienen con el paquete: `python -c "from openwakeword import utils; utils.download_models(model_names=['hey_jarvis'])"` (quedan en `site-packages/openwakeword/resources/models`; `Jarvis.spec` los incluye con `collect_data_files('openwakeword')`). Licencia de los modelos preentrenados: CC BY-NC-SA 4.0 (uso no comercial); no se suben al repo. Los servidores MCP por defecto necesitan Node.js (`npx`) en PATH. PyInstaller está instalado en `.venv313` pero no figura en requirements.
+`requirements.txt` fija versiones exactas (probadas con Python 3.13; al actualizar una, pasar los tests y cambiarla en el mismo commit); `requirements-dev.txt` añade PyInstaller. Lista: Pillow, PyAudio, prometheus-client, pystray, requests, psutil, mcp, hidapi, openwakeword, pycaw, winrt-runtime, winrt-Windows.Foundation, winrt-Windows.Media.Control. Los modelos de openWakeWord no vienen con el paquete: `python -c "from openwakeword import utils; utils.download_models(model_names=['hey_jarvis'])"` (quedan en `site-packages/openwakeword/resources/models`; `Jarvis.spec` los incluye con `collect_data_files('openwakeword')`). Licencia de los modelos preentrenados: CC BY-NC-SA 4.0 (uso no comercial); no se suben al repo. Los servidores MCP por defecto necesitan Node.js (`npx`) en PATH. PyInstaller está instalado en `.venv313` pero no figura en requirements.
 
 ## 3. Arquitectura del proyecto
 
@@ -113,7 +113,9 @@ JARVIS/
 ├── docker-compose.yml       # stt, llm, tts, prometheus, grafana
 ├── prometheus.yml           # Scrape de host.docker.internal:8000
 ├── Jarvis.spec              # Configuración PyInstaller
-├── requirements.txt
+├── requirements.txt         # Versiones fijadas
+├── requirements-dev.txt     # + PyInstaller
+├── .github/workflows/tests.yml  # CI: tests en windows-latest con Python 3.13 en cada push/PR a main
 ├── assets/                  # icon.ico (ventana/bandeja/exe), icon.webp
 ├── tests/                   # unittest (sin __init__.py)
 ├── responses/               # Audios respuesta_*.wav; solo se conservan los 30 más recientes (ya no se crean .txt)
@@ -313,7 +315,8 @@ El `.exe` usa siempre el `init_db.sql` empaquetado (`_MEIPASS`), no el que haya 
 - `responses/` acumula `.txt`/`.wav` sin limpieza.
 - Tabla `permisos` sin uso; `core.procesar_llm`/`ciclo_interactivo` solo los usa el CLI legado (no tiene herramientas ni memoria).
 - Configuración *hardcoded* (modelo, puertos, rutas de juegos, nombres de dispositivos); sin `.env`.
-- `.venv` (3.15) incompleto; `requirements.txt` sin versiones fijadas ni PyInstaller.
+- `.venv` (3.15) incompleto.
+- **Modelo del agente [Medido 2026-11-06, con GPU]:** 23 frases de prueba con las herramientas reales: `qwen2.5-coder:14b` 20/23 aciertos (mediana 0,5 s); `gpt-oss:20b` 11/23 con `num_predict` 256 (gasta los tokens razonando y responde vacío) y 19/23 con `think: "low"` (mediana 0,5 s, pero falla planes de varios pasos, anida mal los argumentos y pide confirmación en vez de llamar a la herramienta). Se mantiene `qwen2.5-coder:14b`. Fallos conocidos de qwen: a veces devuelve la rutina como JSON en el texto y ante «cuéntame un chiste» llamó a `set_jarvis_audio`.
 - Imágenes Docker con tag `latest` (no reproducible).
 - Scraping de YouTube frágil ante cambios de HTML.
 - Sin control de versiones (no es repo git) y sin README.

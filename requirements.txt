@@ -1,13 +1,17 @@
-Pillow>=9.0
-PyAudio>=0.2.14
-prometheus-client>=0.20
-pystray>=0.19.5
-requests>=2.31
-psutil>=5.9
-mcp>=2.3
-hidapi>=0.14
-openwakeword>=0.6
-pycaw>=20240316
-winrt-runtime>=2.0
-winrt-Windows.Foundation>=2.0
-winrt-Windows.Media.Control>=2.0
+# Versiones fijadas y probadas con Python 3.13 en Windows (2026-11-06).
+# Para actualizar: instala la nueva versión en .venv313, ejecuta los tests y
+# cambia el número aquí en el mismo commit.
+Pillow==13.0.0
+PyAudio==0.2.14
+prometheus-client==0.26.0
+pystray==0.19.5
+requests==2.34.2
+psutil==7.2.2
+mcp==2.3.0
+hidapi==0.15.0
+openwakeword==0.6.0
+pycaw==20260927
+comtypes==1.4.17
+winrt-runtime==4.1.0
+winrt-Windows.Foundation==4!10.0.28000.2957
+winrt-Windows.Media.Control==4!10.0.28000.2957

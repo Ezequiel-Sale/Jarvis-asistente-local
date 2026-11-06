@@ -8,7 +8,8 @@ Asistente de escritorio local (Windows, Python/Tkinter) controlado por voz y tex
 
 - Ejecutar: `.venv313/Scripts/python.exe jarvis_app.py`
 - Tests: `.venv313/Scripts/python.exe -m unittest discover -s tests`
-- Build: `.venv313/Scripts/pyinstaller.exe Jarvis.spec`
+- Build: `.venv313/Scripts/pyinstaller.exe Jarvis.spec` (dependencias de build: `requirements-dev.txt`)
+- CI: GitHub Actions ejecuta los tests en Windows en cada push a `main` (`.github/workflows/tests.yml`). Las versiones de `requirements.txt` están fijadas.
 
 Usa `.venv313` (Python 3.13); `.venv` está incompleto.
 

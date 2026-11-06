@@ -1,5 +1,7 @@
 # J.A.R.V.I.S. — Asistente local por voz y texto
 
+[![Tests](https://github.com/Ezequiel-Sale/Jarvis-asistente-local/actions/workflows/tests.yml/badge.svg)](https://github.com/Ezequiel-Sale/Jarvis-asistente-local/actions/workflows/tests.yml)
+
 Asistente de escritorio para **Windows**, en **español**, que funciona **100 % en tu equipo**: la voz se transcribe con Whisper, las respuestas las genera un modelo de [Ollama](https://ollama.com) y la voz sintetizada la produce Piper. Nada de lo que dices se envía a la nube.
 
 Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono) o escribirle, y además de conversar controla el equipo: volumen, salida de audio, navegador, YouTube, juegos, monitores, rutinas automáticas y más.
@@ -104,6 +106,14 @@ Las integraciones se configuran en `integraciones.json`, que se crea solo al arr
 
 ```bash
 .venv313/Scripts/python.exe -m unittest discover -s tests
+```
+
+Los tests también se ejecutan automáticamente en GitHub (Windows, Python 3.13) en cada cambio.
+
+Para compilar, instala primero PyInstaller:
+
+```bash
+.venv313/Scripts/python.exe -m pip install -r requirements-dev.txt
 ```
 
 ```bash
