@@ -5,3 +5,4 @@ pystray>=0.19.5
 requests>=2.31
 psutil>=5.9
 mcp>=2.3
+hidapi>=0.14

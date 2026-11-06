@@ -1,6 +1,7 @@
 """Detectores de eventos que disparan automatizaciones (roadmap punto 3).
 
-Por ahora: conexión y desconexión de los auriculares. Cada detector corre en
+Por ahora: conexión y desconexión de los auriculares (receptor enchufado y
+auricular encendido, vía HID++; ver jarvis_headset.py). Cada detector corre en
 su propio hilo y solo publica eventos en la cola de la app; nunca ejecuta
 acciones por sí mismo.
 """
@@ -11,6 +12,7 @@ import threading
 from collections.abc import Callable
 
 from jarvis_audio_devices import dispositivo_presente
+from jarvis_headset import auricular_encendido
 from jarvis_routines import (
     DISPARADOR_AURICULARES_CONECTADOS,
     DISPARADOR_AURICULARES_DESCONECTADOS,
@@ -18,6 +20,25 @@ from jarvis_routines import (
 
 INTERVALO_SONDEO = 2.0
 LECTURAS_ESTABLES = 2
+
+
+def auriculares_en_uso(
+    salida_presente: Callable[[], bool] = lambda: dispositivo_presente("headphones"),
+    enlace: Callable[[], bool | None] = auricular_encendido,
+) -> bool:
+    """True si el receptor está enchufado **y** el auricular está encendido.
+
+    Si no se puede consultar el enlace (sin hidapi o sin respuesta HID++),
+    basta con que la salida de audio esté presente, como antes.
+    """
+    if not salida_presente():
+        return False
+    try:
+        encendido = enlace()
+    except Exception:
+        logging.debug("No se pudo consultar el enlace del G533.", exc_info=True)
+        encendido = None
+    return True if encendido is None else encendido
 
 
 class HeadphonesWatcher(threading.Thread):
@@ -36,7 +57,7 @@ class HeadphonesWatcher(threading.Thread):
         *,
         intervalo: float = INTERVALO_SONDEO,
         lecturas_estables: int = LECTURAS_ESTABLES,
-        leer_estado: Callable[[], bool] = lambda: dispositivo_presente("headphones"),
+        leer_estado: Callable[[], bool] = auriculares_en_uso,
     ) -> None:
         super().__init__(name="JarvisHeadphonesWatcher", daemon=True)
         self.events = events
