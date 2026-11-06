@@ -7,6 +7,7 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox
 from urllib.parse import quote_plus
@@ -17,6 +18,7 @@ import jarvis_health
 import jarvis_displays
 import jarvis_ollama_gpu
 import jarvis_power
+import jarvis_reminders
 import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
@@ -44,6 +46,7 @@ from jarvis_commands import (
     detectar_comando_nueva_pestana,
     detectar_comando_volumen,
     detectar_comando_energia,
+    detectar_consulta_bateria,
     detectar_consulta_fecha_hora,
     detectar_comando_escucha,
     detectar_decision_energia,
@@ -59,7 +62,7 @@ from jarvis_commands import (
     normalizar_url_web,
     obtener_primer_video_youtube,
 )
-from jarvis_events import HeadphonesWatcher
+from jarvis_events import HeadphonesWatcher, HeadsetBatteryWatcher
 from jarvis_integraciones import cargar_integraciones
 from jarvis_mcp import GestorMCP, HerramientaMCP
 from jarvis_plugins import GestorPlugins
@@ -176,9 +179,14 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.global_hotkey_listener.start()
         self.headphones_watcher = HeadphonesWatcher(self.events)
         self.headphones_watcher.start()
+        self.battery_watcher = HeadsetBatteryWatcher(self.events)
+        self.battery_watcher.start()
+        self.reminder_watcher = jarvis_reminders.VigilanteRecordatorios(self.events)
+        self.reminder_watcher.start()
         self.wakeword_detector: jarvis_wakeword.DetectorPalabraActivacion | None = None
         if self._wakeword_preferida():
             self._start_wakeword()
+        self._refresh_wakeword_indicator()
         self._routines_panel: RoutinesPanel | None = None
         self._vision: dict | None = None
         self.root.after(100, self._poll_events)
@@ -236,6 +244,33 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.root.state("normal")
         self.root.lift()
         self.root.focus_force()
+
+    def _announce(self, text: str, *, alarm: bool = False) -> None:
+        """Aviso que no responde a una orden: chat, notificación de Windows,
+        sonido opcional y voz. No cambia el estado ocupado/libre de la app."""
+        self._add_message("assistant", text)
+        self._set_status("⏰ " + text[:60].upper() if alarm else text[:60].upper(), CYAN)
+        try:
+            self.tray_icon.notify(text, "J.A.R.V.I.S.")
+        except Exception:
+            logging.debug("No se pudo mostrar la notificación de Windows.", exc_info=True)
+
+        def sonar_y_hablar() -> None:
+            if alarm:
+                try:
+                    jarvis_reminders.reproducir_alarma()
+                except Exception:
+                    logging.exception("No se pudo reproducir la alarma.")
+            if not self.audio_enabled:
+                return
+            try:
+                audio = core.generar_audio_tts(text)
+            except Exception:
+                logging.exception("No se pudo generar el audio del aviso.")
+                return
+            self.events.put(("announce_audio", audio))
+
+        threading.Thread(target=sonar_y_hablar, name="JarvisAviso", daemon=True).start()
 
     def _ollama_gpu_worker(self) -> None:
         """Si Ollama arrancó sin la tarjeta gráfica, lo reinicia (ver jarvis_ollama_gpu)."""
@@ -353,6 +388,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             return
         system_query = (
             detectar_consulta_fecha_hora(text)
+            or jarvis_reminders.detectar_comando(text)
+            or detectar_consulta_bateria(text)
             or detectar_consulta_sistema(text)
             or detectar_comando_monitores(text)
             or detectar_comando_energia(text)
@@ -558,6 +595,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 return
             system_query = (
                 detectar_consulta_fecha_hora(transcript)
+                or jarvis_reminders.detectar_comando(transcript)
+                or detectar_consulta_bateria(transcript)
                 or detectar_consulta_sistema(transcript)
                 or detectar_comando_monitores(transcript)
                 or detectar_comando_energia(transcript)
@@ -1528,6 +1567,20 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     elif event[0] == "global_hotkey_unavailable":
                         logging.error("No se pudo registrar el atajo global F9: %s", event[1])
                         self._set_status("F9 NO DISPONIBLE; USA EL BOTÓN MIC", ERROR)
+                    elif event[0] == "reminder_due":
+                        recordatorio = event[1]
+                        self._announce(
+                            jarvis_reminders.describir_aviso(recordatorio, datetime.now()),
+                            alarm=True,
+                        )
+                    elif event[0] == "headset_battery_low":
+                        self._announce(
+                            f"Batería baja en los auriculares: queda alrededor de un {event[1]} %."
+                        )
+                    elif event[0] == "announce_audio":
+                        audio = event[1]
+                        if self.audio_enabled and self.recorder is None and Path(audio).is_file():
+                            self._play_audio(audio)
                     elif event[0] == "ollama_gpu_notice":
                         self._add_message("assistant", event[1])
                     elif event[0] == "docker_services_ready":
@@ -1586,6 +1639,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._execute_wakeword_toggle(enabled, command)
                     elif event[0] == "wakeword_ready":
                         logging.info("Escuchando «Hey Jarvis».")
+                        self._refresh_wakeword_indicator()
                     elif event[0] == "wakeword_detected":
                         self._on_wakeword_detected()
                     elif event[0] == "wakeword_no_command":
@@ -1595,6 +1649,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._on_wakeword_command(event[1])
                     elif event[0] == "wakeword_error":
                         self.wakeword_detector = None
+                        self._refresh_wakeword_indicator()
                         self._add_message(
                             "assistant",
                             f"La palabra de activación dejó de funcionar: {event[1]}. "
@@ -1951,6 +2006,28 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             logging.exception("No se pudo leer la preferencia de la palabra de activación.")
             return False
 
+    def _wakeword_active(self) -> bool:
+        detector = getattr(self, "wakeword_detector", None)
+        return detector is not None and detector.is_alive()
+
+    def _refresh_wakeword_indicator(self) -> None:
+        """Botón «HEY JARVIS ON/OFF» junto a «AUDIO ON»: siempre muestra si escucha."""
+        boton = getattr(self, "wakeword_button", None)
+        if boton is None:
+            return
+        activo = self._wakeword_active()
+        boton.configure(
+            text="HEY JARVIS ON" if activo else "HEY JARVIS OFF",
+            fg=CYAN if activo else MUTED,
+        )
+
+    def _toggle_wakeword_button(self) -> None:
+        activar = not self._wakeword_active()
+        self._execute_wakeword_toggle(
+            activar,
+            "Botón: activar «Hey Jarvis»" if activar else "Botón: desactivar «Hey Jarvis»",
+        )
+
     def _can_listen_for_wakeword(self) -> bool:
         """Se consulta desde el hilo del detector: solo lee atributos, sin Tk."""
         if self._closing or self.recorder is not None:
@@ -2002,6 +2079,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except Exception:
             logging.exception("No se pudo guardar el cambio de escucha en memoria.")
         self._add_message("assistant", respuesta)
+        self._refresh_wakeword_indicator()
         self._set_status(
             "ESCUCHANDO «HEY JARVIS»" if enabled and self.wakeword_detector else "F9 PARA HABLAR",
             CYAN,
@@ -2046,7 +2124,15 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             daemon=True,
         ).start()
 
-    _DIRECT_SPOKEN_TOOLS = frozenset({"get_current_datetime"})
+    _DIRECT_SPOKEN_TOOLS = frozenset(
+        {
+            "get_current_datetime",
+            "get_headset_battery",
+            "set_reminder",
+            "list_reminders",
+            "cancel_reminder",
+        }
+    )
 
     _DIRECT_ACTION_BUSY = {
         "set_system_volume": "AJUSTANDO VOLUMEN…",
@@ -2557,6 +2643,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.global_hotkey_listener.stop()
         self.global_hotkey_listener.join(timeout=1)
         self.headphones_watcher.stop()
+        self.battery_watcher.stop()
+        self.reminder_watcher.stop()
         self._stop_wakeword()
         if self._routines_panel is not None:
             self._routines_panel.close()

@@ -12,7 +12,7 @@ import threading
 from collections.abc import Callable
 
 from jarvis_audio_devices import dispositivo_presente
-from jarvis_headset import auricular_encendido
+from jarvis_headset import auricular_encendido, consultar_g533, porcentaje_bateria
 from jarvis_routines import (
     DISPARADOR_AURICULARES_CONECTADOS,
     DISPARADOR_AURICULARES_DESCONECTADOS,
@@ -106,6 +106,56 @@ class HeadphonesWatcher(threading.Thread):
                     logging.info("Evento de audio: %s", disparador)
                     self.events.put(("device_event", disparador))
             self._stop_event.wait(self.intervalo)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+
+UMBRAL_BATERIA_BAJA = 15
+UMBRAL_REARME_BATERIA = 25
+INTERVALO_BATERIA = 120.0
+
+
+class HeadsetBatteryWatcher(threading.Thread):
+    """Avisa una vez cuando la batería del G533 baja de ``UMBRAL_BATERIA_BAJA`` %.
+
+    Se rearma al cargarlo o al superar ``UMBRAL_REARME_BATERIA`` %, para no
+    repetir el aviso cada pocos minutos. Publica ``("headset_battery_low", %)``.
+    """
+
+    def __init__(
+        self,
+        events: queue.Queue[tuple],
+        *,
+        intervalo: float = INTERVALO_BATERIA,
+        leer: Callable[[], object] | None = None,
+    ) -> None:
+        super().__init__(name="JarvisBateriaAuriculares", daemon=True)
+        self.events = events
+        self.intervalo = intervalo
+        self.leer = leer or consultar_g533
+        self._stop_event = threading.Event()
+        self.avisado = False
+
+    def comprobar(self) -> None:
+        estado = self.leer()
+        if estado is None or not estado.encendido or estado.voltaje_mv is None:
+            return
+        porcentaje = porcentaje_bateria(estado.voltaje_mv)
+        if estado.cargando or porcentaje >= UMBRAL_REARME_BATERIA:
+            self.avisado = False
+            return
+        if porcentaje <= UMBRAL_BATERIA_BAJA and not self.avisado:
+            self.avisado = True
+            logging.info("Batería baja en los auriculares (%s %%).", porcentaje)
+            self.events.put(("headset_battery_low", porcentaje))
+
+    def run(self) -> None:
+        while not self._stop_event.wait(self.intervalo):
+            try:
+                self.comprobar()
+            except Exception:
+                logging.debug("No se pudo comprobar la batería de los auriculares.", exc_info=True)
 
     def stop(self) -> None:
         self._stop_event.set()

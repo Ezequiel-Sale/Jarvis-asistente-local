@@ -177,5 +177,31 @@ class WakewordCommandRoutingTests(unittest.TestCase):
         limpiar.assert_called_once_with("orden.wav")
 
 
+class IndicatorTests(unittest.TestCase):
+    def _host(self, vivo: bool | None) -> Mock:
+        host = Mock()
+        if vivo is None:
+            host.wakeword_detector = None
+        else:
+            host.wakeword_detector.is_alive.return_value = vivo
+        host._wakeword_active = lambda: JarvisApp._wakeword_active(host)
+        return host
+
+    def test_indicator_text(self) -> None:
+        for vivo, texto in ((True, "HEY JARVIS ON"), (False, "HEY JARVIS OFF"), (None, "HEY JARVIS OFF")):
+            with self.subTest(vivo=vivo):
+                host = self._host(vivo)
+                JarvisApp._refresh_wakeword_indicator(host)
+                self.assertEqual(host.wakeword_button.configure.call_args.kwargs["text"], texto)
+
+    def test_button_toggles(self) -> None:
+        host = self._host(None)
+        JarvisApp._toggle_wakeword_button(host)
+        self.assertTrue(host._execute_wakeword_toggle.call_args.args[0])
+        host = self._host(True)
+        JarvisApp._toggle_wakeword_button(host)
+        self.assertFalse(host._execute_wakeword_toggle.call_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main()

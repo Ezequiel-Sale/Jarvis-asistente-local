@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
+import jarvis_reminders
 import jarvis_routines
 from jarvis_actions import Verificacion, Verificador
 from jarvis_audio_devices import obtener_volumen_sistema
@@ -78,6 +79,17 @@ def verificar_rutina_guardada(arguments: Mapping[str, object], _result: object) 
     return Verificacion(False, "la rutina no aparece en la base de datos.")
 
 
+def verificar_aviso_guardado(_arguments: Mapping[str, object], _result: object) -> Verificacion:
+    """El aviso recién creado aparece como pendiente en la base de datos."""
+    from datetime import datetime, timedelta
+
+    hace_poco = datetime.now() - timedelta(seconds=30)
+    for aviso in jarvis_reminders.pendientes():
+        if aviso.creado is not None and aviso.creado >= hace_poco:
+            return Verificacion(True, f"El aviso {aviso.id} quedó guardado como pendiente.")
+    return Verificacion(False, "el aviso no aparece como pendiente en la base de datos.")
+
+
 def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
     def verificar_audio_jarvis(arguments: Mapping[str, object], _result: object) -> Verificacion:
         esperado = bool(arguments["enabled"])
@@ -95,4 +107,5 @@ def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
         "navigate_browser": verificar_ventana_brave,
         "search_youtube": verificar_ventana_brave,
         "schedule_routine": verificar_rutina_guardada,
+        "set_reminder": verificar_aviso_guardado,
     }

@@ -12,6 +12,7 @@ devuelven ``None`` («no se sabe») para que quien llame use otro método.
 """
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 
@@ -32,6 +33,16 @@ CARGANDO = 0x03
 TIEMPO_ESPERA_MS = 1000
 
 _aviso_sin_hidapi = False
+# Varios hilos consultan el receptor (detector de conexión y de batería): una
+# consulta a la vez para que no se mezclen las respuestas HID++.
+_bloqueo_consulta = threading.Lock()
+
+# Curva aproximada de descarga de una batería de litio de una celda
+# (voltaje en mV -> %), la misma forma que usan los drivers HID++ de Logitech.
+CURVA_BATERIA = (
+    (4186, 100), (4067, 90), (3963, 80), (3876, 70), (3815, 60), (3765, 50),
+    (3730, 40), (3702, 30), (3680, 20), (3642, 10), (3600, 5), (3500, 0),
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +84,11 @@ def consultar_g533(tiempo_espera_ms: int = TIEMPO_ESPERA_MS) -> EstadoAuricular 
 
     ``None`` si no se puede saber (sin `hidapi`, sin receptor o sin respuesta).
     """
+    with _bloqueo_consulta:
+        return _consultar_g533(tiempo_espera_ms)
+
+
+def _consultar_g533(tiempo_espera_ms: int) -> EstadoAuricular | None:
     global _aviso_sin_hidapi
     try:
         import hid
@@ -122,3 +138,33 @@ def consultar_g533(tiempo_espera_ms: int = TIEMPO_ESPERA_MS) -> EstadoAuricular 
 def auricular_encendido() -> bool | None:
     estado = consultar_g533()
     return None if estado is None else estado.encendido
+
+
+def porcentaje_bateria(voltaje_mv: int) -> int:
+    """Porcentaje aproximado (múltiplo de 5) a partir del voltaje."""
+    if voltaje_mv >= CURVA_BATERIA[0][0]:
+        return 100
+    if voltaje_mv <= CURVA_BATERIA[-1][0]:
+        return 0
+    for (v_alto, p_alto), (v_bajo, p_bajo) in zip(CURVA_BATERIA, CURVA_BATERIA[1:]):
+        if v_bajo <= voltaje_mv <= v_alto:
+            fraccion = (voltaje_mv - v_bajo) / (v_alto - v_bajo)
+            porcentaje = p_bajo + fraccion * (p_alto - p_bajo)
+            return int(round(porcentaje / 5) * 5)
+    return 0
+
+
+def describir_bateria(estado: EstadoAuricular | None) -> str:
+    if estado is None:
+        return "No encuentro el receptor de los auriculares G533."
+    if not estado.encendido or estado.voltaje_mv is None:
+        return "Los auriculares G533 están apagados o fuera de alcance."
+    porcentaje = porcentaje_bateria(estado.voltaje_mv)
+    if estado.cargando:
+        return f"Los auriculares tienen alrededor de un {porcentaje} % de batería y se están cargando."
+    return f"Los auriculares tienen alrededor de un {porcentaje} % de batería."
+
+
+def consultar_bateria() -> str:
+    """Respuesta para la herramienta ``get_headset_battery``."""
+    return describir_bateria(consultar_g533())

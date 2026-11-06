@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS acciones (
     creado TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
 );
 
+-- Temporizadores, alarmas y recordatorios (jarvis_reminders.py). Horas locales.
+CREATE TABLE IF NOT EXISTS recordatorios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tipo TEXT NOT NULL CHECK (tipo IN ('temporizador', 'alarma', 'recordatorio')),
+    texto TEXT NOT NULL DEFAULT '',
+    vence TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'pendiente'
+        CHECK (estado IN ('pendiente', 'avisado', 'cancelado')),
+    creado TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recordatorios_pendientes
+    ON recordatorios(estado, vence);
+
 -- Inserciones iniciales seguras
 INSERT OR IGNORE INTO preferencias (clave, valor) VALUES ('idioma', 'español');
 INSERT OR IGNORE INTO preferencias (clave, valor) VALUES ('tono', 'directo y útil');

@@ -315,6 +315,21 @@ class JarvisUIMixin:
                 cursor="hand2",
             )
             self.audio_toggle_button.pack(side="left", padx=(6, 0))
+            # Estado de la palabra de activación; al pulsarlo se activa/desactiva.
+            self.wakeword_button = tk.Button(
+                player_buttons,
+                text="HEY JARVIS …",
+                command=self._toggle_wakeword_button,
+                bg=PANEL_LIGHT,
+                fg=MUTED,
+                activebackground="#1D374B",
+                activeforeground=TEXT,
+                relief="flat",
+                padx=8,
+                font=("Consolas", 8, "bold"),
+                cursor="hand2",
+            )
+            self.wakeword_button.pack(side="left", padx=(6, 0))
 
             composer = tk.Frame(content, bg=BG)
             composer.grid(row=2, column=0, sticky="ew", pady=(16, 0))

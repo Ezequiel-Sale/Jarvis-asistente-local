@@ -5,7 +5,9 @@ from jarvis_actions import Verificador
 from jarvis_commands import normalizar_url_web
 import jarvis_routines
 import jarvis_health
+import jarvis_headset
 import jarvis_power
+import jarvis_reminders
 import jarvis_system_info
 from jarvis_tool_registry import ActionRecorder, ToolRegistry, ToolRisk
 
@@ -219,6 +221,18 @@ def crear_registro_herramientas(
     )
     _registrar_consultas_sistema(registry)
     _registrar_energia(registry)
+    jarvis_reminders.registrar_herramientas(
+        registry, verificador=verificadores.get("set_reminder")
+    )
+    registry.register(
+        "get_headset_battery",
+        "Solo lectura. Porcentaje aproximado de batería de los auriculares G533 y si se están cargando.",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        jarvis_headset.consultar_bateria,
+        label="Consultar batería de los auriculares",
+        timeout_seconds=10,
+        record_result=False,
+    )
     jarvis_routines.registrar_herramienta(
         registry,
         host,

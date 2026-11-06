@@ -900,3 +900,19 @@ def detectar_consulta_fecha_hora(texto: str) -> tuple[str, dict[str, object]] | 
         if patron.fullmatch(consulta):
             return "get_current_datetime", {"what": que}
     return None
+
+
+_BATERIA_AURICULARES = re.compile(
+    r"^(?:(?:cuanta|que|cual\s+es\s+la|como\s+esta\s+la|como\s+anda\s+la|dime\s+la|decime\s+la)\s+)?"
+    r"bateria\s+(?:(?:les\s+queda\s+a|tienen|tiene|queda\s+en|hay\s+en|del|de)\s+)?"
+    r"(?:los\s+|mis\s+|el\s+)?(?:auriculares|cascos|audifonos|headset|g533)(?:\s+g533)?$"
+    r"|^(?:cuanta|que)\s+bateria\s+(?:les\s+)?queda\s+(?:a\s+)?(?:los\s+|mis\s+)?"
+    r"(?:auriculares|cascos|audifonos)$"
+)
+
+
+def detectar_consulta_bateria(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«¿cuánta batería tienen los auriculares?», «batería de los auriculares»."""
+    if _BATERIA_AURICULARES.fullmatch(_normalizar_consulta(texto)):
+        return "get_headset_battery", {}
+    return None
