@@ -16,3 +16,4 @@ comtypes==1.4.17
 winrt-runtime==4.1.0
 winrt-Windows.Foundation==4!10.0.28000.2957
 winrt-Windows.Media.Control==4!10.0.28000.2957
+uiautomation==2.0.29

@@ -79,6 +79,9 @@ class ToolDefinition:
     verifier: Verificador | None = field(default=None, repr=False, compare=False)
     # False: el historial anota la ejecución pero no guarda su resultado (privacidad).
     record_result: bool = True
+    # False: no se ofrece al modelo de lenguaje; solo la usa la app tras una
+    # confirmación propia (p. ej. el clic en pantalla con vista previa).
+    exposed: bool = True
 
     @property
     def display_name(self) -> str:
@@ -106,6 +109,7 @@ class ToolRegistry:
         timeout_seconds: float = DEFAULT_TOOL_TIMEOUT,
         verifier: Verificador | None = None,
         record_result: bool = True,
+        exposed: bool = True,
     ) -> None:
         if not name or not name.replace("_", "").isalnum():
             raise ValueError("El nombre de la herramienta debe ser un identificador.")
@@ -141,6 +145,7 @@ class ToolRegistry:
             timeout_seconds=float(timeout_seconds),
             verifier=verifier,
             record_result=record_result,
+            exposed=exposed,
         )
         with self._lock:
             if name in self._tools:
@@ -181,6 +186,7 @@ class ToolRegistry:
                 },
             }
             for tool in self.definitions()
+            if tool.exposed
         ]
 
     def validate_arguments(

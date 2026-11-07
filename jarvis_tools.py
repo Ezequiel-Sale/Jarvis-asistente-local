@@ -9,6 +9,7 @@ import jarvis_headset
 import jarvis_media
 import jarvis_power
 import jarvis_reminders
+import jarvis_screen_actions
 import jarvis_system
 import jarvis_system_info
 from jarvis_tool_registry import ActionRecorder, ToolRegistry, ToolRisk
@@ -223,6 +224,30 @@ def crear_registro_herramientas(
     )
     _registrar_consultas_sistema(registry)
     _registrar_energia(registry)
+    registry.register(
+        "screen_click",
+        (
+            "Hace clic en un punto de la pantalla y, opcionalmente, escribe texto. Solo la "
+            "usa la app después de que el usuario confirme la vista previa con la marca."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "minimum": -20000, "maximum": 20000},
+                "y": {"type": "integer", "minimum": -20000, "maximum": 20000},
+                "text": {"type": "string", "maxLength": 500},
+            },
+            "required": ["x", "y"],
+            "additionalProperties": False,
+        },
+        jarvis_screen_actions.ejecutar_en_pantalla,
+        risk=ToolRisk.HIGH,
+        requires_confirmation=True,
+        label="Clic en pantalla",
+        timeout_seconds=15,
+        record_result=False,
+        exposed=False,  # el modelo no puede hacer clics: solo la app, con confirmación
+    )
     registry.register(
         "open_program",
         (

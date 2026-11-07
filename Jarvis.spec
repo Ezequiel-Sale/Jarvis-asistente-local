@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 a = Analysis(
@@ -11,7 +11,9 @@ a = Analysis(
     datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.')]
     + collect_data_files('openwakeword'),
     hiddenimports=['pystray._win32', 'pystray._util.win32',
-                   'winrt.windows.media.control', 'winrt.windows.foundation'],
+                   'winrt.windows.media.control', 'winrt.windows.foundation',
+                   # Interfaces COM de UI Automation ya generadas (clic en pantalla).
+                   'uiautomation', *collect_submodules('comtypes.gen')],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

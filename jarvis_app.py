@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import queue
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import jarvis_ollama_gpu
 import jarvis_power
 import jarvis_aprendizaje
 import jarvis_reminders
+import jarvis_screen_actions
 import jarvis_voz_stream
 import jarvis_wakeword
 import jarvis_vision
@@ -408,6 +410,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         if rutina is not None:
             self._start_phrase_routine(rutina, text)
             return
+        pedido_pantalla = jarvis_screen_actions.detectar_comando(text)
+        if pedido_pantalla is not None:
+            self._start_screen_action(pedido_pantalla, text)
+            return
         vision = detectar_vision(text)
         if vision is not None:
             self._start_vision_capture(*vision, text)
@@ -597,6 +603,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         "power": lambda texto: detectar_decision_energia(
                             texto, self._pending_power_action or ""
                         ),
+                        "screen": lambda texto: detectar_decision_energia(texto, ""),
                     }.get(approval_kind, detectar_decision_aprobacion_plan)
                     decision = decision_detector(transcript)
                     logging.info(
@@ -619,6 +626,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             rutina = self._find_phrase_routine(transcript)
             if rutina is not None:
                 self.events.put(("phrase_routine", rutina, transcript))
+                return
+            pedido_pantalla = jarvis_screen_actions.detectar_comando(transcript)
+            if pedido_pantalla is not None:
+                self.events.put(("screen_action", pedido_pantalla, transcript))
                 return
             vision = detectar_vision(transcript)
             if vision is not None:
@@ -1058,6 +1069,208 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 else "AURICULARES DESCONECTADOS",
                 CYAN,
             )
+
+    # --- Clic y escritura en pantalla ------------------------------------------
+
+    def _start_screen_action(self, pedido: dict, command: str) -> None:
+        """«Haz clic en … del monitor N»: captura (sin las ventanas de Jarvis),
+        busca el elemento y pide confirmación con la marca antes de actuar."""
+        if self.busy or self._pending_plan_reply is not None:
+            return
+        try:
+            monitor = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), pedido["monitor"])
+        except (OSError, ValueError) as error:
+            self._add_message("assistant", str(error))
+            return
+        self._start_busy(f"BUSCANDO EN EL {monitor.descripcion.upper()}…")
+        conversation_id = self.conversation_id
+
+        def capturado(imagen, error) -> None:
+            if error is not None or imagen is None:
+                self._finish_screen_action(f"No pude capturar la pantalla: {error}", command, conversation_id)
+                return
+            threading.Thread(
+                target=self._screen_action_worker,
+                args=(pedido, monitor, imagen, command, conversation_id),
+                name="JarvisPantalla",
+                daemon=True,
+            ).start()
+
+        self._capture_hidden(monitor, capturado)
+
+    def _screen_action_worker(self, pedido, monitor, imagen, command, conversation_id) -> None:
+        escribir = pedido["accion"] == "type"
+
+        def terminar(mensaje: str) -> None:
+            self.events.put(("screen_finished", mensaje, command, conversation_id))
+
+        try:
+            objetivo = jarvis_screen_actions.buscar_por_accesibilidad(
+                monitor, pedido["consulta"], escribir=escribir, excluir_pid=os.getpid()
+            )
+            if objetivo is None:
+                if not self._request_screen_approval("vision", imagen, monitor, None, pedido):
+                    terminar(f"No encontré «{pedido['consulta']}» en el monitor {monitor.numero}.")
+                    return
+                objetivo = jarvis_screen_actions.buscar_por_vision(
+                    imagen, monitor, pedido["consulta"], escribir=escribir
+                )
+                if objetivo is None:
+                    terminar(f"Tampoco encontré «{pedido['consulta']}» con el modelo de visión.")
+                    return
+            if not self._request_screen_approval("click", imagen, monitor, objetivo, pedido):
+                terminar("De acuerdo, no hice nada.")
+                return
+            self.events.put(("screen_execute", objetivo, pedido.get("texto", ""), command, conversation_id))
+        except Exception as error:
+            logging.exception("Falló la acción en pantalla.")
+            terminar(f"No pude completar la acción en pantalla: {error}")
+
+    def _request_screen_approval(self, tipo, imagen, monitor, objetivo, pedido) -> bool:
+        if self._closing:
+            return False
+        reply: queue.Queue[bool] = queue.Queue(maxsize=1)
+        self.events.put(("screen_approval", tipo, imagen, monitor, objetivo, pedido, reply))
+        try:
+            return reply.get(timeout=120)
+        except queue.Empty:
+            self.events.put(("plan_confirmation_timeout", reply))
+            return False
+
+    def _show_screen_approval(self, tipo, imagen, monitor, objetivo, pedido, reply) -> None:
+        """Captura con una marca roja donde se hará clic (o propuesta de usar visión)."""
+        if self._closing or self._pending_plan_reply is not None:
+            reply.put(False)
+            return
+        from PIL import ImageDraw
+
+        self._pending_plan_reply = reply
+        self._pending_approval_kind = "screen"
+        miniatura = imagen.copy().convert("RGB")
+        escala = min(860 / miniatura.width, 480 / miniatura.height, 1.0)
+        miniatura = miniatura.resize((round(miniatura.width * escala), round(miniatura.height * escala)))
+        if objetivo is not None:
+            dibujo = ImageDraw.Draw(miniatura)
+            mx = (objetivo.x - monitor.x) * escala
+            my = (objetivo.y - monitor.y) * escala
+            if objetivo.caja:
+                l, a, r, b = objetivo.caja
+                dibujo.rectangle(
+                    ((l - monitor.x) * escala, (a - monitor.y) * escala,
+                     (r - monitor.x) * escala, (b - monitor.y) * escala),
+                    outline=(255, 60, 60), width=2,
+                )
+            for radio in (14, 9):
+                dibujo.ellipse((mx - radio, my - radio, mx + radio, my + radio), outline=(255, 40, 40), width=3)
+            dibujo.line((mx - 22, my, mx + 22, my), fill=(255, 40, 40), width=2)
+            dibujo.line((mx, my - 22, mx, my + 22), fill=(255, 40, 40), width=2)
+
+        dialog = tk.Toplevel(self.root)
+        self._plan_dialog = dialog
+        dialog.title("Confirmar acción en pantalla")
+        dialog.configure(bg=BG)
+        dialog.attributes("-topmost", True)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
+        contenedor = tk.Frame(dialog, bg=BG, padx=18, pady=14)
+        contenedor.pack(fill="both", expand=True)
+        if tipo == "vision":
+            titulo = f"NO ENCONTRÉ «{pedido['consulta'].upper()}» POR ACCESIBILIDAD"
+            detalle = (
+                "¿Lo busco con el modelo de visión local? Se le enviará esta captura "
+                f"({core.MODEL_VISION}); no sale de tu equipo ni se guarda."
+            )
+            aprobar = "BUSCAR CON VISIÓN"
+        else:
+            accion = (
+                f"Escribiré «{pedido.get('texto', '')}» en «{objetivo.nombre}»"
+                if pedido["accion"] == "type"
+                else f"Haré clic en «{objetivo.nombre}»"
+            )
+            titulo = "¿HAGO ESTO?"
+            detalle = f"{accion}\n(encontrado por {objetivo.origen}; marca roja en la captura)"
+            aprobar = "SÍ, HAZLO"
+        tk.Label(contenedor, text=titulo, bg=BG, fg=CYAN, font=("Consolas", 11, "bold")).pack(anchor="w")
+        tk.Label(
+            contenedor, text=detalle, bg=BG, fg=TEXT, font=("Segoe UI", 10),
+            justify="left", wraplength=840,
+        ).pack(anchor="w", pady=(6, 8))
+        foto = ImageTk.PhotoImage(miniatura)
+        vista = tk.Label(contenedor, image=foto, bg=PANEL)
+        vista.image = foto
+        vista.pack()
+        tk.Label(
+            contenedor, text="Di «sí» o «no» (F9 o «Hey Jarvis»). ENTER confirma · ESC cancela.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(8, 8))
+        botones = tk.Frame(contenedor, bg=BG)
+        botones.pack(fill="x")
+        estilo = dict(relief="flat", padx=12, pady=8, font=("Consolas", 9, "bold"), cursor="hand2")
+        self._plan_voice_button = tk.Button(
+            botones, text="🎙  HABLAR (F9)", command=self._toggle_recording,
+            bg=PANEL_LIGHT, fg=CYAN, **estilo,
+        )
+        self._plan_voice_button.pack(side="left")
+        self._plan_reject_button = tk.Button(
+            botones, text="NO", command=lambda: self._resolve_plan_approval(False),
+            bg=PANEL_LIGHT, fg=TEXT, **estilo,
+        )
+        self._plan_reject_button.pack(side="right")
+        self._plan_approve_button = tk.Button(
+            botones, text=aprobar, command=lambda: self._resolve_plan_approval(True),
+            bg=CYAN, fg=BG, **estilo,
+        )
+        self._plan_approve_button.pack(side="right", padx=(0, 8))
+        dialog.bind("<Return>", lambda _e: self._resolve_plan_approval(True))
+        dialog.bind("<Escape>", lambda _e: self._resolve_plan_approval(False))
+        dialog.update_idletasks()
+        self._center_over_jarvis(dialog)
+        dialog.lift()
+        dialog.focus_force()
+        self._set_plan_voice_controls(recording=False)
+        self._set_status(self._approval_hint("screen"), CYAN)
+
+    def _execute_screen_action(self, objetivo, texto, command, conversation_id) -> None:
+        """Oculta Jarvis (para que el clic no caiga sobre su ventana), actúa y vuelve."""
+        ocultas = []
+        candidatas = [self.root, self.chat_window]
+        if self._routines_panel is not None and self._routines_panel.is_open():
+            candidatas.append(self._routines_panel.window)
+        for ventana in candidatas:
+            try:
+                if ventana.winfo_exists() and ventana.state() != "withdrawn":
+                    ocultas.append(ventana)
+                    ventana.withdraw()
+            except tk.TclError:
+                continue
+
+        def ejecutar() -> None:
+            argumentos = {"x": objetivo.x, "y": objetivo.y}
+            if texto:
+                argumentos["text"] = texto
+            try:
+                self.tool_registry.execute(
+                    "screen_click", argumentos, confirmed=True, origin="pantalla"
+                )
+                mensaje = (
+                    f"Escribí «{texto}» en «{objetivo.nombre}»." if texto else f"Hice clic en «{objetivo.nombre}»."
+                )
+            except Exception as error:
+                if not isinstance(error, ToolError):
+                    logging.exception("Falló el clic en pantalla.")
+                mensaje = f"No pude hacer clic: {error}"
+            self.events.put(("screen_finished", mensaje, command, conversation_id))
+            self.root.after(0, lambda: [v.deiconify() for v in ocultas if v.winfo_exists()])
+
+        # Esperar a que Windows quite las ventanas antes de hacer clic.
+        self.root.after(350, lambda: threading.Thread(target=ejecutar, daemon=True).start())
+
+    def _finish_screen_action(self, mensaje: str, command: str, conversation_id: str) -> None:
+        self._add_message("assistant", mensaje)
+        try:
+            core.guardar_turno(conversation_id, command, mensaje)
+        except Exception:
+            logging.exception("No se pudo guardar la acción en pantalla en memoria.")
+        self._set_idle()
 
     # --- Comandos personalizados (rutinas con disparador «frase») -----------
 
@@ -1829,6 +2042,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                         "CANCELADO POR VOZ",
                                         "CONFIRMADO POR VOZ",
                                     ),
+                                    "screen": (
+                                        "CANCELADO POR VOZ",
+                                        "CONFIRMADO POR VOZ",
+                                    ),
                                 }.get(
                                     approval_kind,
                                     ("PLAN RECHAZADO POR VOZ", "PLAN APROBADO POR VOZ"),
@@ -1983,6 +2200,17 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         _, game_name, command = event
                         self._set_idle()
                         self._execute_game_action(game_name, command)
+                    elif event[0] == "screen_action":
+                        _, pedido, command = event
+                        self._set_idle()
+                        self._start_screen_action(pedido, command)
+                    elif event[0] == "screen_approval":
+                        self._show_screen_approval(*event[1:])
+                    elif event[0] == "screen_execute":
+                        self._execute_screen_action(*event[1:])
+                    elif event[0] == "screen_finished":
+                        _, mensaje, command, conversation_id = event
+                        self._finish_screen_action(mensaje, command, conversation_id)
                     elif event[0] == "phrase_routine":
                         _, rutina, command = event
                         self._set_idle()
@@ -2713,6 +2941,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "routine_save": ("GUARDAR RUTINA", "NO GUARDAR RUTINA"),
         "vision": ("ANALIZAR", "CANCELAR"),
         "power": ("SÍ", "NO"),
+        "screen": ("SÍ", "NO"),
     }
 
     def _approval_hint(self, kind: str) -> str:
