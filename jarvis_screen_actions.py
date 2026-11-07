@@ -296,35 +296,115 @@ def buscar_por_vision(imagen, monitor, consulta: str, *, escribir: bool = False)
 # --- Ratón y teclado -------------------------------------------------------------
 
 _INPUT_MOUSE, _INPUT_KEYBOARD = 0, 1
-_MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
+_MOUSEEVENTF_MOVE, _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP = 0x0001, 0x0002, 0x0004
+_MOUSEEVENTF_VIRTUALDESK, _MOUSEEVENTF_ABSOLUTE = 0x4000, 0x8000
+_SM_XVIRTUALSCREEN, _SM_YVIRTUALSCREEN, _SM_CXVIRTUALSCREEN, _SM_CYVIRTUALSCREEN = 76, 77, 78, 79
 _KEYEVENTF_UNICODE, _KEYEVENTF_KEYUP = 0x0004, 0x0002
+_TOLERANCIA_PUNTERO = 2  # px: el redondeo de SendInput absoluto puede desviar 1 px
 
 
-def hacer_clic(x: int, y: int) -> None:
-    _per_monitor_dpi()
-    user32 = ctypes.windll.user32
-    if not user32.SetCursorPos(int(x), int(y)):
-        raise OSError("Windows no pudo mover el puntero a esa posición.")
-    time.sleep(0.05)
-    user32.mouse_event(_MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.03)
-    user32.mouse_event(_MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-
-
-def escribir_texto(texto: str) -> None:
-    """Escribe texto como si se tecleara (caracteres Unicode, incluidas tildes)."""
+def _estructuras_entrada():
     from ctypes import wintypes
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.c_size_t)]
 
     class KEYBDINPUT(ctypes.Structure):
         _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
                     ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
 
     class _UNION(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT), ("relleno", ctypes.c_byte * 32)]
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("relleno", ctypes.c_byte * 32)]
 
     class INPUT(ctypes.Structure):
         _fields_ = [("type", wintypes.DWORD), ("u", _UNION)]
 
+    return MOUSEINPUT, KEYBDINPUT, INPUT
+
+
+def _enviar_raton(user32, flags: int, dx: int = 0, dy: int = 0) -> bool:
+    MOUSEINPUT, _KEYBDINPUT, INPUT = _estructuras_entrada()
+    entrada = INPUT(type=_INPUT_MOUSE)
+    entrada.u.mi = MOUSEINPUT(dx, dy, 0, flags, 0, 0)
+    return user32.SendInput(1, ctypes.byref(entrada), ctypes.sizeof(INPUT)) == 1
+
+
+def coordenadas_absolutas(x: int, y: int, izquierda: int, arriba: int,
+                          ancho: int, alto: int) -> tuple[int, int]:
+    """Punto físico del escritorio virtual → escala 0–65535 de SendInput (VIRTUALDESK)."""
+    ancho, alto = max(ancho - 1, 1), max(alto - 1, 1)
+    ax = round((x - izquierda) * 65535 / ancho)
+    ay = round((y - arriba) * 65535 / alto)
+    return min(max(ax, 0), 65535), min(max(ay, 0), 65535)
+
+
+def _posicion_puntero(user32) -> tuple[int, int] | None:
+    from ctypes import wintypes
+
+    punto = wintypes.POINT()
+    if not user32.GetCursorPos(ctypes.byref(punto)):
+        return None
+    return punto.x, punto.y
+
+
+def mover_puntero(x: int, y: int) -> None:
+    """Lleva el puntero a (x, y) en coordenadas físicas, en cualquier monitor.
+
+    ``SetCursorPos`` a veces falla (p. ej. con el puntero en otro monitor o
+    según qué ventana tenga el foco); entonces se mueve con ``SendInput``
+    absoluto sobre todo el escritorio virtual y se comprueba que llegó.
+    """
+    _per_monitor_dpi()
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    x, y = int(x), int(y)
+
+    def llego() -> bool:
+        actual = _posicion_puntero(user32)
+        return actual is not None and (
+            abs(actual[0] - x) <= _TOLERANCIA_PUNTERO and abs(actual[1] - y) <= _TOLERANCIA_PUNTERO
+        )
+
+    if user32.SetCursorPos(x, y) and llego():
+        return
+    codigo = ctypes.get_last_error()
+    izquierda = user32.GetSystemMetrics(_SM_XVIRTUALSCREEN)
+    arriba = user32.GetSystemMetrics(_SM_YVIRTUALSCREEN)
+    ancho = user32.GetSystemMetrics(_SM_CXVIRTUALSCREEN)
+    alto = user32.GetSystemMetrics(_SM_CYVIRTUALSCREEN)
+    logging.warning(
+        "SetCursorPos no llevó el puntero a (%s, %s) (código %s); pruebo con SendInput "
+        "(escritorio virtual %s,%s %s×%s).", x, y, codigo, izquierda, arriba, ancho, alto,
+    )
+    ax, ay = coordenadas_absolutas(x, y, izquierda, arriba, ancho, alto)
+    flags = _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK
+    for _intento in range(3):
+        _enviar_raton(user32, flags, ax, ay)
+        time.sleep(0.05)
+        if llego():
+            return
+    actual = _posicion_puntero(user32)
+    logging.error("El puntero quedó en %s en vez de (%s, %s) (último código %s).",
+                  actual, x, y, ctypes.get_last_error())
+    raise OSError(
+        "Windows no pudo mover el puntero a esa posición. Si la ventana de destino "
+        "se ejecuta como administrador, Jarvis también necesita ejecutarse como administrador."
+    )
+
+
+def hacer_clic(x: int, y: int) -> None:
+    mover_puntero(x, y)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    time.sleep(0.05)
+    _enviar_raton(user32, _MOUSEEVENTF_LEFTDOWN)
+    time.sleep(0.03)
+    _enviar_raton(user32, _MOUSEEVENTF_LEFTUP)
+
+
+def escribir_texto(texto: str) -> None:
+    """Escribe texto como si se tecleara (caracteres Unicode, incluidas tildes)."""
+    _MOUSEINPUT, KEYBDINPUT, INPUT = _estructuras_entrada()
     user32 = ctypes.windll.user32
     for caracter in texto:
         for flags in (_KEYEVENTF_UNICODE, _KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP):

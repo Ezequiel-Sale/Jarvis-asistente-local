@@ -28,9 +28,15 @@ class PhraseTests(unittest.TestCase):
                 self.assertEqual(detectar_comando_inicio_windows(texto), esperado)
 
 
-class RegistryTests(unittest.TestCase):
-    def test_command_starts_hidden(self) -> None:
-        self.assertEqual(autostart.comando(EXE), f'"{EXE}" --autostart')
+class TaskTests(unittest.TestCase):
+    def test_task_starts_hidden_at_logon_without_admin(self) -> None:
+        xml = autostart.xml_tarea(Path(r"C:\Mis cosas & más\Jarvis.exe"), "PC\\Ezequiel")
+        self.assertIn("<LogonTrigger>", xml)
+        self.assertIn("<UserId>PC\\Ezequiel</UserId>", xml)
+        self.assertIn("<RunLevel>LeastPrivilege</RunLevel>", xml)
+        self.assertIn("<Command>C:\\Mis cosas &amp; más\\Jarvis.exe</Command>", xml)
+        self.assertIn("<Arguments>--autostart</Arguments>", xml)
+        self.assertIn("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>", xml)
         self.assertTrue(autostart.arrancado_con_windows(["Jarvis.exe", "--autostart"]))
         self.assertFalse(autostart.arrancado_con_windows(["Jarvis.exe"]))
 
@@ -42,15 +48,17 @@ class RegistryTests(unittest.TestCase):
     def test_sync_follows_preference_and_fixes_moved_path(self) -> None:
         casos = (
             (True, None, "activar"),
-            (True, '"D:\\Viejo\\Jarvis.exe" --autostart', "activar"),
-            (True, autostart.comando(EXE), None),
-            (False, autostart.comando(EXE), "desactivar"),
+            (True, r"D:\Viejo\Jarvis.exe", "activar"),
+            (True, str(EXE), None),
+            (False, str(EXE), "desactivar"),
             (False, None, None),
         )
         for preferido, registrado, esperado in casos:
             with self.subTest(preferido=preferido, registrado=registrado), \
+                    patch.object(autostart, "es_administrador", return_value=False), \
                     patch.object(autostart, "ejecutable", return_value=EXE), \
-                    patch.object(autostart, "valor_registrado", return_value=registrado), \
+                    patch.object(autostart, "comando_registrado", return_value=registrado), \
+                    patch.object(autostart, "_borrar_run_antiguo"), \
                     patch.object(autostart, "activar") as activar, \
                     patch.object(autostart, "desactivar") as desactivar:
                 autostart.sincronizar(preferido)
@@ -59,9 +67,73 @@ class RegistryTests(unittest.TestCase):
 
     def test_sync_does_nothing_from_source(self) -> None:
         with patch.object(autostart, "ejecutable", return_value=None), \
-                patch.object(autostart, "valor_registrado") as leer:
+                patch.object(autostart, "comando_registrado") as leer:
             autostart.sincronizar(True)
         leer.assert_not_called()
+
+    def test_create_failure_is_reported(self) -> None:
+        fallo = Mock(returncode=1, stderr="Acceso denegado.", stdout="")
+        with patch.object(autostart, "_schtasks", return_value=fallo), \
+                patch.object(autostart, "_borrar_run_antiguo") as borrar:
+            with self.assertRaises(OSError) as error:
+                autostart.activar(EXE)
+        self.assertIn("Acceso denegado", str(error.exception))
+        borrar.assert_not_called()  # sin tarea nueva, no se quita lo que había
+
+
+class AdminTests(unittest.TestCase):
+    def test_admin_tasks_run_with_highest_privileges(self) -> None:
+        inicio = autostart.xml_tarea(EXE, "PC\\Ezequiel", administrador=True)
+        self.assertIn("<RunLevel>HighestAvailable</RunLevel>", inicio)
+        self.assertIn("<LogonTrigger>", inicio)
+        abrir = autostart.xml_tarea(EXE, "PC\\Ezequiel", administrador=True, al_iniciar_sesion=False)
+        self.assertIn("<RunLevel>HighestAvailable</RunLevel>", abrir)
+        self.assertNotIn("<LogonTrigger>", abrir)
+        self.assertNotIn("--autostart", abrir)
+        self.assertIn("<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>", abrir)
+
+    def test_when_to_relaunch(self) -> None:
+        casos = (
+            (EXE, False, ["Jarvis.exe"], True),
+            (EXE, True, ["Jarvis.exe"], False),  # ya es administrador
+            (None, False, ["jarvis_app.py"], False),  # desde el código fuente
+            (EXE, False, ["Jarvis.exe", "--autostart"], False),  # sin UAC al encender
+            (EXE, False, ["Jarvis.exe", "--sin-admin"], False),
+        )
+        for ruta, admin, argv, esperado in casos:
+            with self.subTest(argv=argv, admin=admin), \
+                    patch.object(autostart, "ejecutable", return_value=ruta), \
+                    patch.object(autostart, "es_administrador", return_value=admin):
+                self.assertEqual(autostart.debe_relanzar_como_administrador(argv), esperado)
+
+    def test_relaunch_prefers_task_without_uac(self) -> None:
+        ok = Mock(returncode=0, stdout="", stderr="")
+        with patch.object(autostart, "ejecutable", return_value=EXE), \
+                patch.object(autostart, "comando_registrado", return_value=str(EXE)), \
+                patch.object(autostart, "_schtasks", return_value=ok) as schtasks, \
+                patch("ctypes.windll.shell32.ShellExecuteW") as uac:
+            self.assertTrue(autostart.relanzar_como_administrador())
+        schtasks.assert_called_once_with("/Run", "/TN", autostart.TAREA_ADMIN)
+        uac.assert_not_called()
+
+    def test_relaunch_asks_uac_without_task_and_continues_if_rejected(self) -> None:
+        with patch.object(autostart, "ejecutable", return_value=EXE), \
+                patch.object(autostart, "comando_registrado", return_value=None), \
+                patch("ctypes.windll.shell32.ShellExecuteW", return_value=5) as uac, \
+                self.assertLogs(level="WARNING"):
+            self.assertFalse(autostart.relanzar_como_administrador())
+        self.assertEqual(uac.call_args.args[1], "runas")
+
+    def test_elevated_sync_creates_admin_task_and_upgrades_logon_task(self) -> None:
+        with patch.object(autostart, "es_administrador", return_value=True), \
+                patch.object(autostart, "ejecutable", return_value=EXE), \
+                patch.object(autostart, "comando_registrado", return_value=str(EXE)), \
+                patch.object(autostart, "tarea_elevada", return_value=False), \
+                patch.object(autostart, "_crear_tarea") as crear, \
+                patch.object(autostart, "activar") as activar:
+            autostart.sincronizar(True)
+        self.assertEqual(crear.call_args.args[0], autostart.TAREA_ADMIN)
+        activar.assert_called_once_with(EXE)
 
 
 class ToggleTests(unittest.TestCase):

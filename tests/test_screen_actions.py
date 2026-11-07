@@ -232,5 +232,70 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self._eventos(host)[0][1], "De acuerdo, no hice nada.")
 
 
+class _User32Falso:
+    """``user32`` simulado: SetCursorPos falla y SendInput sí mueve el puntero."""
+
+    def __init__(self, set_cursor_ok: bool, send_input_mueve: bool = True) -> None:
+        self.set_cursor_ok = set_cursor_ok
+        self.send_input_mueve = send_input_mueve
+        self.pos = (100, 100)
+        self.virtual = (-1920, 0, 3840, 1080)  # monitor 2 a la izquierda del principal
+        self.envios = 0
+
+    def SetCursorPos(self, x, y):
+        if self.set_cursor_ok:
+            self.pos = (x, y)
+        return int(self.set_cursor_ok)
+
+    def GetCursorPos(self, ref):
+        punto = ref._obj
+        punto.x, punto.y = self.pos
+        return 1
+
+    def GetSystemMetrics(self, indice):
+        return dict(zip((76, 77, 78, 79), self.virtual))[indice]
+
+    def SendInput(self, _n, ref, _tam):
+        self.envios += 1
+        mi = ref._obj.u.mi
+        if self.send_input_mueve and mi.dwFlags & s._MOUSEEVENTF_ABSOLUTE:
+            izq, arr, ancho, alto = self.virtual
+            self.pos = (izq + round(mi.dx * (ancho - 1) / 65535), arr + round(mi.dy * (alto - 1) / 65535))
+        return 1
+
+
+class PointerTests(unittest.TestCase):
+    def test_absolute_coordinates_cover_virtual_desktop(self) -> None:
+        self.assertEqual(s.coordenadas_absolutas(-1920, 0, -1920, 0, 3840, 1080), (0, 0))
+        self.assertEqual(s.coordenadas_absolutas(1919, 1079, -1920, 0, 3840, 1080), (65535, 65535))
+        ax, _ay = s.coordenadas_absolutas(0, 540, -1920, 0, 3840, 1080)
+        self.assertAlmostEqual(ax, 32776, delta=20)
+
+    def _mover(self, user32: _User32Falso, x: int, y: int) -> None:
+        with patch.object(s.ctypes, "WinDLL", return_value=user32), \
+                patch.object(s, "_per_monitor_dpi"), patch.object(s.time, "sleep"), \
+                patch.object(s.ctypes, "get_last_error", return_value=5):
+            s.mover_puntero(x, y)
+
+    def test_set_cursor_pos_used_when_it_works(self) -> None:
+        user32 = _User32Falso(set_cursor_ok=True)
+        self._mover(user32, -960, 500)
+        self.assertEqual(user32.pos, (-960, 500))
+        self.assertEqual(user32.envios, 0)
+
+    def test_falls_back_to_send_input_on_other_monitor(self) -> None:
+        user32 = _User32Falso(set_cursor_ok=False)
+        with self.assertLogs(level="WARNING"):
+            self._mover(user32, -960, 500)
+        self.assertLessEqual(abs(user32.pos[0] + 960), s._TOLERANCIA_PUNTERO)
+        self.assertLessEqual(abs(user32.pos[1] - 500), s._TOLERANCIA_PUNTERO)
+
+    def test_error_when_pointer_cannot_move(self) -> None:
+        user32 = _User32Falso(set_cursor_ok=False, send_input_mueve=False)
+        with self.assertLogs(level="WARNING"), self.assertRaises(OSError) as error:
+            self._mover(user32, -960, 500)
+        self.assertIn("administrador", str(error.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

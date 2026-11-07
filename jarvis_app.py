@@ -3433,6 +3433,10 @@ def main() -> None:
     )
     instance = SingleInstance()
     if not instance.acquire():
+        if jarvis_autostart.arrancado_con_windows():
+            # Inicio con Windows y Jarvis ya abierto: no mostrar la ventana.
+            logging.info("Jarvis ya está abierto; se ignora el inicio con Windows.")
+            return
         logging.info("Jarvis ya está abierto; se pide a esa instancia que se muestre.")
         if not instance.notify_existing():
             hidden = tk.Tk()
@@ -3450,6 +3454,16 @@ def main() -> None:
         logging.info("Jarvis iniciado. Registro en %s", log_path)
     except OSError:
         logging.exception("No se pudo crear el archivo de registro.")
+
+    if jarvis_autostart.debe_relanzar_como_administrador():
+        # Sin permisos de administrador el clic en pantalla falla sobre ventanas
+        # elevadas. Soltar el mutex antes: la copia elevada debe poder adquirirlo.
+        instance.release()
+        if jarvis_autostart.relanzar_como_administrador():
+            return
+        instance = SingleInstance()
+        if not instance.acquire():
+            return  # otra copia se abrió mientras tanto
 
     root = tk.Tk()
     capturar_errores_tk(root)
