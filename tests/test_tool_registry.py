@@ -69,7 +69,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 26)
+        self.assertEqual(len(tools), 27)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -82,6 +82,7 @@ class ToolRegistryTests(unittest.TestCase):
                 "cancel_reminder",
                 "get_headset_battery",
                 "media_control",
+                "mute_browser_tab",
                 "get_now_playing",
                 "set_app_volume",
                 "open_program",

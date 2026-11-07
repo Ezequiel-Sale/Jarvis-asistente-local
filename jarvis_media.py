@@ -11,6 +11,7 @@ El título de lo que suena no se escribe en los registros.
 
 import asyncio
 import logging
+import time
 import re
 import unicodedata
 from collections.abc import Callable
@@ -134,9 +135,158 @@ _FRASES = {
 }
 
 
-def controlar_reproduccion(action: str, *, tecla: Callable[[int], None] = _pulsar_tecla) -> str:
+def _normal(texto: str) -> str:
+    texto = unicodedata.normalize("NFKD", (texto or "").casefold())
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", texto).split())
+
+
+def titulos_en_monitor(numero: int) -> list[str]:
+    """Títulos de las ventanas visibles cuyo centro está en ese monitor."""
+    import ctypes
+    from ctypes import wintypes
+
+    import jarvis_vision
+
+    monitor = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), numero)
+    user32 = ctypes.windll.user32
+    anterior = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    titulos: list[str] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def recolectar(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+            return True
+        largo = user32.GetWindowTextLengthW(hwnd)
+        if not largo:
+            return True
+        r = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        cx, cy = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+        if monitor.x <= cx < monitor.x + monitor.ancho and monitor.y <= cy < monitor.y + monitor.alto:
+            buffer = ctypes.create_unicode_buffer(largo + 1)
+            user32.GetWindowTextW(hwnd, buffer, largo + 1)
+            titulos.append(buffer.value)
+        return True
+
+    try:
+        user32.EnumWindows(recolectar, 0)
+    finally:
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(anterior))
+    return titulos
+
+
+def _aparece(titulo: str, ventanas: list[str]) -> bool:
+    titulo = _normal(titulo)
+    # Títulos muy cortos coincidirían con cualquier ventana.
+    return len(titulo) >= 4 and any(titulo in _normal(v) for v in ventanas)
+
+
+def elegir_sesion(
+    sesiones: list[tuple[object, str]],
+    titulos_ventanas: list[str],
+    titulos_otros: list[str] = (),
+):
+    """La sesión cuyo título aparece en una ventana del monitor (p. ej. Spotify).
+    Sin coincidencia clara no se adivina: Brave/Chrome exponen una sola sesión
+    (la última que sonó), que puede ser de una pestaña de otro monitor."""
+    coincidentes = [
+        sesion
+        for sesion, titulo in sesiones
+        if _aparece(titulo, titulos_ventanas) and not _aparece(titulo, list(titulos_otros))
+    ]
+    if len(coincidentes) == 1:
+        return coincidentes[0]
+    return None
+
+
+# Botones del reproductor (YouTube y similares) tal como los expone la
+# accesibilidad del navegador, ya normalizados: «Reproducir (k)»,
+# «Pausa combinación de teclas k», «Siguiente (Mayús+n)»…
+# YouTube: «Reproducir (k)», «Pausa combinación de teclas k»; Twitch: «Pause (space/k)».
+_TECLAS_BOTON = r"(?:\s+[a-z]+){0,4}?"
+_BOTON_PLAY = re.compile(rf"^(?:reproducir|play){_TECLAS_BOTON}\s+k$")
+_BOTON_PAUSA = re.compile(rf"^(?:pausa|pausar|pause){_TECLAS_BOTON}\s+k$")
+_BOTON_SIGUIENTE = re.compile(rf"^(?:siguiente|next){_TECLAS_BOTON}\s+(?:mayus|shift)\s+n$")
+_BOTON_ANTERIOR = re.compile(rf"^(?:anterior|previous){_TECLAS_BOTON}\s+(?:mayus|shift)\s+p$")
+
+
+def clasificar_boton(nombre: str) -> str | None:
+    """«play», «pause», «next», «previous» o None según el nombre del botón."""
+    nombre = _normal(nombre)
+    for clave, patron in (
+        ("play", _BOTON_PLAY),
+        ("pause", _BOTON_PAUSA),
+        ("next", _BOTON_SIGUIENTE),
+        ("previous", _BOTON_ANTERIOR),
+    ):
+        if patron.match(nombre):
+            return clave
+    return None
+
+
+def _en_zona(rect, zona) -> bool:
+    cx, cy = (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2
+    return zona.x <= cx < zona.x + zona.ancho and zona.y <= cy < zona.y + zona.alto
+
+
+def _reproductor_en_monitor(action: str, numero: int) -> str | None:
+    """Pulsa el botón del reproductor de la pestaña ACTIVA del navegador que está
+    en ese monitor (las pestañas de fondo no exponen su página). None si no hay."""
+    import ctypes
+
+    import uiautomation as auto
+
+    import jarvis_vision
+
+    zona = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), numero)
+    ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    with auto.UIAutomationInitializerInThread():
+        for ventana in auto.GetRootControl().GetChildren():  # de arriba abajo
+            if ventana.ClassName != "Chrome_WidgetWin_1" or not _en_zona(ventana.BoundingRectangle, zona):
+                continue
+            botones: dict[str, object] = {}
+            for control, _ in auto.WalkControl(ventana, maxDepth=40):
+                if control.ControlTypeName != "ButtonControl":
+                    continue
+                clave = clasificar_boton(control.Name)
+                if clave is not None and clave not in botones:
+                    botones[clave] = control
+            if "play" not in botones and "pause" not in botones:
+                continue
+            reproduciendo = "pause" in botones
+            if action == "play" and reproduciendo:
+                return f"El vídeo del monitor {numero} ya se está reproduciendo."
+            if action in {"pause", "stop"} and not reproduciendo:
+                return f"El vídeo del monitor {numero} ya está en pausa."
+            if action in {"next", "previous"}:
+                boton = botones.get(action)
+                if boton is None:
+                    destino = "siguiente" if action == "next" else "anterior"
+                    return f"El reproductor del monitor {numero} no tiene botón de vídeo {destino}."
+            else:
+                boton = botones["pause" if reproduciendo else "play"]
+            boton.GetInvokePattern().Invoke()
+            return {
+                "play": "Reanudé el vídeo",
+                "pause": "Pausé el vídeo",
+                "stop": "Pausé el vídeo",
+                "toggle": "Pausé el vídeo" if reproduciendo else "Reanudé el vídeo",
+                "next": "Pasé al siguiente vídeo",
+                "previous": "Volví al vídeo anterior",
+            }[action] + f" del monitor {numero}."
+    return None
+
+
+def controlar_reproduccion(
+    action: str, monitor: int | None = None, *, tecla: Callable[[int], None] = _pulsar_tecla
+) -> str:
+    """``monitor``: actuar sobre lo que se reproduce en ese monitor (p. ej. el vídeo
+    de la pestaña de Brave que está ahí) en vez de sobre la sesión actual."""
     if action not in ACCIONES:
         raise ValueError(f"Acción multimedia no reconocida: {action}")
+    if monitor is not None:
+        return _controlar_en_monitor(action, monitor)
     try:
         import winrt.windows.media.control  # noqa: F401
 
@@ -178,6 +328,196 @@ def controlar_reproduccion(action: str, *, tecla: Callable[[int], None] = _pulsa
         "previous": "Envié la tecla de pista anterior.",
         "stop": "Envié la tecla de detener.",
     }[action]
+
+
+def _controlar_en_monitor(action: str, numero: int) -> str:
+    import jarvis_vision
+
+    # 1) El reproductor de la pestaña activa del navegador de ese monitor.
+    try:
+        respuesta = _reproductor_en_monitor(action, numero)
+    except ImportError:
+        respuesta = None
+    if respuesta is not None:
+        logging.info("Reproducción en el monitor %s: botón del reproductor.", numero)
+        return respuesta
+
+    # 2) Otra aplicación (p. ej. Spotify) cuya sesión aparece en una ventana de ese monitor.
+    titulos = titulos_en_monitor(numero)
+    otros = [
+        titulo
+        for m in jarvis_vision.listar_monitores()
+        if m.numero != numero
+        for titulo in titulos_en_monitor(m.numero)
+    ]
+
+    async def actuar():
+        from winrt.windows.media.control import (
+            GlobalSystemMediaTransportControlsSessionManager as Gestor,
+        )
+
+        gestor = await Gestor.request_async()
+        sesiones = []
+        for sesion in gestor.get_sessions():
+            try:
+                props = await sesion.try_get_media_properties_async()
+                sesiones.append((sesion, props.title or ""))
+            except OSError:
+                sesiones.append((sesion, ""))
+        elegida = elegir_sesion(sesiones, titulos, otros)
+        if elegida is None:
+            return None, len(sesiones)
+        metodo = {
+            "play": elegida.try_play_async,
+            "pause": elegida.try_pause_async,
+            "toggle": elegida.try_toggle_play_pause_async,
+            "next": elegida.try_skip_next_async,
+            "previous": elegida.try_skip_previous_async,
+            "stop": elegida.try_stop_async,
+        }[action]
+        return (nombre_app(elegida.source_app_user_model_id or ""), bool(await metodo())), len(sesiones)
+
+    resultado, cantidad = _ejecutar(actuar)
+    # Sin textos en el log: solo cuántas sesiones y ventanas había.
+    logging.info("Reproducción en el monitor %s: %s sesión(es), %s ventana(s).", numero, cantidad, len(titulos))
+    if resultado is None:
+        return (
+            f"No encontré ningún vídeo ni reproductor en el monitor {numero}. "
+            "Deja visible en ese monitor la pestaña del vídeo y vuelve a pedírmelo."
+        )
+    app, aceptado = resultado
+    if not aceptado:
+        raise OSError(f"{app} no admite esa acción ahora mismo.")
+    return _FRASES[action].format(app=app) + f" (monitor {numero})"
+
+
+# --- Silenciar una pestaña del navegador -----------------------------------------
+# El botón de audio de la pestaña está deshabilitado en Brave/Chrome salvo con una
+# opción experimental; se usa la opción «Silenciar pestaña» de su menú contextual
+# (clic derecho sobre la pestaña; el puntero vuelve a su sitio).
+
+MENU_SILENCIAR = "silenciar pestana"
+MENU_ACTIVAR = ("activar sonido de la pestana", "dejar de silenciar", "reactivar sonido")
+MAX_PESTANAS = 5
+# Brave/Chrome añaden el estado al nombre accesible de la pestaña que suena:
+# «Título: Reproducción de audio: Uso de memoria: …».
+_SUENA = ("reproduccion de audio", "reproduciendo audio", "audio playing")
+_SILENCIADA = ("audio silenciado", "audio muted")
+
+
+def pestana_suena(nombre: str) -> bool:
+    nombre = _normal(nombre)
+    return any(p in nombre for p in _SUENA)
+
+
+def elegir_pestanas(nombres: list[str], mute: bool, match: str = "") -> list[int]:
+    """Índices de las pestañas (con indicador de audio) sobre las que actuar.
+    Silenciar: solo las que suenan; si se nombró una («la de YouTube») y ninguna
+    de esas suena, también las que coinciden aunque estén calladas.
+    Devolver el sonido: todas (el menú dice cuáles están silenciadas)."""
+    buscado = _normal(match)
+    candidatas = [i for i, n in enumerate(nombres) if not buscado or buscado in _normal(n)]
+    if not mute:
+        # «Audio silenciado» solo aparece si la pestaña intenta sonar; si no hay
+        # ninguna así, se prueban todas (el menú dice cuáles están silenciadas).
+        calladas = [i for i in candidatas if any(p in _normal(nombres[i]) for p in _SILENCIADA)]
+        return calladas or candidatas
+    suenan = [i for i in candidatas if pestana_suena(nombres[i])]
+    if suenan or not buscado:
+        return suenan
+    return candidatas
+
+
+def _opcion_menu(nombre: str, mute: bool) -> bool:
+    nombre = _normal(nombre)
+    if mute:
+        return nombre.startswith(MENU_SILENCIAR)
+    return any(p in nombre for p in MENU_ACTIVAR)
+
+
+def _clic_derecho(x: int, y: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    anterior = wintypes.POINT()
+    user32.GetCursorPos(ctypes.byref(anterior))
+    user32.SetCursorPos(x, y)
+    time.sleep(0.05)
+    user32.mouse_event(0x0008, 0, 0, 0, 0)  # botón derecho abajo
+    user32.mouse_event(0x0010, 0, 0, 0, 0)  # botón derecho arriba
+    user32.SetCursorPos(anterior.x, anterior.y)
+
+
+def silenciar_pestana(mute: bool = True, monitor: int | None = None, match: str = "") -> str:
+    """Silencia (o devuelve el sonido a) las pestañas de Brave/Chrome que suenan
+    (o están silenciadas), opcionalmente solo las de un monitor o cuyo título
+    contiene ``match``."""
+    import ctypes
+
+    import uiautomation as auto
+
+    import jarvis_vision
+
+    ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    zona = None
+    if monitor is not None:
+        zona = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), monitor)
+    hechas = 0
+    with auto.UIAutomationInitializerInThread():
+        pestanas = []
+        for ventana in auto.GetRootControl().GetChildren():
+            if ventana.ClassName != "Chrome_WidgetWin_1":
+                continue
+            if zona is not None:
+                r = ventana.BoundingRectangle
+                cx, cy = (r.left + r.right) // 2, (r.top + r.bottom) // 2
+                if not (zona.x <= cx < zona.x + zona.ancho and zona.y <= cy < zona.y + zona.alto):
+                    continue
+            for control, _ in auto.WalkControl(ventana, maxDepth=12):
+                if control.ControlTypeName != "TabItemControl":
+                    continue
+                hijos = control.GetChildren()
+                indicador = hijos[0] if hijos and hijos[0].ControlTypeName == "ButtonControl" else None
+                # El indicador solo se ve en pestañas que suenan o están silenciadas.
+                # Su nombre no cambia al silenciar: el estado se lee del menú.
+                if indicador is None or indicador.BoundingRectangle.width() <= 0:
+                    continue
+                pestanas.append(control)
+        elegidas = elegir_pestanas([p.Name for p in pestanas], mute, match)
+        pestanas = [pestanas[i] for i in elegidas]
+        for pestana in pestanas[:MAX_PESTANAS]:
+            caja = pestana.BoundingRectangle
+            _clic_derecho((caja.left + caja.right) // 2, (caja.top + caja.bottom) // 2)
+            opcion = None
+            limite = time.monotonic() + 1.5
+            while opcion is None and time.monotonic() < limite:
+                time.sleep(0.15)
+                for ventana in auto.GetRootControl().GetChildren():
+                    if ventana.ClassName != "Chrome_WidgetWin_1":
+                        continue
+                    for control, _ in auto.WalkControl(ventana, maxDepth=8):
+                        if control.ControlTypeName == "MenuItemControl" and _opcion_menu(control.Name, mute):
+                            opcion = control
+                            break
+                    if opcion is not None:
+                        break
+            if opcion is None:
+                auto.SendKeys("{Esc}")  # ya estaba como se pide (o no hay menú)
+                continue
+            opcion.GetInvokePattern().Invoke()
+            hechas += 1
+            time.sleep(0.2)
+    logging.info("Pestañas %s: %s.", "silenciadas" if mute else "con sonido", hechas)
+    donde = f" en el monitor {monitor}" if monitor is not None else ""
+    if not hechas:
+        if mute:
+            return f"No encontré ninguna pestaña que esté sonando{donde}."
+        return f"No encontré ninguna pestaña silenciada{donde}."
+    plural = "s" if hechas > 1 else ""
+    if mute:
+        return f"Silencié {hechas} pestaña{plural}{donde}."
+    return f"Le devolví el sonido a {hechas} pestaña{plural}{donde}."
 
 
 def que_suena() -> str:
@@ -276,11 +616,19 @@ def leer_volumen_aplicacion(app: str) -> int | None:
 
 # --- Frases ------------------------------------------------------------------------
 
-_COSA = r"(?:\s+(?:la\s+|el\s+)?(?:musica|cancion|tema|reproduccion|video|spotify|youtube))?"
-_PAUSA = re.compile(rf"^(?:pausa|pausar|pon\s+pausa|deten|detener|para|parar)(?:\s+la)?{_COSA}$")
+_COSA = (
+    r"(?:\s+(?:al\s+|a\s+la\s+|con\s+el\s+|con\s+la\s+|la\s+|el\s+|este\s+|esta\s+|ese\s+|esa\s+)?"
+    r"(?:musica|cancion|tema|reproduccion|video|videos|spotify|youtube|serie|pelicula|peli"
+    r"|podcast|capitulo|episodio|stream|directo))?"
+)
+_PAUSA = re.compile(
+    rf"^(?:pausa|pausar|pausalo|pausala|pon(?:le)?\s+(?:en\s+)?pausa|deja\s+en\s+pausa|deten|detener"
+    rf"|detenlo|detenla|para|parar|paralo|parala|frena|frenalo|frenala|stop)(?:\s+la)?{_COSA}$"
+)
 _REANUDA = re.compile(
-    rf"^(?:reanuda|reanudar|continua|continuar|sigue|seguir|play|dale\s+play|quita\s+(?:la\s+)?pausa"
-    rf"|reproduce|despausa){_COSA}$"
+    rf"^(?:reanuda|reanudar|reanudalo|reanudala|continua|continuar|sigue|seguir|play"
+    rf"|dale\s+(?:al\s+)?play|pon(?:le)?\s+play|quita(?:le)?\s+(?:la\s+)?pausa|reproduce|reproducir"
+    rf"|despausa|despausalo|despausala|vuelve\s+a\s+(?:reproducir|poner)|resume){_COSA}$"
 )
 _SIGUIENTE = re.compile(
     r"^(?:siguiente|la\s+siguiente|pasa|salta|saltea|cambia|otra|proxima)"
@@ -311,16 +659,116 @@ _ACTIVAR_APP = re.compile(
 )
 
 
+_EN_MONITOR = re.compile(
+    r"\s+(?:del|de\s+la|en\s+el|en\s+la|de|en)\s+"
+    r"(?:(?:monitor|pantalla)\s+(?:numero\s+)?(?P<n>\d|uno|dos|tres|cuatro)"
+    r"|(?P<ord>primer|primera|segundo|segunda|tercer|tercera|cuarto|cuarta)\s+(?:monitor|pantalla))$"
+)
+_NUMEROS_MONITOR = {
+    "uno": 1, "dos": 2, "tres": 3, "cuatro": 4,
+    "primer": 1, "primera": 1, "segundo": 2, "segunda": 2,
+    "tercer": 3, "tercera": 3, "cuarto": 4, "cuarta": 4,
+}
+_PESTANA = r"(?:la\s+|las\s+|esta\s+|esa\s+|una\s+)?(?:pestana|pestanas|tab|tabs)"
+# «el vídeo», «YouTube»: la pestaña donde está (no el volumen de toda la app).
+_VIDEO = r"(?:(?:el\s+|este\s+|ese\s+)?video|youtube)"
+_DE_PESTANA = r"(?:\s+(?:de|del)\s+(?P<match>[a-z0-9 ]+?))?"
+_QUE_SUENA_PESTANA = r"(?:\s+que\s+(?:suena|esta\s+sonando|tiene\s+sonido|hace\s+ruido|tiene\s+audio))?"
+_VERBO_SILENCIAR = (
+    r"(?:silencia|silenciar|silenciame|mutea|mutear|muteame|calla|callar|callame"
+    r"|pon(?:le)?\s+(?:en\s+)?silencio(?:\s+al?)?|pon(?:le)?\s+mute(?:\s+al?)?"
+    r"|quita(?:le|r)?\s+el\s+(?:sonido|audio)\s+(?:a|al|de|del))"
+)
+_VERBO_ACTIVAR = (
+    r"(?:(?:quita|quitale|quitar)\s+el\s+(?:silencio|mute)\s+(?:a|al|de|del)"
+    r"|(?:activa|activar|activale|devuelve|devuelvele|reactiva|dale|ponle|vuelve\s+a\s+activar)"
+    r"\s+el\s+(?:sonido|audio)\s+(?:a|al|de|del)|desmutea|desmutear|desmuteame|desilencia|desilenciar)"
+)
+_SILENCIAR_PESTANA = re.compile(
+    rf"^{_VERBO_SILENCIAR}\s+{_PESTANA}{_DE_PESTANA}{_QUE_SUENA_PESTANA}$"
+    rf"|^{_VERBO_SILENCIAR}\s+(?P<video>{_VIDEO})$"
+)
+_ACTIVAR_PESTANA = re.compile(
+    rf"^{_VERBO_ACTIVAR}\s+{_PESTANA}{_DE_PESTANA}$|^{_VERBO_ACTIVAR}\s+(?P<video>{_VIDEO})$"
+)
+
+
+def _separar_monitor(consulta: str) -> tuple[str, int | None]:
+    m = _EN_MONITOR.search(consulta)
+    if m is None:
+        return consulta, None
+    valor = m.group("n") or m.group("ord")
+    numero = int(valor) if valor.isdigit() else _NUMEROS_MONITOR[valor]
+    return consulta[: m.start()], numero
+
+
+def _argumentos_pestana(m: re.Match, mute: bool, extra: dict) -> dict[str, object]:
+    match = m.group("match") or ("youtube" if m.group("video") == "youtube" else "")
+    return {"mute": mute, **extra, **({"match": match} if match else {})}
+
+
+# «pausa el vídeo del monitor 1 y reanuda el del monitor 2»: varias órdenes seguidas.
+_UNION = re.compile(r"\s+(?:y\s+(?:luego\s+|despues\s+|tambien\s+)?|luego\s+|despues\s+)")
+_PASOS_SECUENCIA = {"media_control", "mute_browser_tab"}
+MAX_PASOS = 4
+
+
+def detectar_secuencia(consulta: str) -> list[dict[str, object]] | None:
+    partes = _UNION.split(consulta)
+    if not 2 <= len(partes) <= MAX_PASOS:
+        return None
+    pasos = []
+    for parte in partes:
+        comando = _detectar_uno(parte.strip())
+        if comando is None or comando[0] not in _PASOS_SECUENCIA:
+            return None
+        pasos.append({"tool": comando[0], "arguments": comando[1]})
+    return pasos
+
+
+def ejecutar_secuencia(steps: list[dict[str, object]]) -> str:
+    """Ejecuta en orden pasos multimedia de riesgo bajo (órdenes compuestas)."""
+    funciones = {"media_control": controlar_reproduccion, "mute_browser_tab": silenciar_pestana}
+    if not 1 <= len(steps) <= MAX_PASOS:
+        raise ValueError(f"Indica entre 1 y {MAX_PASOS} pasos.")
+    resultados = []
+    for paso in steps:
+        funcion = funciones.get(str(paso.get("tool")))
+        argumentos = paso.get("arguments") or {}
+        if funcion is None or not isinstance(argumentos, dict):
+            raise ValueError(f"Paso no permitido: {paso.get('tool')}")
+        try:
+            resultados.append(funcion(**argumentos))
+        except (OSError, ValueError) as error:
+            resultados.append(f"No pude: {error}")
+    return " ".join(resultados)
+
+
 def detectar_comando(consulta: str) -> tuple[str, dict[str, object]] | None:
     """``consulta`` ya normalizada (sin tildes ni signos, ver jarvis_commands)."""
-    if _PAUSA.fullmatch(consulta):
-        return "media_control", {"action": "pause"}
-    if _REANUDA.fullmatch(consulta):
-        return "media_control", {"action": "play"}
-    if _SIGUIENTE.fullmatch(consulta):
-        return "media_control", {"action": "next"}
-    if _ANTERIOR.fullmatch(consulta):
-        return "media_control", {"action": "previous"}
+    if (pasos := detectar_secuencia(consulta)) is not None:
+        return "media_sequence", {"steps": pasos}
+    return _detectar_uno(consulta)
+
+
+def _detectar_uno(consulta: str) -> tuple[str, dict[str, object]] | None:
+    sin_monitor, monitor = _separar_monitor(consulta)
+    extra = {"monitor": monitor} if monitor is not None else {}
+    if monitor is not None:
+        # «… y reanuda el del monitor 2»: «el»/«la» sin sustantivo.
+        sin_monitor = re.sub(r"\s+(?:el|la|lo)$", "", sin_monitor)
+    if (m := _SILENCIAR_PESTANA.fullmatch(sin_monitor)) is not None:
+        return "mute_browser_tab", _argumentos_pestana(m, True, extra)
+    if (m := _ACTIVAR_PESTANA.fullmatch(sin_monitor)) is not None:
+        return "mute_browser_tab", _argumentos_pestana(m, False, extra)
+    if _PAUSA.fullmatch(sin_monitor):
+        return "media_control", {"action": "pause", **extra}
+    if _REANUDA.fullmatch(sin_monitor):
+        return "media_control", {"action": "play", **extra}
+    if _SIGUIENTE.fullmatch(sin_monitor):
+        return "media_control", {"action": "next", **extra}
+    if _ANTERIOR.fullmatch(sin_monitor):
+        return "media_control", {"action": "previous", **extra}
     if _QUE_SUENA.fullmatch(consulta):
         return "get_now_playing", {}
     if (m := _VOLUMEN_APP.fullmatch(consulta)) and m.group("app") not in _NO_APP:
@@ -340,14 +788,54 @@ def detectar_comando(consulta: str) -> tuple[str, dict[str, object]] | None:
 def registrar_herramientas(registry, verificadores=None) -> None:
     verificadores = verificadores or {}
     registry.register(
-        "media_control",
+        "mute_browser_tab",
         (
-            "Controla lo que se reproduce en Windows (Spotify, YouTube en el navegador…): "
-            "play, pause, toggle, next, previous o stop."
+            "Silencia (mute=true) o quita el silencio (mute=false) de pestañas de Brave/Chrome "
+            "sin afectar al resto: las que suenan, las de un monitor (monitor) o las cuyo "
+            "título contiene match (p. ej. youtube)."
         ),
         {
             "type": "object",
-            "properties": {"action": {"type": "string", "enum": list(ACCIONES)}},
+            "properties": {
+                "mute": {"type": "boolean"},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+                "match": {"type": "string", "maxLength": 80},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        silenciar_pestana,
+        label="Silenciar pestaña",
+        timeout_seconds=15,
+    )
+    registry.register(
+        "media_sequence",
+        "Varias órdenes multimedia seguidas («pausa el vídeo del monitor 1 y reanuda el del 2»).",
+        {
+            "type": "object",
+            "properties": {"steps": {"type": "array"}},
+            "required": ["steps"],
+            "additionalProperties": False,
+        },
+        ejecutar_secuencia,
+        label="Órdenes multimedia",
+        timeout_seconds=45,
+        # Solo lo usan las frases directas; el modelo ya tiene las herramientas sueltas.
+        exposed=False,
+    )
+    registry.register(
+        "media_control",
+        (
+            "Controla lo que se reproduce en Windows (Spotify, YouTube en el navegador…): "
+            "play, pause, toggle, next, previous o stop. monitor (opcional): actuar sobre "
+            "lo que se reproduce en ese monitor."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": list(ACCIONES)},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+            },
             "required": ["action"],
             "additionalProperties": False,
         },

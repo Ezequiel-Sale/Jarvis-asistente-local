@@ -518,8 +518,31 @@ def detectar_comando_dispositivo_salida(texto: str) -> str | None:
     palabra = coincidencia.group(1)
     return "speakers" if palabra in {"altavoces", "parlantes"} else "headphones"
 
+# Errores de Whisper vistos con las órdenes de Jarvis (palabras enteras, sin
+# distinguir mayúsculas). Solo frases que no tienen otro sentido en una orden.
+_CORRECCIONES_VOZ = (
+    (r"\by\s+ya\s+anuda\b", "y reanuda"),  # «pausa X y ya anuda Y» (2026-11-06)
+    (r"\b(?:ya|re|rea)\s+anuda\b", "reanuda"),
+    (r"\brea\s+nuda\b", "reanuda"),
+    (r"\bre\s+anudar?\b", "reanuda"),
+    (r"\bvaos\s+al\s+(v[ií]deo)\b", r"pausa el \1"),
+    (r"\bdes(?:hutea|\s+mutea|mutia|mute\s+a)\b", "desmutea"),
+    (r"\bmute\s+a\s+(la|el)\b", r"mutea \1"),
+    (r"\bmutia\b", "mutea"),
+    (r"\bspot(?:icia|ifai|ifay|ifi)\b", "Spotify"),
+    (r"\b(?:jarbis|yarvis|harvis|yarbis)\b", "Jarvis"),
+    (r"\bpesta[nñ]a\s+de\s+you\s+tube\b", "pestaña de YouTube"),
+    (r"\byou\s+tube\b", "YouTube"),
+    (r"\b(volumen\s+de\s+\w+)\s+el\s+(\d)", r"\1 al \2"),  # «… de Spotify el 30 %»
+    (r"(\d)\s*%", r"\1 por ciento"),  # Whisper escribe «30%»
+)
+
+
 def limpiar_transcripcion_voz(texto: str) -> str:
-    return re.sub(r"\s+", " ", texto.replace(",", " ")).strip()
+    texto = re.sub(r"\s+", " ", texto.replace(",", " ")).strip()
+    for patron, reemplazo in _CORRECCIONES_VOZ:
+        texto = re.sub(patron, reemplazo, texto, flags=re.IGNORECASE)
+    return texto
 
 
 # --- Consultas de sistema de solo lectura (roadmap punto 2) ---------------------
@@ -873,6 +896,33 @@ def detectar_comando_escucha(texto: str) -> bool | None:
     if _ESCUCHA_ON.fullmatch(consulta):
         return True
     if _ESCUCHA_OFF.fullmatch(consulta):
+        return False
+    return None
+
+
+_CON_WINDOWS = (
+    r"(?:con|al\s+(?:iniciar|arrancar|encender|prender)|junto\s+con)\s+"
+    r"(?:windows|la\s+pc|el\s+pc|el\s+equipo|la\s+computadora|el\s+ordenador)"
+)
+_INICIO_WINDOWS = rf"(?:el\s+)?(?:inicio|arranque)(?:\s+automatico)?(?:\s+{_CON_WINDOWS}|\s+de\s+windows)"
+_INICIO_ON = re.compile(
+    rf"^(?:activa|activar|habilita|habilitar|enciende|encender|pon|poner)\s+{_INICIO_WINDOWS}$"
+    rf"|^(?:iniciate|inicia|arranca|arrancate|abrete|ejecutate)\s+(?:siempre\s+)?{_CON_WINDOWS}$"
+    rf"|^(?:quiero\s+)?que\s+(?:jarvis\s+)?(?:se\s+)?(?:inicie|arranque|abra)\s+(?:siempre\s+)?{_CON_WINDOWS}$"
+)
+_INICIO_OFF = re.compile(
+    rf"^(?:desactiva|desactivar|deshabilita|deshabilitar|quita|quitar|apaga|apagar)\s+{_INICIO_WINDOWS}$"
+    rf"|^no\s+(?:te\s+)?(?:inicies|arranques|abras|ejecutes)\s+(?:mas\s+)?{_CON_WINDOWS}$"
+    rf"|^(?:quiero\s+)?que\s+(?:jarvis\s+)?no\s+(?:se\s+)?(?:inicie|arranque|abra)\s+(?:mas\s+)?{_CON_WINDOWS}$"
+)
+
+
+def detectar_comando_inicio_windows(texto: str) -> bool | None:
+    """«inicia con Windows» → True; «desactiva el inicio con Windows» → False."""
+    consulta = _normalizar_consulta(texto)
+    if _INICIO_ON.fullmatch(consulta):
+        return True
+    if _INICIO_OFF.fullmatch(consulta):
         return False
     return None
 

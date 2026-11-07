@@ -25,6 +25,19 @@ class PhraseTests(unittest.TestCase):
                 pedido = s.detectar_comando(texto)
                 self.assertEqual((pedido["accion"], pedido["consulta"], pedido["monitor"]), ("click", consulta, monitor))
 
+    def test_where_it_says_phrases(self) -> None:
+        casos = {
+            "Haz clic donde dice GOL AGÓNICO": ("gol agonico", None),
+            "haz clic en donde dice Aceptar del monitor 2": ("aceptar", 2),
+            "haz click en lo que dice suscribirse": ("suscribirse", None),
+            "toca donde pone siguiente": ("siguiente", None),
+            "haz clic en Sale el sol": ("sale el sol", None),  # no recorta títulos
+        }
+        for texto, (consulta, monitor) in casos.items():
+            with self.subTest(texto=texto):
+                pedido = s.detectar_comando(texto)
+                self.assertEqual((pedido["consulta"], pedido["monitor"]), (consulta, monitor))
+
     def test_type_phrases(self) -> None:
         pedido = s.detectar_comando('escribe "Hola Mundo" en el cuadro de búsqueda del monitor 3')
         self.assertEqual(pedido, {"accion": "type", "consulta": "busqueda", "texto": "Hola Mundo", "monitor": 3})

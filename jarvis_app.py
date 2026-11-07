@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -20,6 +21,7 @@ import jarvis_displays
 import jarvis_ollama_gpu
 import jarvis_power
 import jarvis_aprendizaje
+import jarvis_autostart
 import jarvis_reminders
 import jarvis_screen_actions
 import jarvis_voz_stream
@@ -54,6 +56,7 @@ from jarvis_commands import (
     detectar_consulta_bateria,
     detectar_consulta_fecha_hora,
     detectar_comando_escucha,
+    detectar_comando_inicio_windows,
     detectar_decision_energia,
     detectar_comando_monitores,
     detectar_consulta_sistema,
@@ -115,6 +118,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._pending_plan_reply: queue.Queue[bool] | None = None
         self._pending_approval_kind: str | None = None
         self._pending_power_action: str | None = None
+        self._free_approval_busy = False  # transcribiendo una respuesta sin «Hey Jarvis»
         self._spoken_audio: set[str] = set()  # respuestas que ya se dijeron en vivo
         self._live_row = None
         self._live_label = None
@@ -149,11 +153,21 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             "J.A.R.V.I.S. | Asistente local",
             menu=pystray.Menu(
                 pystray.MenuItem("Abrir Jarvis", self._request_tray_show, default=True),
+                pystray.MenuItem(
+                    "Iniciar con Windows",
+                    self._request_tray_autostart,
+                    checked=lambda _item: self._autostart_wanted,
+                ),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Salir de Jarvis", self._request_tray_exit),
             ),
         )
         core.inicializar_base_datos()
+        self._autostart_wanted = self._autostart_preferido()
+        try:
+            jarvis_autostart.sincronizar(self._autostart_wanted)
+        except OSError:
+            logging.exception("No se pudo actualizar el inicio con Windows.")
         self.conversation_id = core.obtener_conversacion_actual()
         historial = core.obtener_historial(self.conversation_id)
 
@@ -196,6 +210,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         if self._wakeword_preferida():
             self._start_wakeword()
         self._refresh_wakeword_indicator()
+        self._refresh_autostart_button()
+        if jarvis_autostart.arrancado_con_windows():
+            # Al encender la PC: directo a la bandeja, sin abrir ventanas.
+            self._hide_to_tray()
         self._routines_panel: RoutinesPanel | None = None
         self._vision: dict | None = None
         self.root.after(100, self._poll_events)
@@ -236,6 +254,15 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     def _request_tray_exit(self, _icon, _item) -> None:
         self.events.put(("tray_exit",))
+
+    def _request_tray_autostart(self, _icon, _item) -> None:
+        activar = not self._autostart_wanted
+        self.events.put((
+            "autostart_toggle",
+            activar,
+            "Bandeja: activar el inicio con Windows" if activar else "Bandeja: desactivar el inicio con Windows",
+            False,
+        ))
 
     def _hide_to_tray(self) -> None:
         if self._closing:
@@ -324,7 +351,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     def _docker_start_worker(self) -> None:
         try:
-            core.iniciar_servicios_docker()
+            # Al encender la PC, Docker Desktop también está arrancando: más margen.
+            core.iniciar_servicios_docker(
+                espera=300 if jarvis_autostart.arrancado_con_windows() else 120
+            )
         except (OSError, RuntimeError, ValueError) as error:
             logging.exception("No se pudieron iniciar los servicios Docker.")
             self.events.put(("docker_services_error", str(error)))
@@ -425,6 +455,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         escucha = detectar_comando_escucha(text)
         if escucha is not None:
             self._execute_wakeword_toggle(escucha, text)
+            return
+        inicio_windows = detectar_comando_inicio_windows(text)
+        if inicio_windows is not None:
+            self._execute_autostart_toggle(inicio_windows, text)
             return
         dispositivo = detectar_comando_dispositivo_salida(text)
         if dispositivo is not None:
@@ -597,15 +631,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             transcript = jarvis_memory.normalizar_transcripcion_memoria_voz(transcript)
             if plan_approval:
                 if transcript:
-                    decision_detector = {
-                        "routine_save": detectar_decision_guardar_rutina,
-                        "vision": detectar_decision_vision,
-                        "power": lambda texto: detectar_decision_energia(
-                            texto, self._pending_power_action or ""
-                        ),
-                        "screen": lambda texto: detectar_decision_energia(texto, ""),
-                    }.get(approval_kind, detectar_decision_aprobacion_plan)
-                    decision = decision_detector(transcript)
+                    decision = JarvisApp._approval_decision(self, approval_kind, transcript)
                     logging.info(
                         "Decisión de confirmación %s por voz: %r (%s caracteres reconocidos).",
                         approval_kind,
@@ -642,6 +668,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             escucha = detectar_comando_escucha(transcript)
             if escucha is not None:
                 self.events.put(("wakeword_toggle", escucha, transcript))
+                return
+            inicio_windows = detectar_comando_inicio_windows(transcript)
+            if inicio_windows is not None:
+                self.events.put(("autostart_toggle", inicio_windows, transcript, True))
                 return
             dispositivo = detectar_comando_dispositivo_salida(transcript)
             if dispositivo is not None:
@@ -914,6 +944,59 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._live_label = None
         if not keep_text:
             self._live_text = ""
+
+    def _approval_decision(self, kind: str, transcript: str) -> bool | None:
+        """«sí»/«no» (o las frases de cada tipo de confirmación) en lo dicho."""
+        texto = re.sub(r"^[\s¡¿,.!?-]*(?:(?:hey|oye|ey|ei)[\s,.!-]+)?jarvis[\s,.:;!?-]*", "",
+                       transcript, flags=re.IGNORECASE)
+        detector = {
+            "routine_save": detectar_decision_guardar_rutina,
+            "vision": detectar_decision_vision,
+            "power": lambda frase: detectar_decision_energia(frase, self._pending_power_action or ""),
+            "screen": lambda frase: detectar_decision_energia(frase, ""),
+        }.get(kind, detectar_decision_aprobacion_plan)
+        decision = detector(texto)
+        if decision is None:
+            # Como en el apagado: también vale un «sí», «dale», «no» o «cancela» a secas.
+            decision = detectar_decision_energia(texto, "")
+        return decision
+
+    def _free_approval_listening(self) -> bool:
+        """El detector lo consulta desde su hilo: con una confirmación abierta,
+        escucha respuestas sin «Hey Jarvis» (solo lee atributos)."""
+        return (
+            self._pending_plan_reply is not None
+            and self.recorder is None
+            and not self._free_approval_busy
+        )
+
+    def _on_approval_utterance(self, audio_path: str) -> None:
+        reply = self._pending_plan_reply
+        if reply is None or self.recorder is not None or self._free_approval_busy:
+            limpiar_audio(audio_path)
+            return
+        self._free_approval_busy = True
+        kind = self._pending_approval_kind or "plan"
+        self._set_status("ESCUCHANDO TU RESPUESTA…", CYAN)
+        threading.Thread(
+            target=self._free_approval_worker,
+            args=(audio_path, kind, reply),
+            name="JarvisRespuestaLibre",
+            daemon=True,
+        ).start()
+
+    def _free_approval_worker(self, audio_path: str, kind: str, reply) -> None:
+        try:
+            transcript = limpiar_transcripcion_voz(core.procesar_stt(audio_path))
+            decision = self._approval_decision(kind, transcript) if transcript else None
+            # No se registra lo dicho: puede ser una conversación de fondo.
+            logging.info("Respuesta sin «Hey Jarvis» a la confirmación %s: %r.", kind, decision)
+            self.events.put(("free_approval_result", decision, transcript, reply))
+        except Exception:
+            logging.exception("No se pudo interpretar la respuesta a la confirmación.")
+            self.events.put(("free_approval_result", None, "", reply))
+        finally:
+            limpiar_audio(audio_path)
 
     def _request_tool_confirmation(
         self,
@@ -1652,11 +1735,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tk.Label(
             container,
             text=(
-                "Di «guardar rutina» o «no guardar rutina».\n"
-                "Pulsa F9 para hablar. Guardar la rutina no ejecuta sus pasos."
+                "Di «sí» / «guardar rutina» o «no», sin «Hey Jarvis».\n"
+                "Guardar la rutina no ejecuta sus pasos."
                 if is_routine_save
-                else "Puedes responder «ejecutar plan» o «no ejecutar plan».\n"
-                "Pulsa F9 para hablar; las acciones de riesgo alto pueden pedir confirmación adicional."
+                else "Di «sí» / «ejecutar plan» o «no», sin «Hey Jarvis».\n"
+                "Las acciones de riesgo alto pueden pedir confirmación adicional."
             ),
             bg=BG,
             fg=MUTED,
@@ -2173,6 +2256,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         _, enabled, command = event
                         self._set_idle()
                         self._execute_audio_toggle(enabled, command)
+                    elif event[0] == "autostart_toggle":
+                        _, enabled, command, desde_voz = event
+                        if desde_voz:
+                            self._set_idle()
+                        self._execute_autostart_toggle(enabled, command)
                     elif event[0] == "wakeword_toggle":
                         _, enabled, command = event
                         self._set_idle()
@@ -2187,6 +2275,20 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             self._set_status("NO OÍ NINGUNA ORDEN", MUTED)
                     elif event[0] == "wakeword_command":
                         self._on_wakeword_command(event[1])
+                    elif event[0] == "approval_utterance":
+                        self._on_approval_utterance(event[1])
+                    elif event[0] == "free_approval_result":
+                        _, decision, transcript, reply = event
+                        self._free_approval_busy = False
+                        if self._pending_plan_reply is not reply:
+                            continue  # esa confirmación ya se resolvió
+                        if decision is None:
+                            # No era «sí» ni «no» (o era ruido): seguir esperando sin avisos.
+                            self._set_status(
+                                self._approval_hint(self._pending_approval_kind or "plan"), CYAN
+                            )
+                            continue
+                        self.events.put(("plan_voice_decision", decision, transcript))
                     elif event[0] == "wakeword_error":
                         self.wakeword_detector = None
                         self._refresh_wakeword_indicator()
@@ -2612,7 +2714,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             logging.warning("openWakeWord no está instalado; sin palabra de activación.")
             return False
         self.wakeword_detector = jarvis_wakeword.DetectorPalabraActivacion(
-            self.events, self._can_listen_for_wakeword
+            self.events,
+            self._can_listen_for_wakeword,
+            escucha_libre=self._free_approval_listening,
         )
         self.wakeword_detector.start()
         return True
@@ -2622,6 +2726,62 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.wakeword_detector = None
         if detector is not None:
             detector.stop()
+
+    # --- Inicio con Windows ---------------------------------------------------
+
+    _PREFERENCIA_INICIO_WINDOWS = "inicio_windows"
+
+    def _autostart_preferido(self) -> bool:
+        """Activado salvo que el usuario lo haya desactivado."""
+        try:
+            return core.obtener_preferencia(self._PREFERENCIA_INICIO_WINDOWS) != "0"
+        except Exception:
+            logging.exception("No se pudo leer la preferencia de inicio con Windows.")
+            return True
+
+    def _refresh_autostart_button(self) -> None:
+        boton = getattr(self, "autostart_button", None)
+        if boton is None:
+            return
+        activo = self._autostart_wanted
+        boton.configure(
+            text="⏻  INICIO CON WINDOWS: SÍ" if activo else "⏻  INICIO CON WINDOWS: NO",
+            fg=CYAN if activo else MUTED,
+        )
+
+    def _toggle_autostart_button(self) -> None:
+        activar = not self._autostart_wanted
+        self._execute_autostart_toggle(
+            activar,
+            "Botón: activar el inicio con Windows" if activar else "Botón: desactivar el inicio con Windows",
+        )
+
+    def _execute_autostart_toggle(self, enabled: bool, command: str) -> None:
+        try:
+            respuesta = jarvis_autostart.activar() if enabled else jarvis_autostart.desactivar()
+        except OSError as error:
+            logging.exception("No se pudo cambiar el inicio con Windows.")
+            respuesta = f"No pude cambiar el inicio con Windows: {error}"
+        else:
+            self._autostart_wanted = enabled
+            try:
+                core.guardar_preferencia(self._PREFERENCIA_INICIO_WINDOWS, "1" if enabled else "0")
+            except Exception:
+                logging.exception("No se pudo guardar la preferencia de inicio con Windows.")
+        try:
+            core.guardar_turno(self.conversation_id, command, respuesta)
+        except Exception:
+            logging.exception("No se pudo guardar el cambio de inicio con Windows en memoria.")
+        self._add_message("assistant", respuesta)
+        self._refresh_autostart_button()
+        try:
+            self.tray_icon.update_menu()
+        except Exception:
+            logging.debug("No se pudo refrescar el menú de la bandeja.", exc_info=True)
+        self._set_status(
+            "SE INICIARÁ CON WINDOWS" if self._autostart_wanted else "NO SE INICIARÁ CON WINDOWS",
+            CYAN if self._autostart_wanted else MUTED,
+        )
 
     def _execute_wakeword_toggle(self, enabled: bool, command: str) -> None:
         try:
@@ -2715,6 +2875,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "cancel_power_action": "CANCELANDO EL APAGADO…",
         "lock_computer": "BLOQUEANDO EL EQUIPO…",
         "media_control": "CONTROLANDO LA REPRODUCCIÓN…",
+        "mute_browser_tab": "SILENCIANDO LA PESTAÑA…",
+        "media_sequence": "CONTROLANDO LA REPRODUCCIÓN…",
         "set_app_volume": "AJUSTANDO VOLUMEN DE LA APLICACIÓN…",
     }
 
@@ -2937,9 +3099,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._set_status("NUEVA CONVERSACIÓN", CYAN)
 
     _APPROVAL_PHRASES = {
-        "plan": ("EJECUTAR PLAN", "NO EJECUTAR PLAN"),
-        "routine_save": ("GUARDAR RUTINA", "NO GUARDAR RUTINA"),
-        "vision": ("ANALIZAR", "CANCELAR"),
+        "plan": ("SÍ", "NO"),
+        "routine_save": ("SÍ", "NO"),
+        "vision": ("SÍ", "NO"),
         "power": ("SÍ", "NO"),
         "screen": ("SÍ", "NO"),
     }

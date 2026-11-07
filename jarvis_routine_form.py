@@ -41,7 +41,7 @@ ETIQUETAS_CAMPO = {
     "monitor": "Monitor", "second_monitor": "Segundo monitor", "app": "Aplicación",
     "mute": "Silenciar", "target": "Programa o archivo", "kind": "Tipo", "text": "Texto",
     "delay_seconds": "Dentro de (segundos)", "at": "Fecha y hora (AAAA-MM-DD HH:MM)",
-    "what": "Qué", "city": "Ciudad", "day": "Día",
+    "what": "Qué", "city": "Ciudad", "day": "Día", "match": "Título contiene",
 }
 DIAS = ("L", "M", "X", "J", "V", "S", "D")
 DISPARADORES = (
@@ -329,8 +329,8 @@ class RoutineForm:
                     fila, from_=definicion.get("minimum", 0), to=definicion.get("maximum", 100000),
                     textvariable=variable, width=10,
                 ).pack(side="left")
-                if clave in requeridos:
-                    variable.set(str(definicion.get("minimum", 0)))
+                # El Spinbox se rellena solo con el mínimo: los opcionales quedan vacíos.
+                variable.set(str(definicion.get("minimum", 0)) if clave in requeridos else "")
             elif definicion.get("type") == "boolean":
                 variable = tk.BooleanVar(value=False)
                 tk.Checkbutton(fila, variable=variable, bg=PANEL, selectcolor=PANEL_LIGHT,

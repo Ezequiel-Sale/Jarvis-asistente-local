@@ -57,6 +57,7 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "manage_window",
         "search_youtube",
         "media_control",
+        "mute_browser_tab",
         "set_app_volume",
         "lock_computer",
         # Riesgo alto: en una rutina no pide aprobación, avisa con cuenta atrás

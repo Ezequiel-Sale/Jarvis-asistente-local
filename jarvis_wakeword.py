@@ -97,6 +97,19 @@ def estimar_ruido(energias) -> float:
     return valores[len(valores) // 5] if valores else 0.0
 
 
+# Respuestas a confirmaciones sin «Hey Jarvis».
+PREVIO_RESPUESTA = 4  # bloques (~0,3 s) anteriores al inicio de la voz
+SILENCIO_RESPUESTA = 0.8
+MAXIMO_RESPUESTA = 4.0
+MINIMO_VOZ_RESPUESTA = 0.15
+MAXIMO_VOZ_RESPUESTA = 2.5
+
+
+def umbral_voz(ruido: float) -> float:
+    """Energía a partir de la cual un bloque cuenta como voz."""
+    return max(ruido * 3.0, 300.0)
+
+
 def guardar_wav(bloques: list[bytes]) -> str:
     descriptor, ruta = tempfile.mkstemp(suffix=".wav", prefix="jarvis_orden_")
     os.close(descriptor)
@@ -166,11 +179,16 @@ class DetectorPalabraActivacion(threading.Thread):
         puede_escuchar: Callable[[], bool],
         *,
         umbral: float = UMBRAL_DETECCION,
+        escucha_libre: Callable[[], bool] | None = None,
     ) -> None:
+        """``escucha_libre``: mientras devuelva True (hay una confirmación abierta),
+        cualquier frase corta se graba sin esperar «Hey Jarvis» y se publica como
+        ``("approval_utterance", ruta)`` para que la app vea si es «sí» o «no»."""
         super().__init__(name="JarvisPalabraActivacion", daemon=True)
         self.events = events
         self.puede_escuchar = puede_escuchar
         self.umbral = umbral
+        self.escucha_libre = escucha_libre
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
@@ -202,13 +220,31 @@ class DetectorPalabraActivacion(threading.Thread):
         energias: deque[float] = deque(maxlen=int(5 / SEGUNDOS_POR_BLOQUE))
         bloqueado_hasta = 0.0
         registrar_desde = 0.0
+        previos: deque[bytes] = deque(maxlen=PREVIO_RESPUESTA)
         try:
             while not self._stop_event.is_set():
                 bloque = stream.read(BLOQUE, exception_on_overflow=False)
                 if not self.puede_escuchar() or time.monotonic() < bloqueado_hasta:
                     modelo.reset()
+                    previos.clear()
                     continue
-                energias.append(rms(bloque))
+                energia = rms(bloque)
+                if self.escucha_libre is not None and self.escucha_libre():
+                    # Confirmación abierta: responder «sí»/«no» sin «Hey Jarvis».
+                    modelo.reset()
+                    ruido = estimar_ruido(energias)
+                    if energia < umbral_voz(ruido):
+                        energias.append(energia)
+                        previos.append(bloque)
+                        continue
+                    ruta = self._grabar_respuesta(stream, ruido, [*previos, bloque])
+                    previos.clear()
+                    bloqueado_hasta = time.monotonic() + 0.5
+                    if ruta is not None:
+                        self.events.put(("approval_utterance", ruta))
+                    continue
+                previos.clear()
+                energias.append(energia)
                 puntuacion = modelo.predict(np.frombuffer(bloque, dtype=np.int16)).get(MODELO, 0.0)
                 if puntuacion < self.umbral:
                     # Ayuda a ajustar el umbral si no reconoce bien la pronunciación.
@@ -230,6 +266,33 @@ class DetectorPalabraActivacion(threading.Thread):
             stream.stop_stream()
             stream.close()
             audio.terminate()
+
+    def _grabar_respuesta(self, stream, ruido: float, previos: list[bytes]) -> str | None:
+        """Graba una respuesta corta hasta 0,8 s de silencio (máx. 4 s).
+
+        Las frases largas se descartan: una respuesta es «sí», «no», «confirmo»…
+        y así una conversación de fondo no se toma por una confirmación.
+        """
+        umbral = umbral_voz(ruido)
+        bloques = list(previos)
+        voz = sum(1 for b in bloques if rms(b) >= umbral)
+        silencio = 0.0
+        while not self._stop_event.is_set():
+            bloque = stream.read(BLOQUE, exception_on_overflow=False)
+            bloques.append(bloque)
+            if rms(bloque) >= umbral:
+                voz += 1
+                silencio = 0.0
+            else:
+                silencio += SEGUNDOS_POR_BLOQUE
+            if silencio >= SILENCIO_RESPUESTA - _EPS:
+                break
+            if len(bloques) * SEGUNDOS_POR_BLOQUE >= MAXIMO_RESPUESTA:
+                return None  # demasiado larga para ser una respuesta
+        duracion_voz = voz * SEGUNDOS_POR_BLOQUE
+        if not MINIMO_VOZ_RESPUESTA <= duracion_voz <= MAXIMO_VOZ_RESPUESTA:
+            return None
+        return guardar_wav(bloques)
 
     def _grabar_orden(self, stream, ruido: float) -> str | None:
         segmentador = SegmentadorVoz(ruido)

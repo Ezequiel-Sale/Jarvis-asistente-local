@@ -354,7 +354,7 @@ _PREFIJO = (
 )
 _CLIC = re.compile(
     _PREFIJO
-    + r"(?:haz|hace|hacé|dale|da)\s+(?:un\s+)?(?:click|clic|clik|clickeo)\s+(?:en|sobre|a)\s+"
+    + r"(?:haz|hace|hacé|dale|da)\s+(?:un\s+)?(?:click|clic|clik|clickeo)\s+(?:(?:en|sobre|a)\s+|(?=donde\s))"
     r"(?P<obj>.+?)" + _MONITOR + r"$"
     r"|" + _PREFIJO.replace("n0", "n1")
     + r"(?:pulsa|presiona|toca|aprieta|clickea|cliquea)\s+(?P<obj2>.+?)"
@@ -369,7 +369,10 @@ _RELLENO = re.compile(
     r"^(?:el|la|los|las|un|una)\s+|"
     r"^(?:video|enlace|link|boton|opcion|pestana|elemento|texto|resultado|cuadro|campo|casilla)"
     r"(?:\s+de\s+(?:busqueda|texto))?\s+|"
-    r"^(?:que\s+(?:dice|pone|se\s+llama)|llamado|llamada|con\s+el\s+texto|de)\s+"
+    r"^(?:que\s+(?:dice|pone|se\s+llama)|llamado|llamada|con\s+el\s+texto|de)\s+|"
+    # «haz clic donde dice …», «en donde pone …», «en lo que dice …»
+    # Solo junto a «donde»/«lo que», para no recortar títulos que empiezan por «Sale…».
+    r"^(?:donde|lo\s+que)\s+(?:dice|pone|aparece|sale)\s+"
 )
 
 

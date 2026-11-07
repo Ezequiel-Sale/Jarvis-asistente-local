@@ -13,7 +13,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Conversación con memoria** | «Recuerda que prefiero Brave», «¿qué recuerdas sobre mi navegador?». Busca recuerdos por significado y **aprende solo** de las conversaciones («¿qué aprendiste de mí?», «desactiva el aprendizaje automático») |
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
 | **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» |
-| **Multimedia** | «Pausa la música», «siguiente canción», «la anterior», «¿qué está sonando?», «pon el volumen de Spotify al 30», «silencia Discord» |
+| **Multimedia** | «Reanuda el vídeo del monitor 2», «pausa el vídeo del monitor 1 y reanuda el del monitor 2», «dale play al vídeo de la segunda pantalla», «silencia la pestaña que suena», «mutea YouTube», «devuélvele el sonido al vídeo», «Pausa la música», «siguiente canción», «la anterior», «¿qué está sonando?», «pon el volumen de Spotify al 30», «silencia Discord» |
 | **Temporizadores y recordatorios** | «Pon un temporizador de 10 minutos», «recuérdame en 20 minutos sacar la ropa», «recuérdame mañana a las 9 pagar la luz», «pon una alarma a las 7», «¿qué recordatorios tengo?», «cancela el temporizador» |
 | **Auriculares G533** | «¿Cuánta batería tienen los auriculares?»; aviso automático cuando baja del 15 % |
 | **Comandos personalizados** | Desde ⏱ RUTINAS → «+ NUEVA»: elige una frase propia («modo juego») y las acciones (abrir un programa, cambiar la salida, pausar la música, volumen por app, monitores, apagar…); luego basta con decirla |
@@ -29,7 +29,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 ## Seguridad y privacidad
 
 - **Todo local**: Whisper, Ollama y Piper corren en tu PC. Solo el plugin de clima consulta un servicio externo (envía únicamente el nombre de la ciudad).
-- **Permisos según el riesgo**: las acciones delicadas (navegar, abrir juegos, gestionar ventanas o monitores) piden confirmación cuando las propone el asistente; los planes de varios pasos se aprueban completos antes de ejecutarse.
+- **Permisos según el riesgo**: las acciones delicadas (navegar, abrir juegos, gestionar ventanas o monitores) piden confirmación cuando las propone el asistente; los planes de varios pasos se aprueban completos antes de ejecutarse. Para responder cualquier confirmación basta con decir «sí» o «no», sin «Hey Jarvis».
 - **Automatizaciones**: solo pueden ejecutarse sin preguntar si todas sus acciones son de riesgo bajo.
 - **Palabra de activación**: la escucha de «Hey Jarvis» es local y se queda en memoria; solo se transcribe lo que dices después. Se desactiva con «deja de escucharme».
 - **Rutinas que apagan, reinician o suspenden**: al llegar la hora avisan por voz con 60 s de cuenta atrás y se cancelan con un clic o diciendo «cancela».
@@ -105,7 +105,7 @@ flowchart LR
 .venv313/Scripts/python.exe jarvis_app.py
 ```
 
-Jarvis inicia solo los contenedores de voz con Docker, aparece en la bandeja del sistema y solo permite una instancia abierta. Di **«Hey Jarvis»** seguido de tu orden, pulsa **F9** para hablar o escribe en la ventana de chat. El botón **⏱ RUTINAS** abre el panel de automatizaciones.
+Jarvis inicia solo los contenedores de voz con Docker, aparece en la bandeja del sistema y solo permite una instancia abierta. La versión instalada **se inicia con Windows** (oculta en la bandeja); se desactiva con el botón **⏻ INICIO CON WINDOWS** del chat, la opción «Iniciar con Windows» del menú de la bandeja o diciendo «desactiva el inicio con Windows». Di **«Hey Jarvis»** seguido de tu orden, pulsa **F9** para hablar o escribe en la ventana de chat. El botón **⏱ RUTINAS** abre el panel de automatizaciones.
 
 Las integraciones se configuran en `integraciones.json`, que se crea solo al arrancar.
 

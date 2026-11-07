@@ -26,6 +26,14 @@ from audio_capture import grabar_audio, limpiar_audio
 # antes IPv6, lo que añadía ~2 s a cada petición (medido el 2026-11-05).
 STT_URL = "http://127.0.0.1:9000/v1/audio/transcriptions"
 STT_MODEL = "Systran/faster-whisper-small"
+# Vocabulario de pista para Whisper: acierta más las palabras de las órdenes.
+# Medido el 2026-11-07 con frases sintetizadas: «Desmutea» (antes «deshutea») y
+# «Spotify al 30 %» (antes «spoticia el 30 %»), sin más demora; con silencio no
+# devuelve texto. Que sea corto: una pista larga se cuela a veces en la transcripción.
+STT_PROMPT = (
+    "Órdenes para Jarvis: pausa, reanuda, silencia, mutea, desmutea la pestaña de YouTube "
+    "en Brave, monitor 1, monitor 2, haz clic, volumen, Spotify."
+)
 LLM_URL = "http://127.0.0.1:11434/api/generate"
 TTS_HOST = "127.0.0.1"
 TTS_PORT = 5555
@@ -89,7 +97,7 @@ _database_init_lock = threading.Lock()
 logging.basicConfig(level=logging.INFO, format='🕒 %(asctime)s | %(levelname)s | %(message)s')
 
 
-def iniciar_servicios_docker() -> None:
+def iniciar_servicios_docker(espera: int = 120) -> None:
     compose_file = APP_DIR / "docker-compose.yml"
     if not compose_file.is_file():
         raise FileNotFoundError(f"No encuentro la configuración de Docker: {compose_file}")
@@ -101,7 +109,7 @@ def iniciar_servicios_docker() -> None:
         )
 
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + espera
     last_error = "Docker Desktop todavía no está listo."
     while True:
         try:
@@ -122,7 +130,7 @@ def iniciar_servicios_docker() -> None:
             last_error = (result.stderr or result.stdout).strip() or last_error
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"Docker Desktop no estuvo listo después de 120 segundos: {last_error}"
+                f"Docker Desktop no estuvo listo después de {espera} segundos: {last_error}"
             )
         time.sleep(3)
 
@@ -454,7 +462,7 @@ def procesar_stt(ruta_audio: str) -> str:
         with open(ruta_audio, 'rb') as f:
             res = requests.post(
                 STT_URL,
-                data={"model": STT_MODEL, "language": "es"},
+                data={"model": STT_MODEL, "language": "es", "prompt": STT_PROMPT},
                 files={"file": (Path(ruta_audio).name, f, "audio/wav")},
                 timeout=(10, STT_TIMEOUT),
             )

@@ -181,6 +181,22 @@ class JarvisUIMixin:
                 cursor="hand2",
             )
             self.routines_button.pack(side="right", anchor="center", padx=(0, 8))
+            # Inicio con Windows; al pulsarlo se activa/desactiva.
+            self.autostart_button = tk.Button(
+                header,
+                text="⏻  INICIO CON WINDOWS …",
+                command=self._toggle_autostart_button,
+                bg=PANEL_LIGHT,
+                fg=MUTED,
+                activebackground="#1D374B",
+                activeforeground=TEXT,
+                relief="flat",
+                padx=12,
+                pady=8,
+                font=("Consolas", 8, "bold"),
+                cursor="hand2",
+            )
+            self.autostart_button.pack(side="right", anchor="center", padx=(0, 8))
 
             tk.Frame(self.chat_window, bg="#1C3446", height=1).grid(
                 row=0, column=0, sticky="sew", padx=30
