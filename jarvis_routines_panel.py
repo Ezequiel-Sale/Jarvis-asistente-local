@@ -39,23 +39,36 @@ _VALORES_LEGIBLES = {
 
 
 class RoutinesPanel:
-    def __init__(self, parent: tk.Misc, registry: ToolRegistry) -> None:
+    def __init__(self, parent: tk.Misc, registry: ToolRegistry, *, incrustado: bool = False) -> None:
+        """``incrustado``: sección de la ventana principal (un Frame que ocupa
+        ``parent``) en vez de una ventana aparte."""
         self.registry = registry
-        self.window = tk.Toplevel(parent)
-        self.window.title("J.A.R.V.I.S. | Rutinas y automatizaciones")
-        self.window.geometry("860x560")
-        self.window.minsize(640, 400)
-        self.window.configure(bg=BG)
+        self.incrustado = incrustado
+        if incrustado:
+            self.window = tk.Frame(parent, bg=BG)
+            self.window.pack(fill="both", expand=True)
+        else:
+            self.window = tk.Toplevel(parent)
+            self.window.title("J.A.R.V.I.S. | Rutinas y automatizaciones")
+            self.window.geometry("860x560")
+            self.window.minsize(640, 400)
+            self.window.configure(bg=BG)
+            self.window.bind("<Escape>", lambda _event: self.close())
         self.window.grid_rowconfigure(1, weight=1)
         self.window.grid_columnconfigure(0, weight=1)
-        self.window.bind("<Escape>", lambda _event: self.close())
 
         header = tk.Frame(self.window, bg=BG, padx=24, pady=16)
         header.grid(row=0, column=0, sticky="ew")
-        tk.Label(
-            header, text="RUTINAS Y AUTOMATIZACIONES", bg=BG, fg=CYAN,
-            font=("Segoe UI", 16, "bold"),
-        ).pack(side="left")
+        if not incrustado:  # incrustado, el título ya está en la cabecera principal
+            tk.Label(
+                header, text="RUTINAS Y AUTOMATIZACIONES", bg=BG, fg=CYAN,
+                font=("Segoe UI", 16, "bold"),
+            ).pack(side="left")
+        else:
+            tk.Label(
+                header, text="Lo que Jarvis hace solo: a una hora, al conectar algo o al oír una frase.",
+                bg=BG, fg=MUTED, font=("Segoe UI", 10),
+            ).pack(side="left")
         self._button(header, "⟳  ACTUALIZAR", self.refresh).pack(side="right")
         self._button(header, "+  NUEVA", self._new_routine).pack(side="right", padx=(0, 8))
 
@@ -68,6 +81,7 @@ class RoutinesPanel:
         scrollbar = tk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.canvas.configure(yscrollcommand=scrollbar.set)
+        body.jarvis_scroll = self.canvas  # rueda del ratón (ver JarvisUIMixin._on_mousewheel)
         self.rows = tk.Frame(self.canvas, bg=PANEL)
         self._rows_window = self.canvas.create_window((0, 0), window=self.rows, anchor="nw")
         self.rows.bind(
@@ -105,7 +119,8 @@ class RoutinesPanel:
             return False
 
     def focus(self) -> None:
-        self.window.deiconify()
+        if not self.incrustado:
+            self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
 
@@ -219,10 +234,10 @@ class RoutinesPanel:
     # --- Acciones ---------------------------------------------------------------
 
     def _new_routine(self) -> None:
-        RoutineForm(self.window, self.registry, self.refresh)
+        RoutineForm(self.window, self.registry, self.refresh, incrustado=self.incrustado)
 
     def _edit_routine(self, routine: jarvis_routines.RoutineInfo) -> None:
-        RoutineForm(self.window, self.registry, self.refresh, routine)
+        RoutineForm(self.window, self.registry, self.refresh, routine, incrustado=self.incrustado)
 
     def _toggle_permission(self, routine: jarvis_routines.RoutineInfo, automatica: bool) -> None:
         if automatica and not messagebox.askyesno(

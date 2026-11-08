@@ -110,20 +110,28 @@ class RoutineForm:
         registry: ToolRegistry,
         on_saved: Callable[[], None],
         routine: "jarvis_routines.RoutineInfo | None" = None,
+        *,
+        incrustado: bool = False,
     ) -> None:
+        """``incrustado``: el formulario cubre ``parent`` (la sección Rutinas de la
+        ventana principal) en vez de abrir otra ventana; al cerrarse, vuelve la lista."""
         self.registry = registry
         self.on_saved = on_saved
         self.routine = routine
         self.pasos: list[dict] = []
         self.campos: dict[str, tk.Variable] = {}
 
-        self.window = tk.Toplevel(parent)
-        self.window.title("Editar rutina" if routine else "Nueva rutina o comando")
-        self.window.configure(bg=BG)
-        self.window.geometry("800x820")
-        self.window.minsize(680, 480)
-        self.window.transient(parent)
-        self.window.bind("<Escape>", lambda _e: self.window.destroy())
+        if incrustado:
+            self.window = tk.Frame(parent, bg=BG)
+            self.window.place(relx=0, rely=0, relwidth=1, relheight=1)
+        else:
+            self.window = tk.Toplevel(parent)
+            self.window.title("Editar rutina" if routine else "Nueva rutina o comando")
+            self.window.configure(bg=BG)
+            self.window.geometry("800x820")
+            self.window.minsize(680, 480)
+            self.window.transient(parent)
+            self.window.bind("<Escape>", lambda _e: self.window.destroy())
 
         # Contenido desplazable: con algunas acciones el formulario no cabe en
         # pantallas con escalado alto; los botones de guardar quedan siempre fijos.
@@ -138,9 +146,13 @@ class RoutineForm:
         ventana_cuerpo = lienzo.create_window((0, 0), window=cuerpo, anchor="nw")
         cuerpo.bind("<Configure>", lambda _e: lienzo.configure(scrollregion=lienzo.bbox("all")))
         lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana_cuerpo, width=e.width))
-        self.window.bind(
-            "<MouseWheel>", lambda e: lienzo.yview_scroll(int(-e.delta / 120), "units")
-        )
+        if incrustado:
+            # La rueda la gestiona la ventana principal (JarvisUIMixin._on_mousewheel).
+            self._contenedor.jarvis_scroll = lienzo
+        else:
+            self.window.bind(
+                "<MouseWheel>", lambda e: lienzo.yview_scroll(int(-e.delta / 120), "units")
+            )
 
         tk.Label(
             cuerpo, text="EDITAR RUTINA" if routine else "NUEVA RUTINA O COMANDO",
@@ -256,7 +268,7 @@ class RoutineForm:
         # Guardar
         pie = tk.Frame(self.window, bg=BG, padx=22, pady=10)
         pie.pack(fill="x", side="bottom", before=self._contenedor)
-        self._boton(pie, "CANCELAR", self.window.destroy).pack(side="right")
+        self._boton(pie, "← VOLVER" if incrustado else "CANCELAR", self.window.destroy).pack(side="right")
         self._boton(pie, "GUARDAR", self._guardar, fg=BG, bg=CYAN).pack(side="right", padx=(0, 8))
 
         if routine:

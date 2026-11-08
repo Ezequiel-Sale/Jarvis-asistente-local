@@ -46,9 +46,12 @@ DB_PATH = APP_DIR / "jarvis_memory.db"
 RESPONSES_DIR = APP_DIR / "responses"
 VOZ_PIPER = "es_ES-davefx-medium"
 MODEL_LLM = "qwen2.5-coder:14b"  # Modelo instalado en Ollama
-# Modelo con visión para analizar capturas (roadmap punto 6). Ocupa ~18 GB y
-# desplaza a MODEL_LLM de la GPU: ~40 s la primera vez, ~8 s si sigue cargado.
-MODEL_VISION = "qwen3.6:27b"
+# Modelo con visión para analizar capturas y ubicar dónde hacer clic. Qwen3-VL 8B
+# (~10 GB) cabe entero en la GPU de 16 GB. Comparado el 2026-11-07 en los monitores
+# del usuario contra qwen3.6:27b (18 GB, no cabía): ubicó 7/9 textos frente a 6/9,
+# ~0,7 s por búsqueda frente a ~11 s, y describió en ~4 s frente a ~23 s (y sin
+# inventar). Sigue desplazando a MODEL_LLM mientras está cargado (no caben juntos).
+MODEL_VISION = "qwen3-vl:8b-instruct-q8_0"
 MAX_CONTEXT_MESSAGES = 12
 STT_TIMEOUT = 90  # segundos de espera de la transcripción
 TTS_TIMEOUT = 60  # segundos de espera de la síntesis de voz

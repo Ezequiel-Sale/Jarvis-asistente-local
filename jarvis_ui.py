@@ -28,182 +28,130 @@ class JarvisUIMixin:
             )
 
         def _build_layout(self) -> None:
+            """Una sola ventana: barra lateral (orbe, estado, secciones) y a la
+            derecha la sección elegida (chat, rutinas o ajustes)."""
             self.root.configure(bg=BG)
-            self.root.geometry("820x820")
-            self.root.minsize(680, 700)
-            self.root.grid_rowconfigure(2, weight=1)
-            self.root.grid_columnconfigure(0, weight=1)
+            self.root.geometry("1180x800")
+            self.root.minsize(940, 640)
+            self.root.grid_rowconfigure(0, weight=1)
+            self.root.grid_columnconfigure(1, weight=1)
+            # Antes el chat era otra ventana; ahora es una sección de la principal.
+            self.chat_window = self.root
+            self.root.bind("<Escape>", self._cancel_current_operation)
 
-            header = tk.Frame(self.root, bg=BG, padx=30, pady=22)
+            self._build_sidebar()
+
+            content = tk.Frame(self.root, bg=BG)
+            content.grid(row=0, column=1, sticky="nsew")
+            content.grid_rowconfigure(2, weight=1)
+            content.grid_columnconfigure(0, weight=1)
+
+            header = tk.Frame(content, bg=BG, padx=28, pady=16)
             header.grid(row=0, column=0, sticky="ew")
             header.grid_columnconfigure(1, weight=1)
-            self.chat_button = tk.Button(
-                header,
-                text="▤  CHAT",
-                command=self._show_chat_window,
-                bg=PANEL_LIGHT,
-                fg=CYAN,
-                activebackground="#1D374B",
-                activeforeground=TEXT,
-                relief="flat",
-                padx=14,
-                pady=10,
-                font=("Consolas", 9, "bold"),
-                cursor="hand2",
+            self.page_title = tk.Label(
+                header, text="CHAT", bg=BG, fg=CYAN, font=("Segoe UI", 17, "bold"),
             )
-            self.chat_button.grid(row=0, column=0, sticky="w")
-
-            brand = tk.Frame(header, bg=BG)
-            brand.grid(row=0, column=1, sticky="w", padx=(20, 0))
-            tk.Label(
-                brand,
-                text="J.A.R.V.I.S.",
-                bg=BG,
-                fg=CYAN,
-                font=("Segoe UI", 18, "bold"),
-            ).pack(anchor="w")
-            tk.Label(
-                brand,
-                text="VOICE INTERFACE",
-                bg=BG,
-                fg=MUTED,
-                font=("Consolas", 8),
-            ).pack(anchor="w")
-
+            self.page_title.grid(row=0, column=0, sticky="w")
             self.status = tk.Label(
-                header,
-                text="●  SISTEMA LISTO",
-                bg=BG,
-                fg=CYAN,
-                font=("Consolas", 9, "bold"),
+                header, text="●  SISTEMA LISTO", bg=BG, fg=CYAN, font=("Consolas", 9, "bold"),
             )
-            self.status.grid(row=0, column=2, sticky="e")
-
-            tk.Frame(self.root, bg="#1C3446", height=1).grid(
-                row=1, column=0, sticky="ew", padx=30
+            self.status.grid(row=0, column=1, sticky="e", padx=(16, 16))
+            self.header_actions = tk.Frame(header, bg=BG)
+            self.header_actions.grid(row=0, column=2, sticky="e")
+            self.new_chat_button = self._ui_button(
+                self.header_actions, "＋  NUEVA CONVERSACIÓN", self._new_conversation
             )
+            tk.Frame(content, bg="#1C3446", height=1).grid(row=1, column=0, sticky="ew", padx=28)
 
-            center = tk.Frame(self.root, bg=BG, padx=24, pady=12)
-            center.grid(row=2, column=0, sticky="nsew")
-            center.grid_rowconfigure(0, weight=1)
-            center.grid_columnconfigure(0, weight=1)
-            self.orb_canvas = tk.Canvas(
-                center,
-                bg=BG,
-                highlightthickness=0,
-                bd=0,
-                cursor="hand2",
-            )
-            self.orb_canvas.grid(row=0, column=0, sticky="nsew")
-            self.orb_canvas.bind("<Button-1>", self._on_orb_click)
-            self.orb_canvas.bind("<Configure>", self._draw_orb)
-
-            self.orb_status = tk.Label(
-                center,
-                text="PULSA EL NÚCLEO O F9 PARA HABLAR",
-                bg=BG,
-                fg=MUTED,
-                font=("Consolas", 9, "bold"),
-            )
-            self.orb_status.grid(row=1, column=0, pady=(0, 18))
-
-            footer = tk.Label(
-                self.root,
-                text="F9  ·  ACTIVAR / DETENER MICRÓFONO     ─     CIERRA CON X PARA DEJAR JARVIS EN SEGUNDO PLANO",
-                bg=BG,
-                fg=MUTED,
-                font=("Consolas", 8),
-            )
-            footer.grid(row=3, column=0, pady=(0, 18))
-
-            self._build_chat_window()
+            pages = tk.Frame(content, bg=BG)
+            pages.grid(row=2, column=0, sticky="nsew")
+            pages.grid_rowconfigure(0, weight=1)
+            pages.grid_columnconfigure(0, weight=1)
+            self._pages: dict[str, tk.Frame] = {}
+            for nombre in ("chat", "rutinas", "ajustes"):
+                pagina = tk.Frame(pages, bg=BG)
+                pagina.grid(row=0, column=0, sticky="nsew")
+                self._pages[nombre] = pagina
+            self._build_chat_page(self._pages["chat"])
+            self._build_settings_page(self._pages["ajustes"])
+            self._current_page = ""
+            self._show_page("chat")
             self._draw_orb()
             self.root.after(40, self._animate_orb)
 
-        def _build_chat_window(self) -> None:
-            self.chat_window = tk.Toplevel(self.root)
-            self.chat_window.title("J.A.R.V.I.S. | Chat")
-            self.chat_window.geometry("920x720")
-            self.chat_window.minsize(680, 520)
-            self.chat_window.configure(bg=BG)
-            self.chat_window.withdraw()
-            self.chat_window.protocol("WM_DELETE_WINDOW", self._hide_chat_window)
-            self.chat_window.bind("<Escape>", self._cancel_current_operation)
-            self.root.bind("<Escape>", self._cancel_current_operation)
-            self.chat_window.grid_rowconfigure(1, weight=1)
-            self.chat_window.grid_columnconfigure(0, weight=1)
+        def _ui_button(self, parent: tk.Misc, text: str, command, *, fg: str = CYAN) -> tk.Button:
+            return tk.Button(
+                parent, text=text, command=command, bg=PANEL_LIGHT, fg=fg,
+                activebackground="#1D374B", activeforeground=TEXT, relief="flat",
+                padx=12, pady=8, font=("Consolas", 8, "bold"), cursor="hand2",
+            )
 
-            header = tk.Frame(self.chat_window, bg=BG, padx=30, pady=18)
-            header.grid(row=0, column=0, sticky="ew")
-            brand = tk.Frame(header, bg=BG)
-            brand.pack(side="left")
+        def _build_sidebar(self) -> None:
+            sidebar = tk.Frame(self.root, bg=PANEL, width=250)
+            sidebar.grid(row=0, column=0, sticky="ns")
+            sidebar.grid_propagate(False)
+            sidebar.pack_propagate(False)
+            tk.Frame(self.root, bg="#193246", width=1).grid(row=0, column=0, sticky="nse")
+
+            marca = tk.Frame(sidebar, bg=PANEL, padx=22, pady=18)
+            marca.pack(fill="x")
+            tk.Label(marca, text="J.A.R.V.I.S.", bg=PANEL, fg=CYAN,
+                     font=("Segoe UI", 17, "bold")).pack(anchor="w")
+            tk.Label(marca, text="ASISTENTE LOCAL", bg=PANEL, fg=MUTED,
+                     font=("Consolas", 8)).pack(anchor="w")
+
+            self.orb_canvas = tk.Canvas(
+                sidebar, bg=PANEL, highlightthickness=0, bd=0, cursor="hand2", height=210,
+            )
+            self.orb_canvas.pack(fill="x", padx=12)
+            self.orb_canvas.bind("<Button-1>", self._on_orb_click)
+            self.orb_canvas.bind("<Configure>", self._draw_orb)
+            self.orb_status = tk.Label(
+                sidebar, text="PULSA EL NÚCLEO O F9 PARA HABLAR", bg=PANEL, fg=MUTED,
+                font=("Consolas", 8, "bold"), wraplength=210, justify="center",
+            )
+            self.orb_status.pack(fill="x", padx=16, pady=(4, 14))
+            tk.Frame(sidebar, bg="#193246", height=1).pack(fill="x", padx=18, pady=(0, 10))
+
+            self._nav_buttons: dict[str, tk.Button] = {}
+            for nombre, texto in (("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"), ("ajustes", "⚙   AJUSTES")):
+                boton = tk.Button(
+                    sidebar, text=texto, anchor="w", command=lambda n=nombre: self._show_page(n),
+                    bg=PANEL, fg=MUTED, activebackground="#1D374B", activeforeground=TEXT,
+                    relief="flat", padx=16, pady=9, font=("Consolas", 10, "bold"), cursor="hand2",
+                )
+                boton.pack(fill="x", padx=12, pady=2)
+                self._nav_buttons[nombre] = boton
+
             tk.Label(
-                brand,
-                text="J.A.R.V.I.S.",
-                bg=BG,
-                fg=CYAN,
-                font=("Segoe UI", 20, "bold"),
-            ).pack(anchor="w")
-            tk.Label(
-                brand,
-                text="CONVERSACIÓN LOCAL",
-                bg=BG,
-                fg=MUTED,
-                font=("Consolas", 8),
-            ).pack(anchor="w", pady=(2, 0))
-            self.new_chat_button = tk.Button(
-                header,
-                text="＋  NUEVA CONVERSACIÓN",
-                command=self._new_conversation,
-                bg=PANEL_LIGHT,
-                fg=CYAN,
-                activebackground="#1D374B",
-                activeforeground=TEXT,
-                relief="flat",
-                padx=12,
-                pady=8,
-                font=("Consolas", 8, "bold"),
-                cursor="hand2",
-            )
-            self.new_chat_button.pack(side="right", anchor="center")
-            self.routines_button = tk.Button(
-                header,
-                text="⏱  RUTINAS",
-                command=self._show_routines_panel,
-                bg=PANEL_LIGHT,
-                fg=CYAN,
-                activebackground="#1D374B",
-                activeforeground=TEXT,
-                relief="flat",
-                padx=12,
-                pady=8,
-                font=("Consolas", 8, "bold"),
-                cursor="hand2",
-            )
-            self.routines_button.pack(side="right", anchor="center", padx=(0, 8))
-            # Inicio con Windows; al pulsarlo se activa/desactiva.
-            self.autostart_button = tk.Button(
-                header,
-                text="⏻  INICIO CON WINDOWS …",
-                command=self._toggle_autostart_button,
-                bg=PANEL_LIGHT,
-                fg=MUTED,
-                activebackground="#1D374B",
-                activeforeground=TEXT,
-                relief="flat",
-                padx=12,
-                pady=8,
-                font=("Consolas", 8, "bold"),
-                cursor="hand2",
-            )
-            self.autostart_button.pack(side="right", anchor="center", padx=(0, 8))
+                sidebar,
+                text="F9  hablar / detener\nESC  cancelar\nX  seguir en la bandeja",
+                bg=PANEL, fg=MUTED, justify="left", font=("Consolas", 8),
+            ).pack(side="bottom", anchor="w", padx=22, pady=18)
 
-            tk.Frame(self.chat_window, bg="#1C3446", height=1).grid(
-                row=0, column=0, sticky="sew", padx=30
-            )
+        _PAGE_TITLES = {"chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES", "ajustes": "AJUSTES"}
 
-            content = tk.Frame(self.chat_window, bg=BG, padx=30, pady=18)
-            content.grid(row=1, column=0, sticky="nsew")
+        def _show_page(self, nombre: str) -> None:
+            if nombre not in self._pages:
+                return
+            self._pages[nombre].tkraise()
+            self._current_page = nombre
+            self.page_title.configure(text=self._PAGE_TITLES[nombre])
+            for clave, boton in self._nav_buttons.items():
+                activo = clave == nombre
+                boton.configure(bg=PANEL_LIGHT if activo else PANEL, fg=CYAN if activo else MUTED)
+            if nombre == "chat":
+                self.new_chat_button.pack(side="right")
+                self.input.focus_set()
+            else:
+                self.new_chat_button.pack_forget()
+            if nombre == "rutinas":
+                self._load_routines_page()
+
+        def _build_chat_page(self, page: tk.Frame) -> None:
+            content = tk.Frame(page, bg=BG, padx=28, pady=16)
+            content.pack(fill="both", expand=True)
             content.grid_rowconfigure(0, weight=1)
             content.grid_columnconfigure(0, weight=1)
 
@@ -317,35 +265,6 @@ class JarvisUIMixin:
                 cursor="hand2",
             )
             self.player_stop_button.pack(side="left")
-            self.audio_toggle_button = tk.Button(
-                player_buttons,
-                text="AUDIO ON",
-                command=self._toggle_audio_enabled,
-                bg=PANEL_LIGHT,
-                fg=CYAN,
-                activebackground="#1D374B",
-                activeforeground=TEXT,
-                relief="flat",
-                padx=8,
-                font=("Consolas", 8, "bold"),
-                cursor="hand2",
-            )
-            self.audio_toggle_button.pack(side="left", padx=(6, 0))
-            # Estado de la palabra de activación; al pulsarlo se activa/desactiva.
-            self.wakeword_button = tk.Button(
-                player_buttons,
-                text="HEY JARVIS …",
-                command=self._toggle_wakeword_button,
-                bg=PANEL_LIGHT,
-                fg=MUTED,
-                activebackground="#1D374B",
-                activeforeground=TEXT,
-                relief="flat",
-                padx=8,
-                font=("Consolas", 8, "bold"),
-                cursor="hand2",
-            )
-            self.wakeword_button.pack(side="left", padx=(6, 0))
 
             composer = tk.Frame(content, bg=BG)
             composer.grid(row=2, column=0, sticky="ew", pady=(16, 0))
@@ -423,24 +342,57 @@ class JarvisUIMixin:
             self.send_button.pack(side="left")
             tk.Label(
                 composer,
-                text=(
-                    "ENTER enviar  ·  SHIFT+ENTER nueva línea  ·  "
-                    "F9 o el núcleo para hablar/detener  ·  ESC cancelar"
-                ),
+                text="ENTER enviar  ·  SHIFT+ENTER nueva línea",
                 bg=BG,
                 fg=MUTED,
                 font=("Consolas", 8),
             ).grid(row=1, column=0, sticky="w", pady=(8, 0))
 
+        def _build_settings_page(self, page: tk.Frame) -> None:
+            """Interruptores que antes estaban repartidos por el chat."""
+            cuerpo = tk.Frame(page, bg=BG, padx=28, pady=18)
+            cuerpo.pack(fill="both", expand=True)
+
+            def fila(titulo: str, descripcion: str, atributo: str, texto: str, comando) -> None:
+                marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
+                                 highlightthickness=1, highlightbackground="#193246")
+                marco.pack(fill="x", pady=(0, 10))
+                marco.grid_columnconfigure(0, weight=1)
+                tk.Label(marco, text=titulo, bg=PANEL, fg=TEXT,
+                         font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+                tk.Label(marco, text=descripcion, bg=PANEL, fg=MUTED, justify="left",
+                         wraplength=620, font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
+                boton = self._ui_button(marco, texto, comando, fg=MUTED)
+                boton.configure(width=30)
+                boton.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
+                setattr(self, atributo, boton)
+
+            fila("Respuestas habladas",
+                 "Jarvis lee en voz alta sus respuestas. También: «silencia tu voz» / «activa tu voz».",
+                 "audio_toggle_button", "AUDIO ON", self._toggle_audio_enabled)
+            fila("Palabra de activación",
+                 "Escucha «Hey Jarvis» en segundo plano. También: «deja de escucharme».",
+                 "wakeword_button", "HEY JARVIS …", self._toggle_wakeword_button)
+            fila("Iniciar con Windows",
+                 "Al encender la PC, Jarvis arranca oculto en la bandeja. "
+                 "También: «desactiva el inicio con Windows».",
+                 "autostart_button", "⏻  INICIO CON WINDOWS …", self._toggle_autostart_button)
+
+            self.settings_info = tk.Label(
+                cuerpo, text="", bg=BG, fg=MUTED, justify="left", anchor="w",
+                font=("Consolas", 8),
+            )
+            self.settings_info.pack(fill="x", pady=(14, 0))
+
         def _show_chat_window(self) -> None:
             if self._closing:
                 return
-            self.chat_window.deiconify()
-            self.chat_window.lift()
-            self.input.focus_set()
+            self.root.deiconify()
+            self.root.lift()
+            self._show_page("chat")
 
         def _hide_chat_window(self) -> None:
-            self.chat_window.withdraw()
+            self._hide_to_tray()
 
         def _on_orb_click(self, _event=None) -> str:
             self._orb_pulse_started = time.perf_counter()
@@ -560,14 +512,18 @@ class JarvisUIMixin:
             )
             center_label = "J.A.R.V.I.S."
             action_label = "TOCA PARA DETENER" if active else "TOCA PARA HABLAR"
+            # Orbe compacto de la barra lateral: solo el nombre (el estado va debajo).
+            compacto = radius < 130
             canvas.create_text(
                 center_x,
-                center_y - core_radius * 0.2,
+                center_y if compacto else center_y - core_radius * 0.2,
                 text=center_label,
                 fill=TEXT,
-                font=("Segoe UI", max(12, int(radius * 0.075)), "bold"),
+                font=("Segoe UI", 8 if compacto else max(12, int(radius * 0.075)), "bold"),
                 tags="orb",
             )
+            if compacto:
+                return
             canvas.create_text(
                 center_x,
                 center_y + core_radius * 0.34,
@@ -604,15 +560,20 @@ class JarvisUIMixin:
             self.chat_canvas.itemconfigure(self.messages_window, width=event.width)
 
         def _on_mousewheel(self, event) -> None:
+            units = int(-event.delta / 120)
+            if units == 0 and event.delta:
+                units = -1 if event.delta > 0 else 1
             widget = event.widget
             while widget is not None and widget is not self.chat_panel:
+                # Secciones incrustadas (rutinas, formulario) marcan su lienzo así.
+                lienzo = getattr(widget, "jarvis_scroll", None)
+                if lienzo is not None:
+                    lienzo.yview_scroll(units, "units")
+                    return "break"
                 widget = getattr(widget, "master", None)
             if widget is None or not self.chat_canvas.winfo_exists():
                 return
 
-            units = int(-event.delta / 120)
-            if units == 0 and event.delta:
-                units = -1 if event.delta > 0 else 1
             self.chat_canvas.yview_scroll(units, "units")
             self._update_chat_following()
             return "break"

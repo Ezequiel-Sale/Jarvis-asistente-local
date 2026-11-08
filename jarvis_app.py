@@ -211,6 +211,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._start_wakeword()
         self._refresh_wakeword_indicator()
         self._refresh_autostart_button()
+        self._refresh_settings_info()
         if jarvis_autostart.arrancado_con_windows():
             # Al encender la PC: directo a la bandeja, sin abrir ventanas.
             self._hide_to_tray()
@@ -1317,7 +1318,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         ocultas = []
         candidatas = [self.root, self.chat_window]
         if self._routines_panel is not None and self._routines_panel.is_open():
-            candidatas.append(self._routines_panel.window)
+            # Incrustado en la ventana principal: se oculta con ella.
+            if isinstance(self._routines_panel.window, tk.Toplevel):
+                candidatas.append(self._routines_panel.window)
         for ventana in candidatas:
             try:
                 if ventana.winfo_exists() and ventana.state() != "withdrawn":
@@ -1423,10 +1426,19 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.events.put(("answer", respuesta, audio, time.perf_counter() - started))
 
     def _show_routines_panel(self) -> None:
+        """Muestra la sección Rutinas de la ventana principal."""
+        self.root.deiconify()
+        self.root.lift()
+        self._show_page("rutinas")
+
+    def _load_routines_page(self) -> None:
+        """La sección Rutinas se crea la primera vez y se refresca al volver."""
         if self._routines_panel is not None and self._routines_panel.is_open():
-            self._routines_panel.focus()
+            self._routines_panel.refresh()
             return
-        self._routines_panel = RoutinesPanel(self.chat_window, self.tool_registry)
+        self._routines_panel = RoutinesPanel(
+            self._pages["rutinas"], self.tool_registry, incrustado=True
+        )
 
     def _check_scheduled_routines(self) -> None:
         if self._closing:
@@ -2739,6 +2751,23 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             logging.exception("No se pudo leer la preferencia de inicio con Windows.")
             return True
 
+    def _refresh_settings_info(self) -> None:
+        """Datos de solo lectura en la sección Ajustes."""
+        etiqueta = getattr(self, "settings_info", None)
+        if etiqueta is None:
+            return
+        try:
+            admin = "sí" if jarvis_autostart.es_administrador() else "no"
+        except Exception:
+            admin = "desconocido"
+        etiqueta.configure(text=(
+            f"MODELO DE IA     {core.MODEL_LLM}\n"
+            f"VISIÓN           {core.MODEL_VISION}\n"
+            f"VOZ A TEXTO      {core.STT_MODEL}\n"
+            f"VOZ              {core.VOZ_PIPER}\n"
+            f"ADMINISTRADOR    {admin}"
+        ))
+
     def _refresh_autostart_button(self) -> None:
         boton = getattr(self, "autostart_button", None)
         if boton is None:
@@ -3138,7 +3167,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         """Oculta las ventanas de Jarvis, captura el monitor y las vuelve a mostrar."""
         candidatas = [self.root, self.chat_window, self._plan_dialog]
         if self._routines_panel is not None and self._routines_panel.is_open():
-            candidatas.append(self._routines_panel.window)
+            # Incrustado en la ventana principal: se oculta con ella.
+            if isinstance(self._routines_panel.window, tk.Toplevel):
+                candidatas.append(self._routines_panel.window)
         visibles = []
         for ventana in candidatas:
             try:
