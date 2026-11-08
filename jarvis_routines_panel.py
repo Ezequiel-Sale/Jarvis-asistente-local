@@ -11,7 +11,9 @@ from tkinter import messagebox
 
 import jarvis_routines
 from jarvis_routine_form import RoutineForm
-from jarvis_theme import BG, CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET
+from jarvis_theme import (
+    BG, CYAN, ERROR, HOVER, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET,
+)
 from jarvis_tool_registry import ToolError, ToolRegistry
 
 AYUDA = (
@@ -103,11 +105,11 @@ class RoutinesPanel:
 
     # --- Utilidades -------------------------------------------------------------
 
-    def _button(self, parent: tk.Misc, text: str, command, *, fg: str = CYAN,
+    def _button(self, parent: tk.Misc, text: str, command, *, fg: str | None = None,
                 state: str = "normal") -> tk.Button:
         return tk.Button(
-            parent, text=text, command=command, bg=PANEL_LIGHT, fg=fg,
-            activebackground="#1D374B", activeforeground=TEXT, relief="flat",
+            parent, text=text, command=command, bg=PANEL_LIGHT, fg=fg or CYAN,
+            activebackground=HOVER, activeforeground=TEXT, relief="flat",
             padx=10, pady=6, font=("Consolas", 8, "bold"), cursor="hand2",
             state=state, disabledforeground=MUTED,
         )

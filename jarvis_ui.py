@@ -3,8 +3,11 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+import jarvis_theme
 from jarvis_actions import CancellationToken
-from jarvis_theme import (BG, CYAN, CYAN_DARK, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET)
+from jarvis_theme import (
+    ACCENT_ACTIVE, BG, BORDER, BORDER_STRONG, CYAN, CYAN_DARK, ERROR, HOVER, MUTED, ORB_ARC_B, ORB_ARC_C, ORB_ARC_IDLE, ORB_BRIGHT, ORB_BRIGHT_ALT, ORB_CORE, ORB_CORE_LINE, ORB_IDLE, ORB_RING_A, ORB_RING_B, ORB_RING_C, ORB_RING_D, ORB_TICK, PANEL, PANEL_LIGHT, TEXT, VIOLET,
+)
 
 
 class JarvisUIMixin:
@@ -13,10 +16,17 @@ class JarvisUIMixin:
             style.theme_use("clam")
             style.configure(
                 "Jarvis.Vertical.TScrollbar",
-                background=PANEL,
-                troughcolor=BG,
-                bordercolor=BG,
+                background=PANEL_LIGHT,
+                troughcolor=PANEL,
+                bordercolor=PANEL,
+                lightcolor=PANEL_LIGHT,
+                darkcolor=PANEL_LIGHT,
                 arrowcolor=CYAN,
+                gripcount=0,
+            )
+            style.map(
+                "Jarvis.Vertical.TScrollbar",
+                background=[("active", HOVER), ("pressed", HOVER)],
             )
             style.configure(
                 "Jarvis.Horizontal.TProgressbar",
@@ -62,7 +72,7 @@ class JarvisUIMixin:
             self.new_chat_button = self._ui_button(
                 self.header_actions, "＋  NUEVA CONVERSACIÓN", self._new_conversation
             )
-            tk.Frame(content, bg="#1C3446", height=1).grid(row=1, column=0, sticky="ew", padx=28)
+            tk.Frame(content, bg=BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=28)
 
             pages = tk.Frame(content, bg=BG)
             pages.grid(row=2, column=0, sticky="nsew")
@@ -80,10 +90,10 @@ class JarvisUIMixin:
             self._draw_orb()
             self.root.after(40, self._animate_orb)
 
-        def _ui_button(self, parent: tk.Misc, text: str, command, *, fg: str = CYAN) -> tk.Button:
+        def _ui_button(self, parent: tk.Misc, text: str, command, *, fg: str | None = None) -> tk.Button:
             return tk.Button(
-                parent, text=text, command=command, bg=PANEL_LIGHT, fg=fg,
-                activebackground="#1D374B", activeforeground=TEXT, relief="flat",
+                parent, text=text, command=command, bg=PANEL_LIGHT, fg=fg or CYAN,
+                activebackground=HOVER, activeforeground=TEXT, relief="flat",
                 padx=12, pady=8, font=("Consolas", 8, "bold"), cursor="hand2",
             )
 
@@ -92,7 +102,7 @@ class JarvisUIMixin:
             sidebar.grid(row=0, column=0, sticky="ns")
             sidebar.grid_propagate(False)
             sidebar.pack_propagate(False)
-            tk.Frame(self.root, bg="#193246", width=1).grid(row=0, column=0, sticky="nse")
+            tk.Frame(self.root, bg=BORDER, width=1).grid(row=0, column=0, sticky="nse")
 
             marca = tk.Frame(sidebar, bg=PANEL, padx=22, pady=18)
             marca.pack(fill="x")
@@ -112,13 +122,13 @@ class JarvisUIMixin:
                 font=("Consolas", 8, "bold"), wraplength=210, justify="center",
             )
             self.orb_status.pack(fill="x", padx=16, pady=(4, 14))
-            tk.Frame(sidebar, bg="#193246", height=1).pack(fill="x", padx=18, pady=(0, 10))
+            tk.Frame(sidebar, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 10))
 
             self._nav_buttons: dict[str, tk.Button] = {}
             for nombre, texto in (("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"), ("ajustes", "⚙   AJUSTES")):
                 boton = tk.Button(
                     sidebar, text=texto, anchor="w", command=lambda n=nombre: self._show_page(n),
-                    bg=PANEL, fg=MUTED, activebackground="#1D374B", activeforeground=TEXT,
+                    bg=PANEL, fg=MUTED, activebackground=HOVER, activeforeground=TEXT,
                     relief="flat", padx=16, pady=9, font=("Consolas", 10, "bold"), cursor="hand2",
                 )
                 boton.pack(fill="x", padx=12, pady=2)
@@ -148,6 +158,8 @@ class JarvisUIMixin:
                 self.new_chat_button.pack_forget()
             if nombre == "rutinas":
                 self._load_routines_page()
+            if nombre == "ajustes":
+                self._refresh_monitor_map()
 
         def _build_chat_page(self, page: tk.Frame) -> None:
             content = tk.Frame(page, bg=BG, padx=28, pady=16)
@@ -159,7 +171,7 @@ class JarvisUIMixin:
                 content,
                 bg=PANEL,
                 highlightthickness=1,
-                highlightbackground="#193246",
+                highlightbackground=BORDER,
             )
             self.chat_panel.grid(row=0, column=0, sticky="nsew")
             self.chat_panel.grid_rowconfigure(0, weight=1)
@@ -195,7 +207,7 @@ class JarvisUIMixin:
                 padx=14,
                 pady=10,
                 highlightthickness=1,
-                highlightbackground="#193246",
+                highlightbackground=BORDER,
             )
             player.grid(row=1, column=0, sticky="ew", pady=(12, 0))
             player.grid_columnconfigure(1, weight=1)
@@ -242,7 +254,7 @@ class JarvisUIMixin:
                 state="disabled",
                 bg=PANEL_LIGHT,
                 fg=CYAN,
-                activebackground="#1D374B",
+                activebackground=HOVER,
                 activeforeground=TEXT,
                 relief="flat",
                 width=3,
@@ -257,7 +269,7 @@ class JarvisUIMixin:
                 state="disabled",
                 bg=PANEL_LIGHT,
                 fg=ERROR,
-                activebackground="#1D374B",
+                activebackground=HOVER,
                 activeforeground=TEXT,
                 relief="flat",
                 width=3,
@@ -273,7 +285,8 @@ class JarvisUIMixin:
                 composer,
                 bg=PANEL,
                 highlightthickness=1,
-                highlightbackground="#24445A",
+                highlightbackground=BORDER_STRONG,
+                highlightcolor=BORDER_STRONG,
             )
             input_panel.grid(row=0, column=0, sticky="ew")
             input_panel.grid_columnconfigure(0, weight=1)
@@ -285,6 +298,7 @@ class JarvisUIMixin:
                 fg=TEXT,
                 insertbackground=CYAN,
                 selectbackground=CYAN_DARK,
+                highlightthickness=0,
                 relief="flat",
                 padx=14,
                 pady=12,
@@ -302,7 +316,7 @@ class JarvisUIMixin:
                 command=self._cancel_current_operation,
                 bg=PANEL_LIGHT,
                 fg=ERROR,
-                activebackground="#1D374B",
+                activebackground=HOVER,
                 activeforeground=TEXT,
                 relief="flat",
                 padx=14,
@@ -316,7 +330,7 @@ class JarvisUIMixin:
                 command=self._on_orb_click,
                 bg=PANEL_LIGHT,
                 fg=CYAN,
-                activebackground="#1D374B",
+                activebackground=HOVER,
                 activeforeground=TEXT,
                 relief="flat",
                 padx=14,
@@ -331,7 +345,7 @@ class JarvisUIMixin:
                 command=self._send_text,
                 bg=CYAN_DARK,
                 fg=CYAN,
-                activebackground="#1A545B",
+                activebackground=ACCENT_ACTIVE,
                 activeforeground=TEXT,
                 relief="flat",
                 padx=18,
@@ -349,13 +363,41 @@ class JarvisUIMixin:
             ).grid(row=1, column=0, sticky="w", pady=(8, 0))
 
         def _build_settings_page(self, page: tk.Frame) -> None:
-            """Interruptores que antes estaban repartidos por el chat."""
-            cuerpo = tk.Frame(page, bg=BG, padx=28, pady=18)
-            cuerpo.pack(fill="both", expand=True)
+            """Vista de monitores e interruptores; desplazable con la rueda."""
+            lienzo = tk.Canvas(page, bg=BG, highlightthickness=0, bd=0)
+            barra = ttk.Scrollbar(page, orient="vertical", command=lienzo.yview,
+                                  style="Jarvis.Vertical.TScrollbar")
+            lienzo.configure(yscrollcommand=barra.set)
+            barra.pack(side="right", fill="y", padx=(0, 6), pady=8)
+            lienzo.pack(side="left", fill="both", expand=True)
+            cuerpo = tk.Frame(lienzo, bg=BG, padx=28, pady=18)
+            ventana = lienzo.create_window((0, 0), window=cuerpo, anchor="nw")
+            cuerpo.bind("<Configure>", lambda _e: lienzo.configure(scrollregion=lienzo.bbox("all")))
+            lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana, width=e.width))
+            cuerpo.jarvis_scroll = lienzo
+            lienzo.jarvis_scroll = lienzo
+
+            # Vista de monitores: a escala y en su posición real; clic para acciones.
+            mapa_marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
+                                  highlightthickness=1, highlightbackground=BORDER)
+            mapa_marco.pack(fill="x", pady=(0, 10))
+            cabecera = tk.Frame(mapa_marco, bg=PANEL)
+            cabecera.pack(fill="x")
+            tk.Label(cabecera, text="Monitores", bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 11, "bold")).pack(side="left")
+            self._ui_button(cabecera, "⟳  ACTUALIZAR", self._refresh_monitor_map, fg=MUTED).pack(side="right")
+            tk.Label(mapa_marco, text="Clic en una pantalla para desactivarla, extenderla, "
+                     "hacerla principal o arreglar su escalado.", bg=PANEL, fg=MUTED,
+                     font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 8))
+            self.monitor_canvas = tk.Canvas(mapa_marco, bg=PANEL, height=230,
+                                            highlightthickness=0, bd=0)
+            self.monitor_canvas.pack(fill="x")
+            self.monitor_canvas.bind("<Configure>", lambda _e: self._draw_monitor_map())
+            self._monitor_views: list = []
 
             def fila(titulo: str, descripcion: str, atributo: str, texto: str, comando) -> None:
                 marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
-                                 highlightthickness=1, highlightbackground="#193246")
+                                 highlightthickness=1, highlightbackground=BORDER)
                 marco.pack(fill="x", pady=(0, 10))
                 marco.grid_columnconfigure(0, weight=1)
                 tk.Label(marco, text=titulo, bg=PANEL, fg=TEXT,
@@ -377,12 +419,102 @@ class JarvisUIMixin:
                  "Al encender la PC, Jarvis arranca oculto en la bandeja. "
                  "También: «desactiva el inicio con Windows».",
                  "autostart_button", "⏻  INICIO CON WINDOWS …", self._toggle_autostart_button)
+            fila("Arreglar la barra de tareas sola",
+                 "Si tras cambiar monitores la barra de tareas de la TV queda fuera de su sitio, "
+                 "Jarvis baja y sube su escala automáticamente (igual que «arregla el escalado»).",
+                 "taskbar_button", "▭  ARREGLO AUTOMÁTICO …", self._toggle_taskbar_button)
+
+            marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
+                             highlightthickness=1, highlightbackground=BORDER)
+            marco.pack(fill="x", pady=(0, 10))
+            marco.grid_columnconfigure(0, weight=1)
+            tk.Label(marco, text="Tema", bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+            tk.Label(marco, text="Colores de Jarvis. También: «cambia al tema rojo», «pon el modo claro».",
+                     bg=PANEL, fg=MUTED, justify="left", wraplength=620,
+                     font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
+            botones = tk.Frame(marco, bg=PANEL)
+            botones.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
+            self._theme_buttons: dict[str, tk.Button] = {}
+            for nombre, etiqueta in (("cian", "CIAN"), ("mark", "MARK"), ("claro", "CLARO")):
+                boton = self._ui_button(botones, etiqueta, lambda n=nombre: self._set_theme(n), fg=MUTED)
+                boton.configure(width=9)
+                boton.pack(side="left", padx=(6, 0))
+                self._theme_buttons[nombre] = boton
+            self._refresh_theme_buttons()
 
             self.settings_info = tk.Label(
                 cuerpo, text="", bg=BG, fg=MUTED, justify="left", anchor="w",
                 font=("Consolas", 8),
             )
             self.settings_info.pack(fill="x", pady=(14, 0))
+
+        def _draw_monitor_map(self) -> None:
+            lienzo = getattr(self, "monitor_canvas", None)
+            if lienzo is None or not lienzo.winfo_exists():
+                return
+            import jarvis_monitor_view as vista_mod
+
+            lienzo.delete("all")
+            ancho, alto = lienzo.winfo_width(), lienzo.winfo_height()
+            if ancho < 60:
+                return
+            if not self._monitor_views:
+                lienzo.create_text(ancho / 2, alto / 2, text="Sin datos de monitores todavía.",
+                                   fill=MUTED, font=("Segoe UI", 10))
+                return
+            cajas = vista_mod.distribuir(self._monitor_views, ancho, alto)
+            for v in self._monitor_views:
+                if v.numero not in cajas:
+                    continue
+                x0, y0, x1, y1 = cajas[v.numero]
+                etiqueta = f"mon_{v.numero}"
+                lienzo.create_rectangle(
+                    x0, y0, x1, y1, tags=(etiqueta, "monitor"),
+                    fill=PANEL_LIGHT if v.activa else PANEL,
+                    outline=CYAN if v.principal else (BORDER_STRONG if v.activa else MUTED),
+                    width=2 if v.principal else 1, dash=() if v.activa else (4, 3),
+                    activeoutline=CYAN, activewidth=2,
+                )
+                cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                grande = min(28, max(12, (y1 - y0) / 3))
+                lienzo.create_text(cx, cy - grande * 0.55, text=str(v.numero), tags=(etiqueta,),
+                                   fill=CYAN if v.activa else MUTED, font=("Segoe UI", int(grande), "bold"))
+                lienzo.create_text(cx, cy + grande * 0.35, text=v.nombre, tags=(etiqueta,),
+                                   fill=TEXT if v.activa else MUTED, width=max(40, x1 - x0 - 8),
+                                   font=("Segoe UI", 8, "bold"))
+                detalle = vista_mod.describir(v, compacto=(x1 - x0) < 190)
+                lienzo.create_text(cx, cy + grande * 0.35 + 14, text=detalle, tags=(etiqueta,),
+                                   fill=MUTED, font=("Consolas", 7), width=max(40, x1 - x0 - 8),
+                                   justify="center")
+                lienzo.tag_bind(etiqueta, "<Button-1>", lambda e, vv=v: self._monitor_menu(vv, e))
+                lienzo.tag_bind(etiqueta, "<Enter>", lambda _e: lienzo.configure(cursor="hand2"))
+                lienzo.tag_bind(etiqueta, "<Leave>", lambda _e: lienzo.configure(cursor=""))
+
+        def _monitor_menu(self, vista, event) -> None:
+            import jarvis_monitor_view as vista_mod
+
+            menu = tk.Menu(self.root, tearoff=0, bg=PANEL_LIGHT, fg=TEXT, activebackground=HOVER,
+                           activeforeground=CYAN, bd=0, font=("Segoe UI", 10))
+            menu.add_command(label=f"Monitor {vista.numero} · {vista.nombre}", state="disabled")
+            menu.add_separator()
+            for texto, herramienta, argumentos in vista_mod.acciones(vista):
+                menu.add_command(
+                    label=texto,
+                    command=lambda h=herramienta, a=argumentos, t=texto: self._run_monitor_action(h, a, t),
+                )
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        def _refresh_theme_buttons(self) -> None:
+            actual = jarvis_theme.tema_actual()
+            for nombre, boton in getattr(self, "_theme_buttons", {}).items():
+                boton.configure(
+                    bg=CYAN_DARK if nombre == actual else PANEL_LIGHT,
+                    fg=CYAN if nombre == actual else MUTED,
+                )
 
         def _show_chat_window(self) -> None:
             if self._closing:
@@ -421,8 +553,8 @@ class JarvisUIMixin:
             base_radius = min(width, height) * 0.43
             active = self._orb_mode == "listening"
             processing = self._orb_mode == "processing"
-            glow = CYAN if active else VIOLET if processing else "#1F6873"
-            bright = "#8EFFF2" if active else "#D0BCFF" if processing else CYAN
+            glow = CYAN if active else VIOLET if processing else ORB_IDLE
+            bright = ORB_BRIGHT if active else ORB_BRIGHT_ALT if processing else CYAN
 
             pulse = 0.0
             if self._orb_pulse_started:
@@ -436,10 +568,10 @@ class JarvisUIMixin:
             radius = base_radius * scale
 
             for inset, color, line_width in (
-                (0, "#102B38", 1),
-                (0.055, "#173B49", 1),
-                (0.22, "#0E2633", 1),
-                (0.38, "#102A38", 1),
+                (0, ORB_RING_A, 1),
+                (0.055, ORB_RING_B, 1),
+                (0.22, ORB_RING_C, 1),
+                (0.38, ORB_RING_D, 1),
             ):
                 ring_radius = radius * (1 - inset)
                 canvas.create_oval(
@@ -456,7 +588,7 @@ class JarvisUIMixin:
                 angle = math.radians(index * 5 + self._orb_phase * (0.22 if active else 0.04))
                 outer = radius * (0.93 if index % 6 else 0.96)
                 inner = radius * (0.88 if index % 6 else 0.84)
-                color = glow if active and index % 3 == 0 else "#28505D"
+                color = glow if active and index % 3 == 0 else ORB_TICK
                 canvas.create_line(
                     center_x + math.cos(angle) * inner,
                     center_y + math.sin(angle) * inner,
@@ -469,8 +601,8 @@ class JarvisUIMixin:
 
             rings = (
                 (0.78, 64, 34, 1, CYAN),
-                (0.68, 42, 24, -1, "#3CA9B7"),
-                (0.56, 76, 44, 1, VIOLET if processing else "#45D9E8"),
+                (0.68, 42, 24, -1, ORB_ARC_B),
+                (0.56, 76, 44, 1, VIOLET if processing else ORB_ARC_C),
             )
             for ring_index, (ratio, extent, gap, direction, color) in enumerate(rings):
                 ring_radius = radius * ratio
@@ -485,7 +617,7 @@ class JarvisUIMixin:
                         start=start,
                         extent=extent,
                         style=tk.ARC,
-                        outline=color if active or processing else "#34818B",
+                        outline=color if active or processing else ORB_ARC_IDLE,
                         width=3 if ring_index == 0 else 2,
                         tags="orb",
                     )
@@ -496,7 +628,7 @@ class JarvisUIMixin:
                 center_y - core_radius,
                 center_x + core_radius,
                 center_y + core_radius,
-                fill="#0A1B27",
+                fill=ORB_CORE,
                 outline=glow,
                 width=2,
                 tags="orb",
@@ -506,7 +638,7 @@ class JarvisUIMixin:
                 center_y - core_radius * 0.83,
                 center_x + core_radius * 0.83,
                 center_y + core_radius * 0.83,
-                outline="#193B49",
+                outline=ORB_CORE_LINE,
                 width=1,
                 tags="orb",
             )
@@ -633,7 +765,7 @@ class JarvisUIMixin:
                     command=lambda path=audio_path: self._play_audio(path),
                     bg=PANEL,
                     fg=CYAN,
-                    activebackground="#1D374B",
+                    activebackground=HOVER,
                     activeforeground=TEXT,
                     relief="flat",
                     padx=10,

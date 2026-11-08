@@ -766,6 +766,28 @@ _FIX_ESCALADO = re.compile(
 )
 
 
+_PANTALLA_TV = r"(?:la\s+|el\s+)?(?:smart\s+)?(?:tv|tele|televisor|television)"
+_MOVER_VENTANA = re.compile(
+    r"^(?:manda|mandame|mueve|muevelo|movela|pasa|pasame|lleva|llevame|pon|ponme|envia|tira|trae|traeme)\s+"
+    r"(?:a\s+)?(?:(?:el|la|los|las)\s+)?(?:ventanas?\s+(?:de\s+(?:la\s+|el\s+)?)?)?(?P<app>.+?)\s+"
+    r"(?:al|a\s+la|a\s+el|en\s+el|en\s+la|hacia\s+el|hacia\s+la|a|para\s+el|para\s+la)\s+"
+    r"(?:(?P<tv>" + _PANTALLA_TV + r")|(?:monitor|pantalla)\s+(?:numero\s+)?" + _NUM_MONITOR + r")$"
+)
+
+
+def detectar_mover_ventana(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«manda Brave a la TV», «pon Discord en el monitor 2», «trae todo al monitor 1»."""
+    match = _MOVER_VENTANA.fullmatch(_normalizar_consulta(texto))
+    if match is None:
+        return None
+    app = re.sub(r"^(?:ventanas?\s+(?:de\s+)?)", "", match.group("app")).strip()
+    if not app or re.fullmatch(r"(?:el\s+|la\s+)?(?:monitor|pantalla|escritorio)(?:\s+.*)?", app):
+        return None
+    if match.group("tv"):
+        return "move_window", {"app": app, "screen_name": "tv"}
+    return "move_window", {"app": app, "monitor": _numero_monitor(match.group(3))}
+
+
 def detectar_comando_monitores(texto: str) -> tuple[str, dict[str, object]] | None:
     """«desactiva el monitor 3», «extiende el monitor 3», «duplica los monitores 1 y 3»,
     «arregla el escalado del monitor 3»."""
@@ -784,6 +806,8 @@ def detectar_comando_monitores(texto: str) -> tuple[str, dict[str, object]] | No
         return "configure_display", {"action": "disable", "monitor": _numero_monitor(match.group(1))}
     if (match := _EXTEND_MONITOR.fullmatch(consulta)) is not None:
         return "configure_display", {"action": "extend", "monitor": _numero_monitor(match.group(1))}
+    if (movimiento := detectar_mover_ventana(texto)) is not None:
+        return movimiento
     if (match := _DUPLICATE_MONITORS.fullmatch(consulta)) is not None:
         return "configure_display", {
             "action": "duplicate",
@@ -1011,3 +1035,25 @@ def detectar_comando_multimedia(texto: str) -> tuple[str, dict[str, object]] | N
     import jarvis_media
 
     return jarvis_media.detectar_comando(_normalizar_consulta(texto))
+
+
+_NOMBRES_TEMA = {
+    "cian": "cian", "celeste": "cian", "azul": "cian", "oscuro": "cian", "normal": "cian",
+    "original": "cian", "por defecto": "cian",
+    "mark": "mark", "rojo": "mark", "dorado": "mark", "rojo y dorado": "mark",
+    "iron man": "mark", "ironman": "mark",
+    "claro": "claro", "blanco": "claro",
+}
+_TEMA = "(" + "|".join(sorted(map(re.escape, _NOMBRES_TEMA), key=len, reverse=True)) + ")"
+_CAMBIA_TEMA = re.compile(
+    r"^(?:cambia|cambiar|pon|poner|ponme|usa|usar|activa|activar|pasa|pasar|elige)\s+"
+    r"(?:(?:el\s+)?(?:tema|modo|estilo|color(?:es)?)\s+(?:a\s+|al\s+|en\s+)?(?:(?:el\s+)?(?:tema|modo)\s+)?"
+    r"|(?:a|al)\s+(?:(?:el\s+)?(?:tema|modo)\s+)?)" + _TEMA + r"$"
+)
+
+
+def detectar_comando_tema(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«cambia al tema rojo», «pon el modo claro», «usa el tema cian»."""
+    if (match := _CAMBIA_TEMA.fullmatch(_normalizar_consulta(texto))) is not None:
+        return "set_theme", {"theme": _NOMBRES_TEMA[match.group(1)]}
+    return None

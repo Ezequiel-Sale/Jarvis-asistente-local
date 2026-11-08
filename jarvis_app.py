@@ -28,7 +28,10 @@ import jarvis_voz_stream
 import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
+import jarvis_monitor_view
 import jarvis_routines
+import jarvis_windows
+import jarvis_theme
 from jarvis_actions import (
     CancellationToken,
     EstadoAccion,
@@ -60,6 +63,7 @@ from jarvis_commands import (
     detectar_decision_energia,
     detectar_decision_monitores,
     detectar_comando_monitores,
+    detectar_comando_tema,
     detectar_consulta_sistema,
     detectar_borrado_historial,
     detectar_decision_vision,
@@ -88,7 +92,9 @@ from jarvis_system import (
     localizar_ejecutable_juego,
     navegar_en_ventana_brave,
 )
-from jarvis_theme import BG, CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET
+from jarvis_theme import (
+    BG, CYAN, ERROR, HOVER, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET,
+)
 from jarvis_ui import JarvisUIMixin
 from jarvis_player import AudioPlayerMixin
 from jarvis_tool_registry import (
@@ -181,6 +187,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.conversation_id = core.obtener_conversacion_actual()
         historial = core.obtener_historial(self.conversation_id)
 
+        try:
+            jarvis_theme.activar(jarvis_theme.nombre_valido(core.obtener_preferencia(jarvis_theme.PREFERENCIA)))
+        except Exception:
+            logging.exception("No se pudo cargar el tema guardado.")
+        self.root.configure(bg=BG)
         self._configure_styles()
         self._build_layout()
         self.tool_registry = crear_registro_herramientas(
@@ -216,6 +227,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.battery_watcher.start()
         self.reminder_watcher = jarvis_reminders.VigilanteRecordatorios(self.events)
         self.reminder_watcher.start()
+        self._barra_auto = self._barra_auto_preferida()
+        self.taskbar_watcher = jarvis_displays.VigilanteBarras(self.events, lambda: self._barra_auto)
+        self.taskbar_watcher.start()
+        self._refresh_taskbar_button()
         self.wakeword_detector: jarvis_wakeword.DetectorPalabraActivacion | None = None
         if self._wakeword_preferida():
             self._start_wakeword()
@@ -507,6 +522,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             or detectar_comando_multimedia(text)
             or detectar_consulta_sistema(text)
             or detectar_comando_monitores(text)
+            or detectar_comando_tema(text)
             or detectar_comando_energia(text)
             or self.plugins.detectar_comando(text)
         )
@@ -720,6 +736,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 or detectar_comando_multimedia(transcript)
                 or detectar_consulta_sistema(transcript)
                 or detectar_comando_monitores(transcript)
+                or detectar_comando_tema(transcript)
                 or detectar_comando_energia(transcript)
             )
             plugins = getattr(self, "plugins", None)
@@ -1800,7 +1817,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             command=self._toggle_recording,
             bg=PANEL_LIGHT,
             fg=CYAN,
-            activebackground="#1D374B",
+            activebackground=HOVER,
             activeforeground=TEXT,
             relief="flat",
             padx=12,
@@ -1815,7 +1832,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             command=lambda: self._resolve_plan_approval(False),
             bg=PANEL_LIGHT,
             fg=TEXT,
-            activebackground="#1D374B",
+            activebackground=HOVER,
             activeforeground=TEXT,
             relief="flat",
             padx=12,
@@ -2065,6 +2082,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             "assistant",
                             f"Aviso: no activé las integraciones porque {event[1]}",
                         )
+                    elif event[0] == "taskbar_misplaced":
+                        self._on_taskbar_misplaced(event[1])
                     elif event[0] == "display_keep":
                         _, descripcion, reply = event
                         if self._closing:
@@ -2210,6 +2229,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                     if value
                                     else "Audio de Jarvis silenciado."
                                 )
+                            elif action == "set_theme":
+                                result = self._set_theme(value)
                             elif action == "minimize_jarvis":
                                 self._hide_to_tray()
                                 result = "Jarvis se minimizó en la bandeja."
@@ -2369,6 +2390,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         _, _tool_name, response = event
                         self._add_message("assistant", response)
                         self._set_idle()
+                        if _tool_name in ("configure_display", "fix_display_scaling") \
+                                and self._current_page == "ajustes":
+                            self._refresh_monitor_map()
                     elif event[0] == "direct_action_error":
                         _, _tool_name, message = event
                         self._add_message("assistant", message)
@@ -2518,11 +2542,46 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except queue.Empty:
             mantener = False
         if mantener:
+            watcher = getattr(self, "taskbar_watcher", None)
+            if watcher is not None:
+                watcher.despertar()  # tras cambiar monitores, revisar la barra enseguida
             return descripcion
         jarvis_displays.restaurar_configuracion(previa)
         raise RuntimeError(
             "No confirmaste el cambio de monitores, así que restauré la configuración anterior."
         )
+
+    def _tool_move_window(
+        self, app: str, monitor: int | None = None, screen_name: str | None = None
+    ) -> str:
+        numero = monitor
+        if numero is None and screen_name:
+            numero = self._monitor_por_nombre(screen_name)
+        if numero is None:
+            raise ValueError("Indica a qué monitor mover la ventana (número o «la TV»).")
+        destino = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), numero)
+        movidas, total, programas = jarvis_windows.mover_ventanas(app, destino)
+        if movidas == 0:
+            raise RuntimeError(f"No pude mover las ventanas de «{app}» al monitor {numero}.")
+        quien = "todas las ventanas" if jarvis_windows.normalizar(app) in jarvis_windows.TODO else (
+            f"{movidas} ventana{'s' if movidas != 1 else ''} de {', '.join(programas)}"
+        )
+        faltan = f" ({total - movidas} no se pudieron mover)" if movidas < total else ""
+        return f"Moví {quien} al monitor {numero}{faltan}."
+
+    def _monitor_por_nombre(self, nombre: str) -> int:
+        """«tv» → el monitor activo cuyo nombre lo contiene (la «Smart TV Pro»)."""
+        clave = jarvis_windows.normalizar(nombre)
+        if clave in ("tele", "televisor", "television", "smart tv"):
+            clave = "tv"
+        pantallas, _ = jarvis_displays.listar_pantallas(jarvis_displays.cargar_mapa(core.obtener_preferencia))
+        for pantalla in pantallas:
+            if pantalla.numero and clave in jarvis_windows.normalizar(pantalla.nombre).split():
+                return pantalla.numero
+        for pantalla in pantallas:
+            if pantalla.numero and clave in jarvis_windows.normalizar(pantalla.nombre):
+                return pantalla.numero
+        raise ValueError(f"No encontré ningún monitor llamado «{nombre}».")
 
     def _tool_fix_display_scaling(self, monitor: int | None = None) -> str:
         mapa = jarvis_displays.cargar_mapa(core.obtener_preferencia)
@@ -2625,6 +2684,26 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     def _tool_set_output_device(self, device: str) -> str:
         name = cambiar_dispositivo_salida(device)
         return f"Salida de audio cambiada a {name}."
+
+    def _tool_set_theme(self, theme: str) -> str:
+        return self._request_tool_ui_action("set_theme", theme)
+
+    def _set_theme(self, nombre: str) -> str:
+        """Hilo de Tk: cambia los colores de todo sin reiniciar y guarda la elección."""
+        nombre = jarvis_theme.nombre_valido(nombre)
+        mapa = jarvis_theme.activar(nombre)
+        jarvis_theme.recolorear(self.root, mapa)
+        self._configure_styles()
+        self._draw_orb()
+        if self._current_page:
+            self._show_page(self._current_page)
+        self._refresh_theme_buttons()
+        try:
+            core.guardar_preferencia(jarvis_theme.PREFERENCIA, nombre)
+        except Exception:
+            logging.exception("No se pudo guardar el tema.")
+        logging.info("Tema cambiado a %s (%s colores de widgets).", nombre, len(mapa))
+        return f"Tema cambiado a {jarvis_theme.ETIQUETAS[nombre]}."
 
     def _tool_set_jarvis_audio(self, enabled: bool) -> str:
         return self._request_tool_ui_action("set_audio", enabled)
@@ -2790,6 +2869,61 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     _PREFERENCIA_INICIO_WINDOWS = "inicio_windows"
 
+    _PREFERENCIA_BARRA_AUTO = "barra_auto"
+
+    def _barra_auto_preferida(self) -> bool:
+        """Activado salvo que el usuario lo haya desactivado."""
+        try:
+            return core.obtener_preferencia(self._PREFERENCIA_BARRA_AUTO) != "0"
+        except Exception:
+            logging.exception("No se pudo leer la preferencia de la barra de tareas.")
+            return True
+
+    def _refresh_taskbar_button(self) -> None:
+        boton = getattr(self, "taskbar_button", None)
+        if boton is not None:
+            boton.configure(
+                text="▭  ARREGLO AUTOMÁTICO: SÍ" if self._barra_auto else "▭  ARREGLO AUTOMÁTICO: NO",
+                fg=CYAN if self._barra_auto else MUTED,
+            )
+
+    def _toggle_taskbar_button(self) -> None:
+        self._barra_auto = not self._barra_auto
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_BARRA_AUTO, "1" if self._barra_auto else "0")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia de la barra de tareas.")
+        self._refresh_taskbar_button()
+
+    def _refresh_monitor_map(self) -> None:
+        """Lee el estado de los monitores (rápido: API de Windows) y redibuja la vista."""
+        try:
+            self._monitor_views = jarvis_monitor_view.recolectar(
+                jarvis_displays.cargar_mapa(core.obtener_preferencia)
+            )
+        except Exception:
+            logging.exception("No se pudo leer el estado de los monitores para la vista.")
+            self._monitor_views = []
+        self._draw_monitor_map()
+
+    def _run_monitor_action(self, herramienta: str, argumentos: dict, texto: str) -> None:
+        if self.busy or self.recorder is not None or self._pending_plan_reply is not None:
+            self._set_status("ESPERA A QUE TERMINE LA ACCIÓN EN CURSO", MUTED)
+            return
+        self._start_direct_tool_action(herramienta, dict(argumentos), f"Vista de monitores: {texto}")
+
+    def _on_taskbar_misplaced(self, numero: int | None) -> None:
+        """Una barra de tareas quedó fuera de su sitio: se arregla sola, sin preguntar."""
+        if self._closing or self.busy or self.recorder is not None or self._pending_plan_reply is not None:
+            logging.info("Barra de tareas mal, pero Jarvis está ocupado; se reintentará.")
+            return
+        donde = f"del monitor {numero}" if numero else "de un monitor"
+        self._start_direct_tool_action(
+            "fix_display_scaling",
+            {"monitor": numero} if numero else {},
+            f"Arreglo automático: la barra de tareas {donde} se veía fuera de su sitio.",
+        )
+
     def _autostart_preferido(self) -> bool:
         """Activado salvo que el usuario lo haya desactivado."""
         try:
@@ -2948,6 +3082,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "get_system_status": "REVISANDO EL EQUIPO…",
         "configure_display": "CAMBIANDO LA CONFIGURACIÓN DE MONITORES…",
         "fix_display_scaling": "REAJUSTANDO EL ESCALADO…",
+        "set_theme": "CAMBIANDO EL TEMA…",
+        "move_window": "MOVIENDO VENTANAS…",
         "power_control": "ESPERANDO CONFIRMACIÓN…",
         "cancel_power_action": "CANCELANDO EL APAGADO…",
         "lock_computer": "BLOQUEANDO EL EQUIPO…",
@@ -3456,6 +3592,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.headphones_watcher.stop()
         self.battery_watcher.stop()
         self.reminder_watcher.stop()
+        self.taskbar_watcher.stop()
         self._stop_wakeword()
         if self._routines_panel is not None:
             self._routines_panel.close()

@@ -768,3 +768,125 @@ def barras_de_tareas() -> list[tuple[int, int, int, int]]:
         if anterior:
             user32.SetThreadDpiAwarenessContext(anterior)
     return rects
+
+
+def barra_autoocultable() -> bool:
+    """Con la barra que se oculta sola, su posición fuera de pantalla es normal."""
+    class APPBARDATA(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD), ("hWnd", wintypes.HWND), ("uCallbackMessage", wintypes.UINT),
+            ("uEdge", wintypes.UINT), ("rc", wintypes.RECT), ("lParam", wintypes.LPARAM),
+        ]
+
+    datos = APPBARDATA()
+    datos.cbSize = ctypes.sizeof(datos)
+    shell32 = ctypes.WinDLL("shell32")
+    shell32.SHAppBarMessage.restype = ctypes.c_size_t
+    shell32.SHAppBarMessage.argtypes = [wintypes.DWORD, ctypes.POINTER(APPBARDATA)]
+    return bool(shell32.SHAppBarMessage(4, ctypes.byref(datos)) & 1)  # ABM_GETSTATE, ABS_AUTOHIDE
+
+
+def monitor_de_barra_mal(
+    barras: list[tuple[int, int, int, int]],
+    monitores: list[tuple[int, tuple[int, int, int, int]]],
+) -> tuple[bool, int | None]:
+    """(¿hay una barra fuera de su sitio?, número del monitor donde está o None)."""
+    rects = [rect for _numero, rect in monitores]
+    for barra in barras:
+        if barra_bien_ubicada(barra, rects):
+            continue
+        cx, cy = (barra[0] + barra[2]) // 2, (barra[1] + barra[3]) // 2
+        for numero, (l, t, r, b) in monitores:
+            if l <= cx < r and t <= cy < b:
+                return True, numero
+        return True, None
+    return False, None
+
+
+def revisar_barras() -> tuple[bool, int | None]:
+    """Revisa las barras de tareas reales con la numeración fija de los monitores."""
+    import jarvis_vision
+
+    if barra_autoocultable():
+        return False, None
+    monitores = [
+        (m.numero, (m.x, m.y, m.x + m.ancho, m.y + m.alto)) for m in jarvis_vision.listar_monitores()
+    ]
+    return monitor_de_barra_mal(barras_de_tareas(), monitores)
+
+
+class VigilanteBarras:
+    """Hilo que revisa cada ``intervalo`` s si alguna barra de tareas quedó mal.
+
+    Solo avisa (evento ``taskbar_misplaced``) si la barra sigue mal en dos
+    revisiones seguidas —durante un cambio de monitores es normal un instante—
+    y como mucho una vez cada ``pausa`` s, para no entrar en bucle si el
+    arreglo no funciona. ``despertar()`` adelanta la revisión (tras un cambio).
+    """
+
+    def __init__(
+        self,
+        eventos,
+        activo: Callable[[], bool],
+        *,
+        intervalo: float = 10.0,
+        pausa: float = 120.0,
+        revisar: Callable[[], tuple[bool, int | None]] = revisar_barras,
+        reloj: Callable[[], float] | None = None,
+    ) -> None:
+        import threading
+        import time
+
+        self._eventos = eventos
+        self._activo = activo
+        self._intervalo = intervalo
+        self._pausa = pausa
+        self._revisar = revisar
+        self._reloj = reloj or time.monotonic
+        self._parar = threading.Event()
+        self._despertar = threading.Event()
+        self._sospecha = False
+        self._ultimo_aviso = -float("inf")
+        self._hilo = threading.Thread(target=self._bucle, name="JarvisBarrasTareas", daemon=True)
+
+    def start(self) -> None:
+        self._hilo.start()
+
+    def stop(self) -> None:
+        self._parar.set()
+        self._despertar.set()
+
+    def despertar(self) -> None:
+        self._despertar.set()
+
+    def revisar_una_vez(self) -> None:
+        if not self._activo():
+            self._sospecha = False
+            return
+        try:
+            mal, numero = self._revisar()
+        except Exception:
+            logging.debug("No se pudieron revisar las barras de tareas.", exc_info=True)
+            return
+        if not mal:
+            self._sospecha = False
+            return
+        if not self._sospecha:
+            self._sospecha = True  # se confirma en la próxima revisión
+            return
+        if self._reloj() - self._ultimo_aviso < self._pausa:
+            return
+        self._ultimo_aviso = self._reloj()
+        self._sospecha = False
+        logging.info("Barra de tareas fuera de su sitio en el monitor %s.", numero)
+        self._eventos.put(("taskbar_misplaced", numero))
+
+    def _bucle(self) -> None:
+        while not self._parar.is_set():
+            despertado = self._despertar.wait(self._intervalo)
+            if self._parar.is_set():
+                return
+            if despertado:
+                self._despertar.clear()
+                self._parar.wait(4.0)  # que Windows termine de recolocar todo
+            self.revisar_una_vez()

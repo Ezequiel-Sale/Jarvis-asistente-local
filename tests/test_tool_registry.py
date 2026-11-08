@@ -52,6 +52,12 @@ class _TestHost:
     def _tool_fix_display_scaling(self, monitor: int | None = None) -> str:
         return self._record(("scaling", monitor), "scaling fixed")
 
+    def _tool_set_theme(self, theme: str) -> str:
+        return self._record(("theme", theme), "theme changed")
+
+    def _tool_move_window(self, app: str, monitor: int | None = None, screen_name: str | None = None) -> str:
+        return self._record(("move", app, monitor, screen_name), "moved")
+
     def _tool_schedule_routine(
         self,
         name: str,
@@ -72,7 +78,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 28)
+        self.assertEqual(len(tools), 30)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -105,6 +111,8 @@ class ToolRegistryTests(unittest.TestCase):
                 "get_jarvis_diagnostics",
                 "configure_display",
                 "fix_display_scaling",
+                "set_theme",
+                "move_window",
             },
         )
 

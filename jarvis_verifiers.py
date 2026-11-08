@@ -164,7 +164,15 @@ def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
             )
         return Verificacion(False, "el estado del audio de Jarvis no cambió.")
 
+    def verificar_tema(arguments: Mapping[str, object], _result: object) -> Verificacion:
+        import jarvis_theme
+
+        if jarvis_theme.tema_actual() == arguments["theme"]:
+            return Verificacion(True, f"Tema activo: {jarvis_theme.ETIQUETAS[jarvis_theme.tema_actual()]}.")
+        return Verificacion(False, "el tema no cambió.")
+
     return {
+        "set_theme": verificar_tema,
         "set_system_volume": verificar_volumen,
         "set_jarvis_audio": verificar_audio_jarvis,
         "open_new_browser_tab": verificar_ventana_brave,

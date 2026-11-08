@@ -19,6 +19,10 @@ class ToolEventHost(Protocol):
     def _tool_set_system_volume(self, percentage: int) -> str: ...
     def _tool_set_output_device(self, device: str) -> str: ...
     def _tool_set_jarvis_audio(self, enabled: bool) -> str: ...
+    def _tool_set_theme(self, theme: str) -> str: ...
+    def _tool_move_window(
+        self, app: str, monitor: int | None = None, screen_name: str | None = None
+    ) -> str: ...
     def _tool_open_new_browser_tab(self) -> str: ...
     def _tool_navigate_browser(self, url: str) -> str: ...
     def _tool_launch_game(self, name: str) -> str: ...
@@ -103,6 +107,20 @@ def crear_registro_herramientas(
         label="Activar o silenciar el audio de Jarvis",
         timeout_seconds=20,
         verifier=verificadores.get("set_jarvis_audio"),
+    )
+    registry.register(
+        "set_theme",
+        "Cambia el tema visual de Jarvis: cian (el original), mark (rojo y dorado) o claro.",
+        {
+            "type": "object",
+            "properties": {"theme": {"type": "string", "enum": ["cian", "mark", "claro"]}},
+            "required": ["theme"],
+            "additionalProperties": False,
+        },
+        host._tool_set_theme,
+        label="Cambiar el tema",
+        timeout_seconds=20,
+        verifier=verificadores.get("set_theme"),
     )
     registry.register(
         "open_new_browser_tab",
@@ -222,6 +240,29 @@ def crear_registro_herramientas(
         requires_confirmation=True,
         label="Configurar monitores",
         timeout_seconds=60,
+    )
+    registry.register(
+        "move_window",
+        (
+            "Mueve ventanas a otro monitor. app es el programa (brave, discord, spotify…), "
+            "parte del título, «todo» para todas las ventanas o «esta ventana» para la activa. "
+            "Indica monitor (número fijo 1, 2, 3) o screen_name (p. ej. «tv»)."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string"},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+                "screen_name": {"type": "string"},
+            },
+            "required": ["app"],
+            "additionalProperties": False,
+        },
+        host._tool_move_window,
+        argument_validators={"app": _trim_non_empty_text},
+        risk=ToolRisk.MEDIUM,
+        label="Mover ventanas",
+        timeout_seconds=20,
     )
     registry.register(
         "fix_display_scaling",

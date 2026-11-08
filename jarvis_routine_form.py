@@ -19,7 +19,7 @@ from collections.abc import Callable
 from tkinter import filedialog, messagebox, ttk
 
 import jarvis_routines
-from jarvis_theme import BG, CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT
+from jarvis_theme import BG, CYAN, ERROR, HOVER, MUTED, PANEL, PANEL_LIGHT, TEXT
 from jarvis_tool_registry import ToolError, ToolRegistry, ToolRisk
 
 ETIQUETAS_VALOR = {
@@ -227,7 +227,7 @@ class RoutineForm:
         lista = tk.Frame(cuerpo, bg=BG)
         lista.pack(fill="x")
         self.lista = tk.Listbox(
-            lista, height=6, bg=PANEL, fg=TEXT, selectbackground="#1D374B",
+            lista, height=6, bg=PANEL, fg=TEXT, selectbackground=HOVER,
             highlightthickness=0, relief="flat", font=("Segoe UI", 10), activestyle="none",
         )
         self.lista.pack(side="left", fill="x", expand=True)
@@ -291,9 +291,9 @@ class RoutineForm:
             insertbackground=TEXT, relief="flat", font=("Segoe UI", 10),
         )
 
-    def _boton(self, parent: tk.Misc, texto: str, comando, *, fg: str = CYAN, bg: str = PANEL_LIGHT) -> tk.Button:
+    def _boton(self, parent: tk.Misc, texto: str, comando, *, fg: str | None = None, bg: str | None = None) -> tk.Button:
         return tk.Button(
-            parent, text=texto, command=comando, bg=bg, fg=fg, activebackground="#1D374B",
+            parent, text=texto, command=comando, bg=bg or PANEL_LIGHT, fg=fg or CYAN, activebackground=HOVER,
             activeforeground=TEXT, relief="flat", padx=10, pady=5,
             font=("Consolas", 8, "bold"), cursor="hand2",
         )
