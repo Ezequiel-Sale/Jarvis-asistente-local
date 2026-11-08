@@ -1247,6 +1247,17 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             objetivo = jarvis_screen_actions.buscar_por_accesibilidad(
                 monitor, pedido["consulta"], escribir=escribir, excluir_pid=os.getpid()
             )
+            if objetivo is None and pedido.get("monitor") is None:
+                # No dijo en qué monitor: probar en los demás antes de recurrir a la visión.
+                for otro in jarvis_vision.listar_monitores():
+                    if otro.numero == monitor.numero:
+                        continue
+                    objetivo = jarvis_screen_actions.buscar_por_accesibilidad(
+                        otro, pedido["consulta"], escribir=escribir, excluir_pid=os.getpid()
+                    )
+                    if objetivo is not None:
+                        monitor, imagen = otro, jarvis_vision.capturar_monitor(otro)
+                        break
             if objetivo is None:
                 if not self._request_screen_approval("vision", imagen, monitor, None, pedido):
                     terminar(f"No encontré «{pedido['consulta']}» en el monitor {monitor.numero}.")

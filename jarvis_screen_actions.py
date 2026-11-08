@@ -148,10 +148,30 @@ def _dentro(monitor, x: int, y: int) -> bool:
     return monitor.x <= x < monitor.x + monitor.ancho and monitor.y <= y < monitor.y + monitor.alto
 
 
+ESPERA_CHROMIUM = 1.5
+CLASE_CHROMIUM = "Chrome_WidgetWin_1"  # Brave, Chrome, Edge, Discord, VS Code…
+
+
 def buscar_por_accesibilidad(
     monitor, consulta: str, *, escribir: bool = False, excluir_pid: int | None = None
 ) -> Objetivo | None:
-    """Mejor elemento visible del monitor cuyo nombre contiene ``consulta``."""
+    """Mejor elemento visible del monitor cuyo nombre contiene ``consulta``.
+
+    Brave y demás Chromium solo exponen el contenido de la página después de que
+    un cliente de accesibilidad lo pide: la primera búsqueda ve la ventana casi
+    vacía. Si no hay coincidencias y en el monitor hay una ventana Chromium, se
+    espera un momento y se busca otra vez (medido 2026-11-08: 0 % → 100 %).
+    """
+    objetivo, hay_chromium = _buscar_una_vez(monitor, consulta, escribir, excluir_pid)
+    if objetivo is None and hay_chromium:
+        time.sleep(ESPERA_CHROMIUM)
+        objetivo, _ = _buscar_una_vez(monitor, consulta, escribir, excluir_pid)
+    return objetivo
+
+
+def _buscar_una_vez(
+    monitor, consulta: str, escribir: bool, excluir_pid: int | None
+) -> tuple[Objetivo | None, bool]:
     import uiautomation as auto
 
     _per_monitor_dpi()
@@ -160,6 +180,7 @@ def buscar_por_accesibilidad(
     revisados = 0
     mejor_parcial = 0.0  # diagnóstico: no se registra ningún texto
     con_nombre = 0
+    hay_chromium = False
     with auto.UIAutomationInitializerInThread():
         for ventana in auto.GetRootControl().GetChildren():
             try:
@@ -170,6 +191,7 @@ def buscar_por_accesibilidad(
                     continue  # las ventanas de Jarvis (el chat repite lo que pediste)
                 if not _dentro(monitor, (r.left + r.right) // 2, (r.top + r.bottom) // 2):
                     continue
+                hay_chromium = hay_chromium or getattr(ventana, "ClassName", "") == CLASE_CHROMIUM
             except Exception:
                 continue
             for control, _profundidad in auto.WalkControl(ventana, maxDepth=PROFUNDIDAD):
@@ -210,7 +232,7 @@ def buscar_por_accesibilidad(
         monitor.numero, revisados, con_nombre, "encontrado" if mejor else "sin coincidencias",
         len(normalizar(consulta).split()), mejor_parcial * 100,
     )
-    return mejor[1] if mejor else None
+    return (mejor[1] if mejor else None), hay_chromium
 
 
 def interpretar_vision(respuesta: str, monitor, ancho: int, alto: int) -> Objetivo | None:
@@ -428,9 +450,10 @@ def ejecutar_en_pantalla(x: int, y: int, text: str = "") -> str:
 
 _MONITOR = r"(?:\s+(?:en|del|de)\s+(?:el\s+|la\s+)?(?:monitor|pantalla)\s+(?P<n>\d|uno|dos|tres|cuatro))?"
 _NUMEROS = {"uno": 1, "dos": 2, "tres": 3, "cuatro": 4}
+# «analiza el monitor 3 y haz clic…», «en el monitor 3 haz clic…», «en la pantalla 2, pulsa…»
 _PREFIJO = (
-    r"^(?:(?:analiza|mira|revisa)\s+(?:el\s+|la\s+)?(?:monitor|pantalla)\s+"
-    r"(?P<n0>\d|uno|dos|tres|cuatro)\s+y\s+)?"
+    r"^(?:(?:(?:analiza|mira|revisa)\s+|en\s+)(?:el\s+|la\s+)?(?:monitor|pantalla)\s+"
+    r"(?P<n0>\d|uno|dos|tres|cuatro)\s+(?:y\s+)?)?"
 )
 _CLIC = re.compile(
     _PREFIJO

@@ -77,6 +77,13 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(s.puntuar("Pizza casera", "pizza napolitana", "HyperlinkControl", False), 0)
         # «y» no rompe los comandos: el prefijo «analiza el monitor 1 y …» se sigue entendiendo.
         self.assertEqual(s.detectar_comando("analiza el monitor 2 y pulsa aceptar")["monitor"], 2)
+        # El monitor también puede ir al principio (antes pasaba al modelo, que inventaba la respuesta).
+        for frase in ("En el monitor 3 haz clic en donde dice Fui Poli antes.",
+                      "En monitor 3 haz clic en donde dice fui poli antes.",
+                      "en la pantalla 3, pulsa fui poli antes"):
+            with self.subTest(frase=frase):
+                pedido = s.detectar_comando(frase)
+                self.assertEqual((pedido["monitor"], pedido["consulta"]), (3, "fui poli antes"))
 
     def test_typing_needs_editable_and_synonyms(self) -> None:
         self.assertEqual(s.puntuar("Buscar", "buscar", "ButtonControl", True), 0)
@@ -152,6 +159,31 @@ class AccessibilitySearchTests(unittest.TestCase):
         otro = _Control("Mi infancia", "ButtonControl", (-1500, 10, -1300, 40))
         otro_monitor = _Control("Brave", "WindowControl", (-1920, 0, 0, 1080), hijos=[otro])
         self.assertIsNone(self._buscar([jarvis, otro_monitor], "mi infancia", excluir_pid=999))
+
+
+    def test_retries_once_when_chromium_had_not_exposed_the_page(self) -> None:
+        titulo = _Control("Fui poli antes", "HyperlinkControl", (100, 500, 460, 521))
+        ventana = _Control("Brave", "WindowControl", (0, 0, 1920, 1080))
+        ventana.ClassName = s.CLASE_CHROMIUM
+        recorridos = []
+        original = _UIAFalso.WalkControl
+
+        def walk(control, maxDepth):
+            recorridos.append(control)
+            if len(recorridos) == 2:  # la página aparece tras la primera consulta
+                control.hijos = [titulo]
+            return original(control, maxDepth)
+
+        with patch.object(_UIAFalso, "WalkControl", staticmethod(walk)),                 patch.object(s, "ESPERA_CHROMIUM", 0):
+            objetivo = self._buscar([ventana], "fui poli antes")
+        self.assertIsNotNone(objetivo)
+        self.assertEqual(len(recorridos), 2)
+
+    def test_no_retry_without_chromium(self) -> None:
+        ventana = _Control("Bloc de notas", "WindowControl", (0, 0, 1920, 1080))
+        with patch.object(s.time, "sleep") as dormir:
+            self.assertIsNone(self._buscar([ventana], "algo"))
+        dormir.assert_not_called()
 
 
 class VisionParsingTests(unittest.TestCase):

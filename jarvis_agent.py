@@ -155,6 +155,31 @@ class _CompuertaTexto:
         self.destino(trozo)
 
 
+ESPERA_REINTENTO_OLLAMA = 3.0
+
+
+def _post_con_reintento(endpoint: str, payload: dict[str, Any], *, stream: bool) -> requests.Response:
+    """POST a Ollama con un reintento si responde 5xx.
+
+    Con la GPU AMD (ROCm) el motor de Ollama a veces se cae al cargar el modelo
+    («llama-server terminated», 0xc0000409) y esa petición devuelve 500; Ollama
+    lo vuelve a levantar solo, así que un segundo intento suele funcionar. Es
+    seguro reintentar: el error llega antes de que se entregue ningún texto.
+    """
+    for intento in (1, 2):
+        response = requests.post(endpoint, json=payload, timeout=OLLAMA_TIMEOUT, stream=stream)
+        codigo = getattr(response, "status_code", None)
+        if isinstance(codigo, int) and codigo >= 500 and intento == 1:
+            logging.warning("Ollama respondió %s; reintento en %.0f s.", codigo,
+                            ESPERA_REINTENTO_OLLAMA)
+            response.close()
+            time.sleep(ESPERA_REINTENTO_OLLAMA)
+            continue
+        response.raise_for_status()
+        return response
+    raise AssertionError("inalcanzable")
+
+
 def _request_chat(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
@@ -180,10 +205,7 @@ def _request_chat(
         payload["tools"] = tools
     started = time.perf_counter()
     try:
-        response = requests.post(
-            endpoint, json=payload, timeout=OLLAMA_TIMEOUT, stream=on_text is not None
-        )
-        response.raise_for_status()
+        response = _post_con_reintento(endpoint, payload, stream=on_text is not None)
         if on_text is not None:
             return _leer_stream(response, _CompuertaTexto(on_text), started)
     except requests.RequestException as error:
