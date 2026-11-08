@@ -19,7 +19,9 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
+import jarvis_displays
 import jarvis_media
+import jarvis_vision
 import jarvis_reminders
 import jarvis_routines
 from jarvis_actions import Verificacion, Verificador
@@ -28,6 +30,27 @@ from jarvis_system import encontrar_brave, obtener_ventanas_brave
 
 TOLERANCIA_VOLUMEN = 1
 ESPERA_VENTANA_BRAVE = 5.0
+
+
+def verificar_barras_de_tareas(
+    _arguments: Mapping[str, object],
+    _result: object,
+    *,
+    espera: float = 1.5,
+) -> Verificacion:
+    """Tras reajustar el escalado, cada barra de tareas debe quedar pegada a un borde."""
+    time.sleep(espera)  # Explorer recoloca la barra unos instantes después
+    try:
+        monitores = [(m.x, m.y, m.x + m.ancho, m.y + m.alto) for m in jarvis_vision.listar_monitores()]
+        barras = jarvis_displays.barras_de_tareas()
+    except OSError:
+        return Verificacion(None, "No pude leer la posición de las barras de tareas.")
+    if not barras:
+        return Verificacion(None, "No encontré barras de tareas visibles (¿ocultas automáticamente?).")
+    mal = [b for b in barras if not jarvis_displays.barra_bien_ubicada(b, monitores)]
+    if mal:
+        return Verificacion(False, f"{len(mal)} barra(s) de tareas siguen fuera de su sitio.")
+    return Verificacion(True, "Todas las barras de tareas están en su borde.")
 
 
 class VerifierHost(Protocol):
@@ -151,4 +174,5 @@ def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
         "set_reminder": verificar_aviso_guardado,
         "media_control": verificar_reproduccion,
         "set_app_volume": verificar_volumen_app,
+        "fix_display_scaling": verificar_barras_de_tareas,
     }

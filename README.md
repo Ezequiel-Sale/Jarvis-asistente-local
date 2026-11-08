@@ -19,7 +19,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Comandos personalizados** | Desde ⏱ RUTINAS → «+ NUEVA»: elige una frase propia («modo juego») y las acciones (abrir un programa, cambiar la salida, pausar la música, volumen por app, monitores, apagar…); luego basta con decirla |
 | **Rutinas y automatizaciones** | «Programa una rutina llamada Inicio a las 09:00 de lunes a viernes y pon el volumen al 30 %», «apaga el equipo a las 2», «suspende el equipo todos los días a las 23:30», «programa una rutina llamada Noche a las 23:00, pausa la música y bloquea el equipo», «cuando conecte los auriculares, cambia la salida a auriculares automáticamente» (detecta cuando enciendes o apagas el G533, sin quitar el receptor) |
 | **Energía** | «Apaga el equipo», «reinicia la PC», «suspende el equipo», «bloquea la pantalla», «cancela el apagado» |
-| **Monitores** | «Desactiva el monitor 3», «extiende el monitor 3», «duplica los monitores 1 y 3», «pon el monitor 3 como principal» |
+| **Monitores** | «Desactiva el monitor 3», «extiende el monitor 3», «duplica los monitores 1 y 3», «pon el monitor 3 como principal», «arregla el escalado del monitor 3» (si la barra de tareas de la TV se ve mal: baja la escala al 200 % y la vuelve a subir) |
 | **Clic en pantalla** | «Haz clic en el vídeo que dice Me enamoré del monitor 1», «pulsa Aceptar en el monitor 2», «escribe "hola" en el buscador del monitor 3» (siempre muestra dónde va a hacer clic y espera tu «sí») |
 | **Visión de pantalla** | «Mira el monitor 2 y dime qué error sale» (con vista previa y confirmación) |
 | **Integraciones** | Clima (Open-Meteo, sin cuenta) y lectura de archivos de Documentos vía [MCP](https://modelcontextprotocol.io) |

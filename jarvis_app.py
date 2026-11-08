@@ -2524,6 +2524,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             "No confirmaste el cambio de monitores, así que restauré la configuración anterior."
         )
 
+    def _tool_fix_display_scaling(self, monitor: int | None = None) -> str:
+        mapa = jarvis_displays.cargar_mapa(core.obtener_preferencia)
+        return jarvis_displays.arreglar_escalado(monitor, mapa)
+
     def _show_display_keep_dialog(self, descripcion: str, reply: queue.Queue[bool]) -> None:
         """Como Windows: si no se confirma en 15 s, la configuración se revierte."""
         dialog = tk.Toplevel(self.root)
@@ -2943,6 +2947,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "list_top_processes": "MIDIENDO PROCESOS…",
         "get_system_status": "REVISANDO EL EQUIPO…",
         "configure_display": "CAMBIANDO LA CONFIGURACIÓN DE MONITORES…",
+        "fix_display_scaling": "REAJUSTANDO EL ESCALADO…",
         "power_control": "ESPERANDO CONFIRMACIÓN…",
         "cancel_power_action": "CANCELANDO EL APAGADO…",
         "lock_computer": "BLOQUEANDO EL EQUIPO…",

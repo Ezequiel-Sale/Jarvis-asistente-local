@@ -27,6 +27,7 @@ class ToolEventHost(Protocol):
     def _tool_configure_display(
         self, action: str, monitor: int, second_monitor: int | None = None
     ) -> str: ...
+    def _tool_fix_display_scaling(self, monitor: int | None = None) -> str: ...
 
 
 def _trim_non_empty_text(value: object) -> str:
@@ -221,6 +222,24 @@ def crear_registro_herramientas(
         requires_confirmation=True,
         label="Configurar monitores",
         timeout_seconds=60,
+    )
+    registry.register(
+        "fix_display_scaling",
+        (
+            "Arregla la barra de tareas mal dibujada de un monitor con escala alta: baja "
+            "su escala al 200 % y la devuelve a la que tenía. Sin monitor, usa el de "
+            "mayor escala (la Smart TV)."
+        ),
+        {
+            "type": "object",
+            "properties": {"monitor": {"type": "integer", "minimum": 1, "maximum": 9}},
+            "additionalProperties": False,
+        },
+        host._tool_fix_display_scaling,
+        risk=ToolRisk.MEDIUM,
+        label="Arreglar el escalado",
+        timeout_seconds=30,
+        verifier=verificadores.get("fix_display_scaling"),
     )
     _registrar_consultas_sistema(registry)
     _registrar_energia(registry)

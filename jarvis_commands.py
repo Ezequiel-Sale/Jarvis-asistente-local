@@ -757,9 +757,23 @@ def _numero_monitor(valor: str) -> int:
     }[valor]
 
 
+_FIX_ESCALADO = re.compile(
+    r"^(?:arregla|arreglar|arreglame|corrige|corregir|repara|reparar|reajusta|reajustar|"
+    r"resetea|resetear|reinicia|reiniciar|soluciona|solucionar|acomoda|acomodar)\s+"
+    r"(?:el\s+|la\s+)?(?:escalado|escala|barra(?:\s+de\s+tareas)?)"
+    r"(?:\s+(?:del|de\s+la|en\s+el|en\s+la)\s+(?:monitor|pantalla)\s+(?:numero\s+)?"
+    + _NUM_MONITOR + r")?$"
+)
+
+
 def detectar_comando_monitores(texto: str) -> tuple[str, dict[str, object]] | None:
-    """«desactiva el monitor 3», «extiende el monitor 3», «duplica los monitores 1 y 3»."""
+    """«desactiva el monitor 3», «extiende el monitor 3», «duplica los monitores 1 y 3»,
+    «arregla el escalado del monitor 3»."""
     consulta = _normalizar_consulta(texto)
+    if (match := _FIX_ESCALADO.fullmatch(consulta)) is not None:
+        return "fix_display_scaling", (
+            {"monitor": _numero_monitor(match.group(1))} if match.group(1) else {}
+        )
     for patron in _PRIMARY_MONITOR:
         if (match := patron.fullmatch(consulta)) is not None:
             return "configure_display", {

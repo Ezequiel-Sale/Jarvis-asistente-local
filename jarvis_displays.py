@@ -612,3 +612,159 @@ def cargar_mapa(obtener: Callable[[str], str | None]) -> dict[str, int]:
 
 def guardar_mapa(guardar: Callable[[str, str], None], mapa: dict[str, int]) -> None:
     guardar(PREFERENCIA_MAPA, json.dumps(mapa, ensure_ascii=False))
+
+
+# --- Escalado por monitor (arreglo de la barra de tareas) ----------------------------
+#
+# Windows 11 a veces dibuja mal la barra de tareas de un monitor con escala alta
+# (la Smart TV al 300 %) tras cambiar la configuración: queda a media pantalla o
+# cortada. No hay arreglo definitivo conocido; lo que funciona es lo mismo que
+# hacerlo a mano en Configuración > Pantalla: bajar la escala y volver a subirla.
+# La API es la que usa Configuración (DisplayConfig{Get,Set}DeviceInfo con los
+# tipos no documentados -3/-4): la escala va relativa a la recomendada.
+
+ESCALAS = (100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500)
+GET_DPI_SCALE = 0xFFFFFFFD  # DISPLAYCONFIG_DEVICE_INFO_GET_DPI_SCALE (-3)
+SET_DPI_SCALE = 0xFFFFFFFC  # DISPLAYCONFIG_DEVICE_INFO_SET_DPI_SCALE (-4)
+ESCALA_INTERMEDIA = 200
+ESPERA_ESCALADO = 2.0
+
+
+class SOURCE_DPI_SCALE_GET(ctypes.Structure):
+    _fields_ = [
+        ("header", DEVICE_INFO_HEADER),
+        ("minScaleRel", ctypes.c_int32),
+        ("curScaleRel", ctypes.c_int32),
+        ("maxScaleRel", ctypes.c_int32),
+    ]
+
+
+class SOURCE_DPI_SCALE_SET(ctypes.Structure):
+    _fields_ = [("header", DEVICE_INFO_HEADER), ("scaleRel", ctypes.c_int32)]
+
+
+@dataclass(frozen=True)
+class Escala:
+    actual: int
+    recomendada: int
+    posibles: tuple[int, ...]
+
+
+def escala_desde_relativa(minimo: int, actual: int, maximo: int) -> Escala:
+    """Convierte los valores relativos de Windows (índices respecto a la recomendada)."""
+    recomendada = abs(minimo)
+    ultimo = min(len(ESCALAS) - 1, recomendada + maximo)
+    indice = min(max(recomendada + actual, 0), ultimo)
+    return Escala(ESCALAS[indice], ESCALAS[recomendada], ESCALAS[: ultimo + 1])
+
+
+def _cabecera_fuente(estructura, tipo: int, pantalla: Pantalla) -> None:
+    estructura.header.type = tipo
+    estructura.header.size = ctypes.sizeof(estructura)
+    estructura.header.adapterId = LUID(pantalla.adapter[0], pantalla.adapter[1])
+    estructura.header.id = pantalla.source_id
+
+
+def leer_escala(pantalla: Pantalla) -> Escala:
+    if not pantalla.activa or pantalla.source_id is None:
+        raise ErrorPantalla(f"El {pantalla.descripcion} está desactivado.")
+    info = SOURCE_DPI_SCALE_GET()
+    _cabecera_fuente(info, GET_DPI_SCALE, pantalla)
+    if _user32().DisplayConfigGetDeviceInfo(ctypes.byref(info.header)) != ERROR_SUCCESS:
+        raise ErrorPantalla(f"No pude leer la escala del {pantalla.descripcion}.")
+    return escala_desde_relativa(info.minScaleRel, info.curScaleRel, info.maxScaleRel)
+
+
+def poner_escala(pantalla: Pantalla, porcentaje: int, escala: Escala) -> None:
+    if porcentaje not in escala.posibles:
+        raise ErrorPantalla(f"El {pantalla.descripcion} no admite una escala del {porcentaje} %.")
+    info = SOURCE_DPI_SCALE_SET()
+    _cabecera_fuente(info, SET_DPI_SCALE, pantalla)
+    info.scaleRel = ESCALAS.index(porcentaje) - ESCALAS.index(escala.recomendada)
+    user32 = _user32()
+    user32.DisplayConfigSetDeviceInfo.argtypes = [ctypes.POINTER(DEVICE_INFO_HEADER)]
+    user32.DisplayConfigSetDeviceInfo.restype = ctypes.c_long
+    resultado = user32.DisplayConfigSetDeviceInfo(ctypes.byref(info.header))
+    if resultado != ERROR_SUCCESS:
+        raise ErrorPantalla(f"Windows no aceptó la escala del {porcentaje} % (código {resultado}).")
+
+
+def escala_intermedia(escala: Escala) -> int:
+    """200 % (lo que pidió el usuario) o, si ya está ahí, la escala anterior disponible."""
+    if escala.actual != ESCALA_INTERMEDIA and ESCALA_INTERMEDIA in escala.posibles:
+        return ESCALA_INTERMEDIA
+    menores = [e for e in escala.posibles if e < escala.actual]
+    if menores:
+        return menores[-1]
+    mayores = [e for e in escala.posibles if e > escala.actual]
+    if mayores:
+        return mayores[0]
+    raise ErrorPantalla("Ese monitor solo admite una escala; no hay nada que reajustar.")
+
+
+def elegir_monitor_escalado(pantallas: list[Pantalla], numero: int | None, escalas: Callable[[Pantalla], Escala]) -> Pantalla:
+    """El monitor pedido o, sin número, el activo con más escala (la TV)."""
+    if numero is not None:
+        return _buscar(pantallas, numero)
+    activas = [p for p in pantallas if p.activa]
+    if not activas:
+        raise ErrorPantalla("No hay monitores activos.")
+    return max(activas, key=lambda p: (escalas(p).actual, -(p.numero or 0)))
+
+
+def arreglar_escalado(
+    numero: int | None,
+    mapa: dict[str, int] | None = None,
+    *,
+    dormir: Callable[[float], None] | None = None,
+) -> str:
+    """Baja la escala del monitor (a 200 %) y la devuelve a la que tenía."""
+    import time
+
+    pantallas, _ = listar_pantallas(mapa)
+    pantalla = elegir_monitor_escalado(pantallas, numero, leer_escala)
+    escala = leer_escala(pantalla)
+    intermedia = escala_intermedia(escala)
+    poner_escala(pantalla, intermedia, escala)
+    try:
+        (dormir or time.sleep)(ESPERA_ESCALADO)
+    finally:
+        poner_escala(pantalla, escala.actual, escala)  # siempre se vuelve a la original
+    logging.info("Escalado reajustado en el %s: %s %% → %s %%.", pantalla.descripcion, intermedia, escala.actual)
+    return (
+        f"Reajusté el escalado del {pantalla.descripcion}: lo puse al {intermedia} % "
+        f"y lo devolví al {escala.actual} %."
+    )
+
+
+def barra_bien_ubicada(barra: tuple[int, int, int, int], monitores: list[tuple[int, int, int, int]]) -> bool:
+    """La barra (izq, arr, der, abj) está dentro de un monitor y pegada a uno de sus bordes."""
+    l, t, r, b = barra
+    for ml, mt, mr, mb in monitores:
+        if ml - 2 <= l and r <= mr + 2 and mt - 2 <= t and b <= mb + 2:
+            if r - l >= b - t:  # horizontal: abajo o arriba
+                return min(abs(b - mb), abs(t - mt)) <= 2
+            return min(abs(l - ml), abs(r - mr)) <= 2  # vertical: a un lado
+    return False
+
+
+def barras_de_tareas() -> list[tuple[int, int, int, int]]:
+    """Rectángulos físicos de las barras de tareas (principal y secundarias)."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.FindWindowExW.restype = wintypes.HWND
+    user32.FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    anterior = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    rects = []
+    try:
+        for clase in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+            hwnd = None
+            while hwnd := user32.FindWindowExW(None, hwnd, clase, None):
+                rect = wintypes.RECT()
+                if user32.IsWindowVisible(hwnd) and user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    rects.append((rect.left, rect.top, rect.right, rect.bottom))
+    finally:
+        if anterior:
+            user32.SetThreadDpiAwarenessContext(anterior)
+    return rects

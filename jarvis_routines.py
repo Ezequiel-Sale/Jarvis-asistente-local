@@ -66,6 +66,7 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "cancel_power_action",
         "open_program",
         "configure_display",
+        "fix_display_scaling",
         "set_reminder",
         "get_current_datetime",
         "get_headset_battery",
