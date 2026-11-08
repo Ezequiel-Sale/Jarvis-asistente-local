@@ -1057,3 +1057,25 @@ def detectar_comando_tema(texto: str) -> tuple[str, dict[str, object]] | None:
     if (match := _CAMBIA_TEMA.fullmatch(_normalizar_consulta(texto))) is not None:
         return "set_theme", {"theme": _NOMBRES_TEMA[match.group(1)]}
     return None
+
+
+_COMPACTO_ON = re.compile(
+    r"^(?:(?:activa|activar|pon|ponte|ponme|pasa|pasate|cambia|cambiate|usa)\s+(?:a(?:l)?\s+|en\s+)?)?"
+    r"(?:el\s+)?modo\s+(?:compacto|mini|minimo|pequeno)$"
+    r"|^(?:hazte|ponte)\s+(?:pequeno|chiquito|compacto)$"
+)
+_COMPACTO_OFF = re.compile(
+    r"^(?:(?:quita|quitar|desactiva|desactivar|sal|salir)\s+(?:del?\s+)?(?:el\s+)?modo\s+(?:compacto|mini)"
+    r"|(?:vuelve|volve|pasa|cambia)\s+(?:a(?:l)?\s+)?(?:la\s+)?(?:ventana|modo)\s+(?:completa|completo|normal|grande)"
+    r"|(?:abre|muestra)\s+(?:la\s+)?ventana\s+(?:completa|grande))$"
+)
+
+
+def detectar_comando_compacto(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«modo compacto», «ponte en modo mini» / «vuelve a la ventana completa»."""
+    consulta = _normalizar_consulta(texto)
+    if _COMPACTO_ON.fullmatch(consulta):
+        return "set_compact_mode", {"enabled": True}
+    if _COMPACTO_OFF.fullmatch(consulta):
+        return "set_compact_mode", {"enabled": False}
+    return None

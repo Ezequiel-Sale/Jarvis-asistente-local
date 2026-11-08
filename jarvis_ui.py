@@ -72,6 +72,8 @@ class JarvisUIMixin:
             self.new_chat_button = self._ui_button(
                 self.header_actions, "＋  NUEVA CONVERSACIÓN", self._new_conversation
             )
+            self.compact_button = self._ui_button(self.header_actions, "▣  COMPACTO", self._enter_compact_mode)
+            self.compact_button.pack(side="right", padx=(8, 0))
             tk.Frame(content, bg=BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=28)
 
             pages = tk.Frame(content, bg=BG)
@@ -426,6 +428,10 @@ class JarvisUIMixin:
                  "Si tras cambiar monitores la barra de tareas de la TV queda fuera de su sitio, "
                  "Jarvis baja y sube su escala automáticamente (igual que «arregla el escalado»).",
                  "taskbar_button", "▭  ARREGLO AUTOMÁTICO …", self._toggle_taskbar_button)
+            fila("Aviso flotante",
+                 "Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la "
+                 "respuesta, y las confirmaciones con SÍ / NO, sin quitarte el foco.",
+                 "floating_button", "▤  AVISO FLOTANTE …", self._toggle_floating)
             fila("Animaciones",
                  "Los mensajes, tarjetas y secciones aparecen con un fundido corto.",
                  "animations_button", "✦  ANIMACIONES …", self._toggle_animations)
@@ -545,9 +551,14 @@ class JarvisUIMixin:
             self.root.after(40, self._animate_orb)
 
         def _draw_orb(self, _event=None) -> None:
-            if not hasattr(self, "orb_canvas") or not self.orb_canvas.winfo_exists():
-                return
-            canvas = self.orb_canvas
+            for lienzo in (getattr(self, "orb_canvas", None), getattr(self, "compact_canvas", None)):
+                try:
+                    if lienzo is not None and lienzo.winfo_exists() and lienzo.winfo_ismapped():
+                        self._draw_orb_on(lienzo)
+                except tk.TclError:
+                    continue
+
+        def _draw_orb_on(self, canvas: tk.Canvas) -> None:
             width = canvas.winfo_width()
             height = canvas.winfo_height()
             if width < 40 or height < 40:
@@ -687,7 +698,41 @@ class JarvisUIMixin:
                     text="PULSA EL NÚCLEO O F9 PARA HABLAR",
                     fg=MUTED,
                 )
+            estado_compacto = getattr(self, "compact_status", None)
+            if estado_compacto is not None and estado_compacto.winfo_exists():
+                estado_compacto.configure(
+                    text={"listening": "TE ESCUCHO…", "processing": "PROCESANDO…"}.get(self._orb_mode, "LISTO"),
+                    fg={"listening": CYAN, "processing": VIOLET}.get(self._orb_mode, MUTED),
+                )
+            if self._orb_mode != getattr(self, "_floating_mode", "idle"):
+                self._floating_mode = self._orb_mode
+                if self._floating_active():
+                    self.floating.estado(
+                        {"listening": "TE ESCUCHO…", "processing": "PROCESANDO…"}.get(self._orb_mode, "")
+                    )
             self._draw_orb()
+
+        # --- Aviso flotante -------------------------------------------------------
+
+        def _floating_active(self) -> bool:
+            """El aviso se usa cuando la ventana principal no está a la vista."""
+            aviso = getattr(self, "floating", None)
+            if aviso is None or not getattr(self, "_floating_enabled", True):
+                return False
+            try:
+                return self.root.state() in ("withdrawn", "iconic")
+            except tk.TclError:
+                return False
+
+        def _notify_floating(self, role: str, text: str) -> None:
+            if not self._floating_active():
+                return
+            if role == "user":
+                self.floating.usuario(text)
+            else:
+                import jarvis_markdown
+
+                self.floating.respuesta(jarvis_markdown.texto_plano(text))
 
         def _update_scroll_region(self, event) -> None:
             self.chat_canvas.configure(scrollregion=event.widget.master.bbox("all"))
@@ -784,6 +829,7 @@ class JarvisUIMixin:
                 ).pack(anchor="w", pady=(8, 0))
 
             self._fade_in(row)
+            self._notify_floating(role, text)
             if should_follow:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
 
@@ -885,11 +931,16 @@ class JarvisUIMixin:
                     hijo.destroy()
                 self._rich_text(cuerpo, texto, PANEL).pack(anchor="w", pady=(6, 0))
                 self._fade_in(cuerpo)
+                self._notify_floating("assistant", texto)
                 if self._chat_following:
                     self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
 
             tarjeta.jarvis_poner_cuerpo = poner_cuerpo
             self._fade_in(fila)
+            if resultado.origen != "directo":  # la respuesta de los directos llega con poner_cuerpo
+                self._notify_floating(
+                    "assistant", f"{jarvis_cards.icono(resultado.herramienta)} {resultado.etiqueta}: {texto_estado}"
+                )
             if should_follow:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
             return tarjeta
@@ -907,6 +958,8 @@ class JarvisUIMixin:
             voz: bool = True,
             al_aprobar=None,
             al_rechazar=None,
+            resumen: str | None = None,
+            necesita_ventana: bool = False,
         ) -> tuple[tk.Frame, tk.Frame]:
             """Confirmación como tarjeta dentro del chat (antes eran ventanas aparte).
 
@@ -917,7 +970,12 @@ class JarvisUIMixin:
             """
             aprobar_cb = al_aprobar or (lambda: self._resolve_plan_approval(True))
             rechazar_cb = al_rechazar or (lambda: self._resolve_plan_approval(False))
-            self._bring_chat_forward()
+            en_aviso = self._floating_active() and not necesita_ventana
+            if en_aviso:
+                # En la bandeja: la pregunta va al aviso flotante y no se roba el foco.
+                self.floating.pregunta(resumen or titulo.capitalize(), aprobar_cb, rechazar_cb)
+            else:
+                self._bring_chat_forward()
             fila = tk.Frame(self.messages, bg=PANEL)
             fila.pack(fill="x", padx=14, pady=8)
             tarjeta = tk.Frame(fila, bg=PANEL_LIGHT, highlightthickness=1, highlightbackground=color,
@@ -955,6 +1013,9 @@ class JarvisUIMixin:
             self._plan_reject_button.pack(side="left")
 
             def resolver(aprobado: bool, texto: str | None = None) -> None:
+                aviso = getattr(self, "floating", None)
+                if aviso is not None:
+                    aviso.quitar_pregunta(texto or (f"✓ {aprobar}" if aprobado else f"✕ {rechazar}"))
                 if not tarjeta.winfo_exists():
                     return
                 for hijo in pie.winfo_children():
@@ -973,6 +1034,76 @@ class JarvisUIMixin:
             tarjeta.after_idle(tarjeta.focus_set)
             self.chat_canvas.after_idle(self._force_scroll_bottom)
             return tarjeta, cuerpo
+
+        def _enter_compact_mode(self) -> None:
+            """Ventanita con el orbe, siempre encima, en lugar de la ventana completa."""
+            if getattr(self, "compact_window", None) is not None and self.compact_window.winfo_exists():
+                self.compact_window.lift()
+                return
+            ventana = tk.Toplevel(self.root)
+            ventana.overrideredirect(True)
+            ventana.attributes("-topmost", True)
+            ventana.configure(bg=BORDER)
+            marco = tk.Frame(ventana, bg=PANEL)
+            marco.pack(fill="both", expand=True, padx=1, pady=1)
+            barra = tk.Frame(marco, bg=PANEL, cursor="fleur")
+            barra.pack(fill="x", padx=6, pady=(4, 0))
+            titulo = tk.Label(barra, text="J.A.R.V.I.S.", bg=PANEL, fg=CYAN, font=("Consolas", 8, "bold"),
+                              cursor="fleur")
+            titulo.pack(side="left")
+            for texto, comando in (("✕", self._exit_compact_to_tray), ("⤢", self._exit_compact_mode)):
+                boton = tk.Label(barra, text=texto, bg=PANEL, fg=MUTED, font=("Segoe UI", 10), cursor="hand2")
+                boton.pack(side="right", padx=(6, 0))
+                boton.bind("<Button-1>", lambda _e, c=comando: c())
+            self.compact_canvas = tk.Canvas(marco, width=150, height=150, bg=PANEL, highlightthickness=0,
+                                            bd=0, cursor="hand2")
+            self.compact_canvas.pack(padx=8)
+            self.compact_canvas.bind("<Button-1>", self._on_orb_click)
+            self.compact_canvas.bind("<Double-Button-1>", lambda _e: self._exit_compact_mode())
+            self.compact_status = tk.Label(marco, text="LISTO", bg=PANEL, fg=MUTED,
+                                           font=("Consolas", 8, "bold"), cursor="fleur")
+            self.compact_status.pack(pady=(0, 8))
+            # Arrastrar desde la barra o el estado.
+            inicio = {"x": 0, "y": 0}
+
+            def agarrar(e) -> None:
+                inicio["x"], inicio["y"] = e.x_root - ventana.winfo_x(), e.y_root - ventana.winfo_y()
+
+            def mover(e) -> None:
+                ventana.geometry(f"+{e.x_root - inicio['x']}+{e.y_root - inicio['y']}")
+
+            def soltar(_e) -> None:
+                self._save_compact_position(ventana.winfo_x(), ventana.winfo_y())
+
+            for widget in (barra, titulo, self.compact_status):
+                widget.bind("<Button-1>", agarrar)
+                widget.bind("<B1-Motion>", mover)
+                widget.bind("<ButtonRelease-1>", soltar)
+            ventana.update_idletasks()
+            x, y = self._compact_position(ventana.winfo_reqwidth(), ventana.winfo_reqheight())
+            ventana.geometry(f"+{x}+{y}")
+            self.compact_window = ventana
+            self.root.withdraw()
+            ventana.after(60, self._update_orb_mode)
+
+        def _exit_compact_mode(self) -> None:
+            self._close_compact_window()
+            self._show_from_tray()
+
+        def _exit_compact_to_tray(self) -> None:
+            self._close_compact_window()
+
+        def _close_compact_window(self) -> None:
+            ventana = getattr(self, "compact_window", None)
+            self.compact_window = None
+            self.compact_canvas = None
+            self.compact_status = None
+            if ventana is not None and ventana.winfo_exists():
+                ventana.destroy()
+
+        def _compact_mode_active(self) -> bool:
+            ventana = getattr(self, "compact_window", None)
+            return bool(ventana is not None and ventana.winfo_exists())
 
         def _bring_chat_forward(self) -> None:
             """Muestra la ventana en el chat para que se vea la confirmación."""

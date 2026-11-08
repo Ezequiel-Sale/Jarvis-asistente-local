@@ -20,6 +20,7 @@ class ToolEventHost(Protocol):
     def _tool_set_output_device(self, device: str) -> str: ...
     def _tool_set_jarvis_audio(self, enabled: bool) -> str: ...
     def _tool_set_theme(self, theme: str) -> str: ...
+    def _tool_set_compact_mode(self, enabled: bool) -> str: ...
     def _tool_move_window(
         self, app: str, monitor: int | None = None, screen_name: str | None = None
     ) -> str: ...
@@ -107,6 +108,19 @@ def crear_registro_herramientas(
         label="Activar o silenciar el audio de Jarvis",
         timeout_seconds=20,
         verifier=verificadores.get("set_jarvis_audio"),
+    )
+    registry.register(
+        "set_compact_mode",
+        "Activa (enabled=true) o quita el modo compacto de Jarvis: una ventanita con el orbe siempre encima.",
+        {
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"],
+            "additionalProperties": False,
+        },
+        host._tool_set_compact_mode,
+        label="Cambiar a modo compacto",
+        timeout_seconds=20,
     )
     registry.register(
         "set_theme",

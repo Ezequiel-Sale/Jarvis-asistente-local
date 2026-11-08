@@ -29,6 +29,7 @@ import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
 import jarvis_monitor_view
+import jarvis_floating
 import jarvis_routines
 import jarvis_windows
 import jarvis_theme
@@ -64,6 +65,7 @@ from jarvis_commands import (
     detectar_decision_monitores,
     detectar_comando_monitores,
     detectar_comando_tema,
+    detectar_comando_compacto,
     detectar_consulta_sistema,
     detectar_borrado_historial,
     detectar_decision_vision,
@@ -175,6 +177,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     self._request_tray_autostart,
                     checked=lambda _item: self._autostart_wanted,
                 ),
+                pystray.MenuItem("Modo compacto", self._request_tray_compact),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Salir de Jarvis", self._request_tray_exit),
             ),
@@ -197,9 +200,16 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._animations = core.obtener_preferencia(self._PREFERENCIA_ANIMACIONES) != "0"
         except Exception:
             self._animations = True
+        try:
+            self._floating_enabled = core.obtener_preferencia(self._PREFERENCIA_AVISO) != "0"
+        except Exception:
+            self._floating_enabled = True
         self._configure_styles()
         self._build_layout()
         self._refresh_animations_button()
+        self.floating = jarvis_floating.AvisoFlotante(self.root, self._show_from_tray)
+        self.compact_window = None
+        self._refresh_floating_button()
         self.tool_registry = crear_registro_herramientas(
             self,
             recorder=self._record_action,
@@ -288,6 +298,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     def _request_tray_exit(self, _icon, _item) -> None:
         self.events.put(("tray_exit",))
 
+    def _request_tray_compact(self, _icon, _item) -> None:
+        self.events.put(("compact_toggle",))
+
     # Jarvis corre como administrador y no se puede cerrar desde fuera sin
     # elevar. Para instalar una versión nueva basta con crear este archivo en
     # su carpeta: Jarvis lo borra y se cierra limpiamente (como «Salir»).
@@ -330,6 +343,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     def _show_from_tray(self) -> None:
         if self._closing:
             return
+        aviso = getattr(self, "floating", None)
+        if aviso is not None:
+            aviso.ocultar()
+        if getattr(self, "compact_window", None) is not None:
+            self._close_compact_window()
         self.root.deiconify()
         if self.root.state() == "iconic":
             self.root.state("normal")
@@ -529,6 +547,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             or detectar_consulta_sistema(text)
             or detectar_comando_monitores(text)
             or detectar_comando_tema(text)
+            or detectar_comando_compacto(text)
             or detectar_comando_energia(text)
             or self.plugins.detectar_comando(text)
         )
@@ -743,6 +762,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 or detectar_consulta_sistema(transcript)
                 or detectar_comando_monitores(transcript)
                 or detectar_comando_tema(transcript)
+                or detectar_comando_compacto(transcript)
                 or detectar_comando_energia(transcript)
             )
             plugins = getattr(self, "plugins", None)
@@ -1334,6 +1354,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tarjeta, cuerpo = self._confirmation_card(
             titulo=titulo, color=CYAN, aprobar=aprobar, rechazar="NO",
             pista="Di «sí» o «no», sin «Hey Jarvis». ENTER confirma · ESC cancela.",
+            necesita_ventana=True,
         )
         self._plan_dialog = tarjeta
         tk.Label(cuerpo, text=detalle, bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10),
@@ -1698,6 +1719,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         is_routine_save = kind == "routine_save"
         tarjeta, cuerpo = self._confirmation_card(
             titulo="J.A.R.V.I.S. PROPONE GUARDAR UNA RUTINA" if is_routine_save else "J.A.R.V.I.S. PROPONE UN PLAN",
+            resumen=(f"¿Guardo la rutina? {goal}" if is_routine_save else f"¿Ejecuto este plan? {goal}"),
             color=CYAN,
             aprobar="GUARDAR RUTINA" if is_routine_save else "EJECUTAR PLAN",
             rechazar="NO GUARDAR" if is_routine_save else "NO EJECUTAR",
@@ -1773,6 +1795,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tarjeta, cuerpo = self._confirmation_card(
             titulo=f"RUTINA «{routine_name.upper()}»", color=ERROR,
             aprobar="HACERLO YA", rechazar="CANCELAR", aprobar_bg=PANEL, aprobar_fg=ERROR,
+            resumen=f"Rutina «{routine_name}»: {jarvis_power.describir_cuenta_atras(action, restante['s'])}",
             pista="Di «cancela» o pulsa CANCELAR. ESC cancela · ENTER lo hace ya.",
             al_aprobar=lambda: self._resolve_plan_approval(True),
             al_rechazar=lambda: self._resolve_plan_approval(False),
@@ -1841,7 +1864,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         pregunta = jarvis_power.PREGUNTAS_CONFIRMACION.get(action, "¿Confirmas la acción?")
         tarjeta, cuerpo = self._confirmation_card(
             titulo="CONFIRMAR", color=ERROR, aprobar="SÍ", rechazar="NO",
-            aprobar_bg=ERROR, aprobar_fg=BG,
+            aprobar_bg=ERROR, aprobar_fg=BG, resumen=pregunta,
             pista="Di «sí» o «no», sin «Hey Jarvis». ENTER confirma · ESC cancela.",
         )
         self._plan_dialog = tarjeta
@@ -1928,6 +1951,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             "assistant",
                             f"Aviso: no activé las integraciones porque {event[1]}",
                         )
+                    elif event[0] == "compact_toggle":
+                        if self._compact_mode_active():
+                            self._exit_compact_mode()
+                        else:
+                            self._enter_compact_mode()
                     elif event[0] == "taskbar_misplaced":
                         self._on_taskbar_misplaced(event[1])
                     elif event[0] == "display_keep":
@@ -2075,6 +2103,13 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                     if value
                                     else "Audio de Jarvis silenciado."
                                 )
+                            elif action == "set_compact":
+                                if value:
+                                    self._enter_compact_mode()
+                                    result = "Modo compacto activado. Toca el orbe para hablarme."
+                                else:
+                                    self._exit_compact_mode()
+                                    result = "Volví a la ventana completa."
                             elif action == "set_theme":
                                 result = self._set_theme(value)
                             elif action == "minimize_jarvis":
@@ -2476,6 +2511,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tarjeta, cuerpo = self._confirmation_card(
             titulo="¿MANTENER ESTA CONFIGURACIÓN DE PANTALLAS?", color=CYAN,
             aprobar="MANTENER", rechazar="REVERTIR", voz=False,
+            resumen=f"¿Mantengo esta configuración? {descripcion}",
             pista=("Di «sí» o «no» · " if por_voz else "") + "ENTER mantiene · ESC revierte.",
             al_aprobar=lambda: responder(True), al_rechazar=lambda: responder(False),
         )
@@ -2717,6 +2753,49 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     _PREFERENCIA_INICIO_WINDOWS = "inicio_windows"
 
+    _PREFERENCIA_AVISO = "aviso_flotante"
+    _PREFERENCIA_COMPACTO = "compacto_pos"
+
+    def _refresh_floating_button(self) -> None:
+        boton = getattr(self, "floating_button", None)
+        if boton is not None:
+            boton.configure(
+                text="▤  AVISO FLOTANTE: SÍ" if self._floating_enabled else "▤  AVISO FLOTANTE: NO",
+                fg=CYAN if self._floating_enabled else MUTED,
+            )
+
+    def _toggle_floating(self) -> None:
+        self._floating_enabled = not self._floating_enabled
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_AVISO, "1" if self._floating_enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia del aviso flotante.")
+        if not self._floating_enabled:
+            self.floating.ocultar()
+        self._refresh_floating_button()
+
+    def _compact_position(self, ancho: int, alto: int) -> tuple[int, int]:
+        """Posición guardada del modo compacto o, la primera vez, arriba a la derecha."""
+        try:
+            x, y = (int(v) for v in (core.obtener_preferencia(self._PREFERENCIA_COMPACTO) or "").split(","))
+            if -10000 < x < 10000 and -10000 < y < 10000:
+                return x, y
+        except (ValueError, TypeError):
+            pass
+        except Exception:
+            logging.exception("No se pudo leer la posición del modo compacto.")
+        izq, arr, der, _abj = jarvis_floating.area_de_trabajo(self.root)
+        return der - ancho - 24, arr + 24
+
+    def _save_compact_position(self, x: int, y: int) -> None:
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_COMPACTO, f"{x},{y}")
+        except Exception:
+            logging.exception("No se pudo guardar la posición del modo compacto.")
+
+    def _tool_set_compact_mode(self, enabled: bool) -> str:
+        return self._request_tool_ui_action("set_compact", enabled)
+
     _PREFERENCIA_ANIMACIONES = "animaciones"
 
     def _refresh_animations_button(self) -> None:
@@ -2950,6 +3029,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "configure_display": "CAMBIANDO LA CONFIGURACIÓN DE MONITORES…",
         "fix_display_scaling": "REAJUSTANDO EL ESCALADO…",
         "set_theme": "CAMBIANDO EL TEMA…",
+        "set_compact_mode": "CAMBIANDO EL MODO DE VENTANA…",
         "move_window": "MOVIENDO VENTANAS…",
         "power_control": "ESPERANDO CONFIRMACIÓN…",
         "cancel_power_action": "CANCELANDO EL APAGADO…",
@@ -3269,6 +3349,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tarjeta, container = self._confirmation_card(
             titulo="¿ANALIZO ESTA CAPTURA?", color=CYAN, aprobar="🔍  ANALIZAR", rechazar="CANCELAR",
             pista="Di «analizar» o «cancelar», sin «Hey Jarvis». ENTER analiza · ESC cancela.",
+            necesita_ventana=True,
         )
         self._plan_dialog = tarjeta
         info = tk.Label(container, bg=PANEL_LIGHT, fg=MUTED, font=("Consolas", 8), justify="left")
@@ -3424,6 +3505,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             return
         self._closing = True
         self._resolve_plan_approval(False)
+        self._close_compact_window()
+        aviso = getattr(self, "floating", None)
+        if aviso is not None:
+            aviso.destruir()
         self._set_status("DETENIENDO SERVICIOS DOCKER…", CYAN)
         self.global_hotkey_listener.stop()
         self.global_hotkey_listener.join(timeout=1)
