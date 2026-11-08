@@ -147,7 +147,10 @@ class JarvisUIMixin:
                 return
             self._pages[nombre].tkraise()
             self._current_page = nombre
-            self.page_title.configure(text=self._PAGE_TITLES[nombre])
+            cambia = getattr(self, "_current_page", "") != nombre
+            self.page_title.configure(text=self._PAGE_TITLES[nombre], fg=CYAN)
+            if cambia:
+                self._fade_in(self.page_title)
             for clave, boton in self._nav_buttons.items():
                 activo = clave == nombre
                 boton.configure(bg=PANEL_LIGHT if activo else PANEL, fg=CYAN if activo else MUTED)
@@ -423,6 +426,9 @@ class JarvisUIMixin:
                  "Si tras cambiar monitores la barra de tareas de la TV queda fuera de su sitio, "
                  "Jarvis baja y sube su escala automáticamente (igual que «arregla el escalado»).",
                  "taskbar_button", "▭  ARREGLO AUTOMÁTICO …", self._toggle_taskbar_button)
+            fila("Animaciones",
+                 "Los mensajes, tarjetas y secciones aparecen con un fundido corto.",
+                 "animations_button", "✦  ANIMACIONES …", self._toggle_animations)
 
             marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
                              highlightthickness=1, highlightbackground=BORDER)
@@ -747,16 +753,19 @@ class JarvisUIMixin:
                 fg=CYAN if is_user else VIOLET,
                 font=("Consolas", 8, "bold"),
             ).pack(anchor="w", pady=(0, 5))
-            tk.Label(
-                bubble,
-                text=text,
-                bg=CYAN_DARK if is_user else PANEL_LIGHT,
-                fg=TEXT,
-                justify="left",
-                anchor="w",
-                wraplength=650,
-                font=("Segoe UI", 11),
-            ).pack(anchor="w")
+            if is_user:
+                tk.Label(
+                    bubble,
+                    text=text,
+                    bg=CYAN_DARK,
+                    fg=TEXT,
+                    justify="left",
+                    anchor="w",
+                    wraplength=650,
+                    font=("Segoe UI", 11),
+                ).pack(anchor="w")
+            else:
+                self._rich_text(bubble, text, PANEL_LIGHT).pack(anchor="w")
 
             if audio_path:
                 tk.Button(
@@ -774,8 +783,279 @@ class JarvisUIMixin:
                     cursor="hand2",
                 ).pack(anchor="w", pady=(8, 0))
 
+            self._fade_in(row)
             if should_follow:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
+
+        # --- Animaciones suaves --------------------------------------------------
+
+        _ANIM_PASOS = 6
+        _ANIM_MS = 25  # 6 × 25 ms ≈ 150 ms: se nota sin hacer esperar
+
+        def _animations_enabled(self) -> bool:
+            return getattr(self, "_animations", True)
+
+        def _fade_in(self, raiz: tk.Misc) -> None:
+            """El texto aparece fundiéndose desde el color de su fondo."""
+            if not self._animations_enabled():
+                return
+            objetivos = []
+            pendientes = [raiz]
+            while pendientes:
+                w = pendientes.pop()
+                pendientes.extend(w.winfo_children())
+                if isinstance(w, (tk.Label, tk.Text)):
+                    try:
+                        fg, bg = str(w.cget("foreground")), str(w.cget("background"))
+                    except tk.TclError:
+                        continue
+                    if fg.startswith("#") and bg.startswith("#") and len(fg) == len(bg) == 7:
+                        objetivos.append((w, bg, fg))
+            if not objetivos:
+                return
+
+            tema = jarvis_theme.tema_actual()
+
+            def paso(n: int) -> None:
+                t = n / self._ANIM_PASOS
+                for w, bg, fg in objetivos:
+                    # Si cambiaron el tema a mitad del fundido, se termina con el color nuevo.
+                    bg, fg = jarvis_theme.traducir(bg, tema), jarvis_theme.traducir(fg, tema)
+                    try:
+                        if w.winfo_exists():
+                            w.configure(foreground=fg if n >= self._ANIM_PASOS else jarvis_theme.mezclar(bg, fg, t))
+                    except tk.TclError:
+                        pass
+                if n < self._ANIM_PASOS:
+                    raiz.after(self._ANIM_MS, paso, n + 1)
+
+            paso(1)
+
+        def _add_action_card(self, resultado) -> tk.Frame:
+            """Tarjeta compacta de una acción: icono, nombre, estado, duración y origen.
+            Clic en la cabecera despliega parámetros, verificación y error."""
+            import jarvis_cards
+
+            should_follow = self._chat_following
+            texto_estado, token = jarvis_cards.estado(resultado)
+            color = getattr(jarvis_theme, token)
+            fila = tk.Frame(self.messages, bg=PANEL)
+            fila.pack(fill="x", padx=14, pady=4)
+            tarjeta = tk.Frame(fila, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
+            tarjeta.pack(side="left", anchor="w")
+            tk.Frame(tarjeta, bg=color, width=3).pack(side="left", fill="y")
+            interior = tk.Frame(tarjeta, bg=PANEL, padx=12, pady=7)
+            interior.pack(side="left", fill="both")
+            cabecera = tk.Frame(interior, bg=PANEL, cursor="hand2")
+            cabecera.pack(anchor="w")
+            partes = (
+                (jarvis_cards.icono(resultado.herramienta), TEXT, ("Segoe UI Emoji", 11)),
+                (resultado.etiqueta, TEXT, ("Segoe UI", 10, "bold")),
+                (texto_estado, color, ("Consolas", 8, "bold")),
+                (jarvis_cards.resumen(resultado), MUTED, ("Consolas", 8)),
+            )
+            etiquetas = []
+            for n, (texto, fg, fuente) in enumerate(partes):
+                etiqueta = tk.Label(cabecera, text=texto, bg=PANEL, fg=fg, font=fuente, cursor="hand2")
+                etiqueta.pack(side="left", padx=(0 if n == 0 else 8, 0))
+                etiquetas.append(etiqueta)
+            flecha = tk.Label(cabecera, text="▸", bg=PANEL, fg=MUTED, font=("Consolas", 9), cursor="hand2")
+            flecha.pack(side="left", padx=(8, 0))
+            cuerpo = tk.Frame(interior, bg=PANEL)
+            cuerpo.pack(anchor="w", fill="x")
+            detalle = tk.Label(
+                interior, text=jarvis_cards.detalle(resultado), bg=PANEL, fg=MUTED,
+                font=("Consolas", 8), justify="left", wraplength=620, anchor="w",
+            )
+
+            def alternar(_event=None) -> None:
+                if detalle.winfo_ismapped():
+                    detalle.pack_forget()
+                    flecha.configure(text="▸")
+                else:
+                    detalle.pack(anchor="w", pady=(6, 0))
+                    flecha.configure(text="▾")
+                    self._fade_in(detalle)
+
+            for widget in (cabecera, flecha, *etiquetas):
+                widget.bind("<Button-1>", alternar)
+
+            def poner_cuerpo(texto: str) -> None:
+                for hijo in cuerpo.winfo_children():
+                    hijo.destroy()
+                self._rich_text(cuerpo, texto, PANEL).pack(anchor="w", pady=(6, 0))
+                self._fade_in(cuerpo)
+                if self._chat_following:
+                    self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
+
+            tarjeta.jarvis_poner_cuerpo = poner_cuerpo
+            self._fade_in(fila)
+            if should_follow:
+                self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
+            return tarjeta
+
+        def _confirmation_card(
+            self,
+            *,
+            titulo: str,
+            color: str,
+            aprobar: str,
+            rechazar: str,
+            pista: str,
+            aprobar_bg: str | None = None,
+            aprobar_fg: str | None = None,
+            voz: bool = True,
+            al_aprobar=None,
+            al_rechazar=None,
+        ) -> tuple[tk.Frame, tk.Frame]:
+            """Confirmación como tarjeta dentro del chat (antes eran ventanas aparte).
+
+            Devuelve (tarjeta, cuerpo): el cuerpo lo rellena quien la crea. Los botones
+            llaman a ``_resolve_plan_approval`` salvo que se pasen ``al_aprobar`` /
+            ``al_rechazar``. Al resolverse, la tarjeta se queda en el historial con el
+            resultado en lugar de los botones (``tarjeta.jarvis_resolver``).
+            """
+            aprobar_cb = al_aprobar or (lambda: self._resolve_plan_approval(True))
+            rechazar_cb = al_rechazar or (lambda: self._resolve_plan_approval(False))
+            self._bring_chat_forward()
+            fila = tk.Frame(self.messages, bg=PANEL)
+            fila.pack(fill="x", padx=14, pady=8)
+            tarjeta = tk.Frame(fila, bg=PANEL_LIGHT, highlightthickness=1, highlightbackground=color,
+                               takefocus=1)
+            tarjeta.pack(side="left", anchor="w")
+            tk.Frame(tarjeta, bg=color, width=4).pack(side="left", fill="y")
+            interior = tk.Frame(tarjeta, bg=PANEL_LIGHT, padx=16, pady=12)
+            interior.pack(side="left", fill="both")
+            tk.Label(interior, text=titulo, bg=PANEL_LIGHT, fg=color,
+                     font=("Consolas", 11, "bold"), justify="left", wraplength=680).pack(anchor="w")
+            cuerpo = tk.Frame(interior, bg=PANEL_LIGHT)
+            cuerpo.pack(anchor="w", fill="x", pady=(6, 0))
+            pie = tk.Frame(interior, bg=PANEL_LIGHT)
+            pie.pack(anchor="w", fill="x", pady=(10, 0))
+            tk.Label(pie, text=pista, bg=PANEL_LIGHT, fg=MUTED, font=("Segoe UI", 9),
+                     justify="left", wraplength=680).pack(anchor="w", pady=(0, 8))
+            botones = tk.Frame(pie, bg=PANEL_LIGHT)
+            botones.pack(fill="x")
+            estilo = dict(relief="flat", padx=12, pady=8, font=("Consolas", 9, "bold"), cursor="hand2",
+                          activebackground=HOVER, activeforeground=TEXT)
+            if voz:
+                self._plan_voice_button = tk.Button(
+                    botones, text="🎙  HABLAR (F9)", command=self._toggle_recording,
+                    bg=PANEL, fg=CYAN, **estilo,
+                )
+                self._plan_voice_button.pack(side="left", padx=(0, 24))
+            self._plan_approve_button = tk.Button(
+                botones, text=aprobar, command=aprobar_cb,
+                bg=aprobar_bg or CYAN, fg=aprobar_fg or BG, **estilo,
+            )
+            self._plan_approve_button.pack(side="left", padx=(0, 8))
+            self._plan_reject_button = tk.Button(
+                botones, text=rechazar, command=rechazar_cb, bg=PANEL, fg=TEXT, **estilo,
+            )
+            self._plan_reject_button.pack(side="left")
+
+            def resolver(aprobado: bool, texto: str | None = None) -> None:
+                if not tarjeta.winfo_exists():
+                    return
+                for hijo in pie.winfo_children():
+                    hijo.destroy()
+                tk.Label(
+                    pie, text=texto or (f"✓  {aprobar}" if aprobado else f"✕  {rechazar}"),
+                    bg=PANEL_LIGHT, fg=CYAN if aprobado else MUTED, font=("Consolas", 9, "bold"),
+                ).pack(anchor="w")
+                tarjeta.configure(highlightbackground=BORDER)
+
+            tarjeta.jarvis_resolver = resolver
+            tarjeta.after_idle(lambda: tarjeta.winfo_exists() and self._fade_in(fila))
+            for widget in (tarjeta, self._plan_approve_button, self._plan_reject_button):
+                widget.bind("<Return>", lambda _e: (aprobar_cb(), "break")[1])
+                widget.bind("<Escape>", lambda _e: (rechazar_cb(), "break")[1])
+            tarjeta.after_idle(tarjeta.focus_set)
+            self.chat_canvas.after_idle(self._force_scroll_bottom)
+            return tarjeta, cuerpo
+
+        def _bring_chat_forward(self) -> None:
+            """Muestra la ventana en el chat para que se vea la confirmación."""
+            try:
+                if self.root.state() in ("withdrawn", "iconic"):
+                    self.root.deiconify()
+                self._show_page("chat")
+                self.root.lift()
+            except tk.TclError:
+                pass
+
+        def _force_scroll_bottom(self) -> None:
+            self._chat_following = True
+            self._scroll_chat_to_bottom()
+
+        _ANCHO_BURBUJA = 650
+
+        def _rich_text(self, parent: tk.Misc, texto: str, bg: str) -> tk.Text:
+            """Texto con formato (negritas, listas, código, tablas, enlaces) del tamaño justo."""
+            import webbrowser
+            from tkinter import font as tkfont
+
+            import jarvis_markdown
+
+            normal = tkfont.Font(family="Segoe UI", size=11)
+            mono = tkfont.Font(family="Consolas", size=10)
+            tramos = jarvis_markdown.analizar(texto)
+            # Ancho: la línea visible más larga (con su fuente), hasta el máximo de la burbuja.
+            lineas: list[tuple[int, int]] = [(0, 0)]  # (px proporcional, px monoespaciado)
+            for contenido, etiquetas, _url in tramos:
+                fuente = mono if ("pre" in etiquetas or "table" in etiquetas or "code" in etiquetas) else normal
+                partes = contenido.split("\n")
+                for n, parte in enumerate(partes):
+                    if n:
+                        lineas.append((0, 0))
+                    prop, fija = lineas[-1]
+                    if fuente is mono:
+                        lineas[-1] = (prop, fija + mono.measure(parte))
+                    else:
+                        lineas[-1] = (prop + normal.measure(parte), fija)
+            ancho_px = min(self._ANCHO_BURBUJA, max(24, max(p + f for p, f in lineas) + 6))
+            caja = tk.Text(
+                parent, bg=bg, fg=TEXT, font=normal, relief="flat", bd=0, highlightthickness=0,
+                wrap="word", padx=0, pady=0, cursor="arrow", insertwidth=0,
+                width=max(2, -(-ancho_px // normal.measure("0"))), height=1,
+                selectbackground=CYAN_DARK, spacing1=1, spacing3=1,
+            )
+            caja.tag_configure("b", font=("Segoe UI", 11, "bold"))
+            caja.tag_configure("i", font=("Segoe UI", 11, "italic"))
+            caja.tag_configure("h", font=("Segoe UI", 12, "bold"), foreground=CYAN, spacing1=4, spacing3=2)
+            caja.tag_configure("code", font=mono, foreground=CYAN, background=PANEL)
+            caja.tag_configure("pre", font=mono, foreground=TEXT, background=PANEL,
+                               lmargin1=8, lmargin2=8, rmargin=8, spacing1=4, spacing3=4, wrap="none")
+            caja.tag_configure("table", font=mono, foreground=TEXT, wrap="none", spacing1=2)
+            caja.tag_configure("li", lmargin1=6, lmargin2=24)
+            caja.tag_configure("quote", foreground=MUTED, lmargin1=10, lmargin2=10)
+            caja.tag_configure("link", foreground=CYAN, underline=True)
+            caja.tag_raise("b")
+            caja.tag_raise("link")
+            for n, (contenido, etiquetas, url) in enumerate(tramos):
+                if url and url.startswith(("http://", "https://")):
+                    propia = f"url{n}"
+                    caja.insert("end", contenido, etiquetas + (propia,))
+                    caja.tag_bind(propia, "<Button-1>", lambda _e, u=url: webbrowser.open(u))
+                    caja.tag_bind(propia, "<Enter>", lambda _e: caja.configure(cursor="hand2"))
+                    caja.tag_bind(propia, "<Leave>", lambda _e: caja.configure(cursor="arrow"))
+                else:
+                    caja.insert("end", contenido, etiquetas)
+            caja.configure(state="disabled", height=max(1, len(lineas)))
+
+            def ajustar_alto(_event=None) -> None:
+                # Solo con el ancho real se sabe cuántas líneas ocupa al ajustar palabras.
+                try:
+                    vistas = caja.count("1.0", "end-1c", "update", "displaylines")
+                except tk.TclError:
+                    return
+                alto = (vistas[0] if isinstance(vistas, tuple) else vistas) or 0
+                alto = max(1, alto + 1 if caja.get("end-2c") != "\n" else alto)
+                if int(caja.cget("height")) != alto:
+                    caja.configure(height=alto)
+
+            caja.bind("<Configure>", ajustar_alto, add="+")
+            return caja
 
         def _on_enter(self, event):
             if event.keysym != "Return":

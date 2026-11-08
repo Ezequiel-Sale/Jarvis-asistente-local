@@ -1,12 +1,15 @@
 """La confirmación «¿Mantener esta configuración de pantallas?» también se responde por voz."""
 
 import queue
+import types
 import tkinter as tk
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from jarvis_app import JarvisApp
 from jarvis_commands import detectar_decision_monitores
+from jarvis_tools import crear_registro_herramientas
+from test_ventana_unica import _Vista
 
 
 class PhraseTests(unittest.TestCase):
@@ -32,6 +35,8 @@ class PhraseTests(unittest.TestCase):
 
 
 class DialogTests(unittest.TestCase):
+    """La confirmación es una tarjeta dentro del chat (interfaz real, oculta)."""
+
     def setUp(self) -> None:
         try:
             self.root = tk.Tk()
@@ -39,47 +44,58 @@ class DialogTests(unittest.TestCase):
             self.skipTest(f"Sin Tk: {error}")
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
-
-    def _host(self) -> Mock:
-        host = Mock()
-        host.root = self.root
-        host.DISPLAY_KEEP_SECONDS = 15
-        host._pending_plan_reply = None
-        host._pending_approval_kind = None
-        host._plan_dialog = None
-        host._resolve_plan_approval = lambda valor: JarvisApp._resolve_plan_approval(host, valor)
-        host._recording_for_plan_approval = False
-        return host
+        with patch("jarvis_core.obtener_preferencia", return_value=None):
+            self.vista = _Vista(self.root, crear_registro_herramientas(Mock()))
+        v = self.vista
+        v.DISPLAY_KEEP_SECONDS = 15
+        v._pending_plan_reply = None
+        v._pending_approval_kind = None
+        v._pending_power_action = None
+        v._plan_dialog = None
+        v._recording_for_plan_approval = False
+        for nombre in ("_show_display_keep_dialog", "_resolve_plan_approval"):
+            setattr(v, nombre, types.MethodType(getattr(JarvisApp, nombre), v))
 
     def test_dialog_waits_for_voice_and_resolves(self) -> None:
-        host = self._host()
+        v = self.vista
         reply: queue.Queue[bool] = queue.Queue(maxsize=1)
-        JarvisApp._show_display_keep_dialog(host, "Desactivé el monitor 2.", reply)
-        self.assertIs(host._pending_plan_reply, reply)
-        self.assertEqual(host._pending_approval_kind, "display")
-        dialogo = host._plan_dialog
+        v._show_display_keep_dialog("Desactivé el monitor 2.", reply)
+        self.assertIs(v._pending_plan_reply, reply)
+        self.assertEqual(v._pending_approval_kind, "display")
+        tarjeta = v._plan_dialog
+        self.assertIsNot(tarjeta.winfo_toplevel(), None)
+        self.assertIs(tarjeta.winfo_toplevel(), self.root)  # dentro de la ventana principal
         # Lo que hace un «sí» por voz (plan_voice_decision → _resolve_plan_approval).
-        JarvisApp._resolve_plan_approval(host, True)
+        v._resolve_plan_approval(True)
         self.assertTrue(reply.get_nowait())
-        self.assertIsNone(host._pending_plan_reply)
-        self.assertFalse(dialogo.winfo_exists())
+        self.assertIsNone(v._pending_plan_reply)
+        self.assertTrue(tarjeta.winfo_exists())  # queda en el historial con el resultado
+        self.assertFalse(any(isinstance(w, tk.Button) for w in _descendientes(tarjeta)))
 
     def test_button_also_clears_pending_approval(self) -> None:
-        host = self._host()
+        v = self.vista
         reply: queue.Queue[bool] = queue.Queue(maxsize=1)
-        JarvisApp._show_display_keep_dialog(host, "Cambio.", reply)
-        host._plan_dialog.event_generate("<Escape>")
+        v._show_display_keep_dialog("Cambio.", reply)
+        v._plan_reject_button.invoke()  # REVERTIR
         self.root.update()
         self.assertFalse(reply.get_nowait())
-        self.assertIsNone(host._pending_plan_reply)
+        self.assertIsNone(v._pending_plan_reply)
 
     def test_other_pending_approval_keeps_buttons_only(self) -> None:
-        host = self._host()
+        v = self.vista
         otra: queue.Queue[bool] = queue.Queue(maxsize=1)
-        host._pending_plan_reply = otra
+        v._pending_plan_reply = otra
         reply: queue.Queue[bool] = queue.Queue(maxsize=1)
-        JarvisApp._show_display_keep_dialog(host, "Cambio.", reply)
-        self.assertIs(host._pending_plan_reply, otra)
+        v._show_display_keep_dialog("Cambio.", reply)
+        self.assertIs(v._pending_plan_reply, otra)
+
+
+def _descendientes(widget):
+    pendientes = [widget]
+    while pendientes:
+        w = pendientes.pop()
+        yield w
+        pendientes.extend(w.winfo_children())
 
 
 if __name__ == "__main__":

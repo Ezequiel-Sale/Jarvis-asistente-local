@@ -140,6 +140,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._live_label = None
         self._live_text = ""
         self._plan_dialog: tk.Toplevel | None = None
+        self._last_action_cards: dict[str, tk.Frame] = {}
         self._plan_voice_button: tk.Button | None = None
         self._plan_approve_button: tk.Button | None = None
         self._plan_reject_button: tk.Button | None = None
@@ -192,8 +193,13 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except Exception:
             logging.exception("No se pudo cargar el tema guardado.")
         self.root.configure(bg=BG)
+        try:
+            self._animations = core.obtener_preferencia(self._PREFERENCIA_ANIMACIONES) != "0"
+        except Exception:
+            self._animations = True
         self._configure_styles()
         self._build_layout()
+        self._refresh_animations_button()
         self.tool_registry = crear_registro_herramientas(
             self,
             recorder=self._record_action,
@@ -1280,7 +1286,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._pending_plan_reply = reply
         self._pending_approval_kind = "screen"
         miniatura = imagen.copy().convert("RGB")
-        escala = min(860 / miniatura.width, 480 / miniatura.height, 1.0)
+        escala = min(680 / miniatura.width, 380 / miniatura.height, 1.0)
         miniatura = miniatura.resize((round(miniatura.width * escala), round(miniatura.height * escala)))
         if objetivo is not None:
             dibujo = ImageDraw.Draw(miniatura)
@@ -1298,14 +1304,6 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             dibujo.line((mx - 22, my, mx + 22, my), fill=(255, 40, 40), width=2)
             dibujo.line((mx, my - 22, mx, my + 22), fill=(255, 40, 40), width=2)
 
-        dialog = tk.Toplevel(self.root)
-        self._plan_dialog = dialog
-        dialog.title("Confirmar acción en pantalla")
-        dialog.configure(bg=BG)
-        dialog.attributes("-topmost", True)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
-        contenedor = tk.Frame(dialog, bg=BG, padx=18, pady=14)
-        contenedor.pack(fill="both", expand=True)
         if tipo == "vision":
             titulo = f"NO ENCONTRÉ «{pedido['consulta'].upper()}» POR ACCESIBILIDAD"
             detalle = (
@@ -1322,43 +1320,17 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             titulo = "¿HAGO ESTO?"
             detalle = f"{accion}\n(encontrado por {objetivo.origen}; marca roja en la captura)"
             aprobar = "SÍ, HAZLO"
-        tk.Label(contenedor, text=titulo, bg=BG, fg=CYAN, font=("Consolas", 11, "bold")).pack(anchor="w")
-        tk.Label(
-            contenedor, text=detalle, bg=BG, fg=TEXT, font=("Segoe UI", 10),
-            justify="left", wraplength=840,
-        ).pack(anchor="w", pady=(6, 8))
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo=titulo, color=CYAN, aprobar=aprobar, rechazar="NO",
+            pista="Di «sí» o «no», sin «Hey Jarvis». ENTER confirma · ESC cancela.",
+        )
+        self._plan_dialog = tarjeta
+        tk.Label(cuerpo, text=detalle, bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10),
+                 justify="left", wraplength=680).pack(anchor="w", pady=(0, 8))
         foto = ImageTk.PhotoImage(miniatura)
-        vista = tk.Label(contenedor, image=foto, bg=PANEL)
+        vista = tk.Label(cuerpo, image=foto, bg=PANEL)
         vista.image = foto
-        vista.pack()
-        tk.Label(
-            contenedor, text="Di «sí» o «no» (F9 o «Hey Jarvis»). ENTER confirma · ESC cancela.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(8, 8))
-        botones = tk.Frame(contenedor, bg=BG)
-        botones.pack(fill="x")
-        estilo = dict(relief="flat", padx=12, pady=8, font=("Consolas", 9, "bold"), cursor="hand2")
-        self._plan_voice_button = tk.Button(
-            botones, text="🎙  HABLAR (F9)", command=self._toggle_recording,
-            bg=PANEL_LIGHT, fg=CYAN, **estilo,
-        )
-        self._plan_voice_button.pack(side="left")
-        self._plan_reject_button = tk.Button(
-            botones, text="NO", command=lambda: self._resolve_plan_approval(False),
-            bg=PANEL_LIGHT, fg=TEXT, **estilo,
-        )
-        self._plan_reject_button.pack(side="right")
-        self._plan_approve_button = tk.Button(
-            botones, text=aprobar, command=lambda: self._resolve_plan_approval(True),
-            bg=CYAN, fg=BG, **estilo,
-        )
-        self._plan_approve_button.pack(side="right", padx=(0, 8))
-        dialog.bind("<Return>", lambda _e: self._resolve_plan_approval(True))
-        dialog.bind("<Escape>", lambda _e: self._resolve_plan_approval(False))
-        dialog.update_idletasks()
-        self._center_over_jarvis(dialog)
-        dialog.lift()
-        dialog.focus_force()
+        vista.pack(anchor="w")
         self._set_plan_voice_controls(recording=False)
         self._set_status(self._approval_hint("screen"), CYAN)
 
@@ -1655,9 +1627,13 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         dialog = self._plan_dialog
         self._plan_dialog = None
         if dialog is not None and dialog.winfo_exists():
-            if dialog.grab_current() is dialog:
-                dialog.grab_release()
-            dialog.destroy()
+            resolver = getattr(dialog, "jarvis_resolver", None)
+            if resolver is not None:
+                resolver(approved)  # tarjeta del chat: se queda con el resultado
+            else:
+                if dialog.grab_current() is dialog:
+                    dialog.grab_release()
+                dialog.destroy()
         self._plan_voice_button = None
         self._plan_approve_button = None
         self._plan_reject_button = None
@@ -1708,39 +1684,22 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
         self._pending_plan_reply = reply
         self._pending_approval_kind = kind
-        dialog = tk.Toplevel(self.root)
-        self._plan_dialog = dialog
         is_routine_save = kind == "routine_save"
-        approve_label = "GUARDAR RUTINA" if is_routine_save else "EJECUTAR PLAN"
-        reject_label = "NO GUARDAR RUTINA" if is_routine_save else "NO EJECUTAR PLAN"
-        dialog.title("Guardar rutina de Jarvis" if is_routine_save else "Aprobar plan de Jarvis")
-        dialog.configure(bg=BG)
-        dialog.resizable(False, False)
-        dialog.transient(self.root)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
-
-        container = tk.Frame(dialog, bg=BG, padx=24, pady=20)
-        container.pack(fill="both", expand=True)
-        tk.Label(
-            container,
-            text=(
-                "J.A.R.V.I.S. PROPONE GUARDAR UNA RUTINA"
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo="J.A.R.V.I.S. PROPONE GUARDAR UNA RUTINA" if is_routine_save else "J.A.R.V.I.S. PROPONE UN PLAN",
+            color=CYAN,
+            aprobar="GUARDAR RUTINA" if is_routine_save else "EJECUTAR PLAN",
+            rechazar="NO GUARDAR" if is_routine_save else "NO EJECUTAR",
+            pista=(
+                "Di «sí» / «guardar rutina» o «no», sin «Hey Jarvis». Guardar la rutina no ejecuta sus pasos."
                 if is_routine_save
-                else "J.A.R.V.I.S. PROPONE UN PLAN"
+                else "Di «sí» / «ejecutar plan» o «no», sin «Hey Jarvis». "
+                "Las acciones de riesgo alto pueden pedir confirmación adicional."
             ),
-            bg=BG,
-            fg=CYAN,
-            font=("Consolas", 12, "bold"),
-        ).pack(anchor="w")
-        tk.Label(
-            container,
-            text=f"Objetivo: {goal}",
-            bg=BG,
-            fg=TEXT,
-            font=("Segoe UI", 10),
-            wraplength=560,
-            justify="left",
-        ).pack(anchor="w", pady=(12, 14))
+        )
+        self._plan_dialog = tarjeta
+        tk.Label(cuerpo, text=f"Objetivo: {goal}", bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10),
+                 wraplength=680, justify="left").pack(anchor="w", pady=(0, 8))
 
         for index, action in enumerate(actions, start=1):
             if is_routine_save:
@@ -1781,86 +1740,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     f"   Parámetros: {json.dumps(action.arguments, ensure_ascii=False)}"
                 )
             tk.Label(
-                container,
-                text=step,
-                bg=PANEL,
-                fg=TEXT,
-                padx=12,
-                pady=9,
-                font=("Consolas", 9),
-                justify="left",
-                wraplength=540,
-                anchor="w",
+                cuerpo, text=step, bg=PANEL, fg=TEXT, padx=12, pady=9, font=("Consolas", 9),
+                justify="left", wraplength=660, anchor="w",
             ).pack(fill="x", pady=3)
-
-        tk.Label(
-            container,
-            text=(
-                "Di «sí» / «guardar rutina» o «no», sin «Hey Jarvis».\n"
-                "Guardar la rutina no ejecuta sus pasos."
-                if is_routine_save
-                else "Di «sí» / «ejecutar plan» o «no», sin «Hey Jarvis».\n"
-                "Las acciones de riesgo alto pueden pedir confirmación adicional."
-            ),
-            bg=BG,
-            fg=MUTED,
-            font=("Segoe UI", 9),
-            justify="left",
-            wraplength=560,
-        ).pack(anchor="w", pady=(12, 14))
-
-        buttons = tk.Frame(container, bg=BG)
-        buttons.pack(fill="x")
-        self._plan_voice_button = tk.Button(
-            buttons,
-            text="🎙  HABLAR (F9)",
-            command=self._toggle_recording,
-            bg=PANEL_LIGHT,
-            fg=CYAN,
-            activebackground=HOVER,
-            activeforeground=TEXT,
-            relief="flat",
-            padx=12,
-            pady=9,
-            font=("Consolas", 9, "bold"),
-            cursor="hand2",
-        )
-        self._plan_voice_button.pack(side="left")
-        self._plan_reject_button = tk.Button(
-            buttons,
-            text=reject_label,
-            command=lambda: self._resolve_plan_approval(False),
-            bg=PANEL_LIGHT,
-            fg=TEXT,
-            activebackground=HOVER,
-            activeforeground=TEXT,
-            relief="flat",
-            padx=12,
-            pady=9,
-            font=("Consolas", 9, "bold"),
-            cursor="hand2",
-        )
-        self._plan_reject_button.pack(side="right")
-        self._plan_approve_button = tk.Button(
-            buttons,
-            text=approve_label,
-            command=lambda: self._resolve_plan_approval(True),
-            bg=CYAN,
-            fg=BG,
-            activebackground=CYAN,
-            activeforeground=BG,
-            relief="flat",
-            padx=12,
-            pady=9,
-            font=("Consolas", 9, "bold"),
-            cursor="hand2",
-        )
-        self._plan_approve_button.pack(side="right", padx=(0, 8))
-
-        dialog.update_idletasks()
-        dialog.grab_set()
-        dialog.lift()
-        dialog.focus_force()
         self._set_plan_voice_controls(recording=False)
 
     def _show_power_countdown(self, routine_name: str, action: str, reply: queue.Queue[bool]) -> None:
@@ -1873,71 +1755,39 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             logging.warning("Cuenta atrás de energía omitida: había otra aprobación pendiente.")
             reply.put(False)
             return
-        if self.root.state() == "withdrawn":
-            self._show_from_tray()
         self._pending_plan_reply = reply
         self._pending_approval_kind = "power"
         self._pending_power_action = action
         restante = {"s": jarvis_power.CUENTA_ATRAS_RUTINA}
-
-        dialog = tk.Toplevel(self.root)
-        self._plan_dialog = dialog
-        dialog.title("Rutina de energía")
-        dialog.configure(bg=BG)
-        dialog.resizable(False, False)
-        dialog.attributes("-topmost", True)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
-        container = tk.Frame(dialog, bg=BG, padx=24, pady=20)
-        container.pack(fill="both", expand=True)
-        tk.Label(
-            container, text=f"RUTINA «{routine_name.upper()}»", bg=BG, fg=ERROR,
-            font=("Consolas", 12, "bold"),
-        ).pack(anchor="w")
-        etiqueta = tk.Label(
-            container, text="", bg=BG, fg=TEXT, font=("Segoe UI", 14), justify="left",
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo=f"RUTINA «{routine_name.upper()}»", color=ERROR,
+            aprobar="HACERLO YA", rechazar="CANCELAR", aprobar_bg=PANEL, aprobar_fg=ERROR,
+            pista="Di «cancela» o pulsa CANCELAR. ESC cancela · ENTER lo hace ya.",
+            al_aprobar=lambda: self._resolve_plan_approval(True),
+            al_rechazar=lambda: self._resolve_plan_approval(False),
         )
-        etiqueta.pack(anchor="w", pady=(10, 12))
-        tk.Label(
-            container,
-            text="Di «Hey Jarvis… cancela» o pulsa CANCELAR. ESC cancela · ENTER lo hace ya.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(0, 12))
-        buttons = tk.Frame(container, bg=BG)
-        buttons.pack(fill="x")
-        estilo = dict(relief="flat", padx=12, pady=9, font=("Consolas", 9, "bold"), cursor="hand2")
-        self._plan_voice_button = tk.Button(
-            buttons, text="🎙  HABLAR (F9)", command=self._toggle_recording,
-            bg=PANEL_LIGHT, fg=CYAN, **estilo,
-        )
-        self._plan_voice_button.pack(side="left")
-        self._plan_reject_button = tk.Button(
-            buttons, text="CANCELAR", command=lambda: self._resolve_plan_approval(False),
-            bg=CYAN, fg=BG, **estilo,
-        )
-        self._plan_reject_button.pack(side="right")
-        self._plan_approve_button = tk.Button(
-            buttons, text="HACERLO YA", command=lambda: self._resolve_plan_approval(True),
-            bg=PANEL_LIGHT, fg=ERROR, **estilo,
-        )
-        self._plan_approve_button.pack(side="right", padx=(0, 8))
-        dialog.bind("<Escape>", lambda _e: self._resolve_plan_approval(False))
-        dialog.bind("<Return>", lambda _e: self._resolve_plan_approval(True))
+        self._plan_dialog = tarjeta
+        # ENTER sin querer no debe apagar: el botón con el foco es CANCELAR.
+        self._plan_reject_button.configure(bg=CYAN, fg=BG)
+        etiqueta = tk.Label(cuerpo, text="", bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 14), justify="left")
+        etiqueta.pack(anchor="w")
+        try:
+            self.root.attributes("-topmost", True)
+            self.root.after(1500, lambda: self.root.attributes("-topmost", False))
+        except tk.TclError:
+            pass
 
         def tic() -> None:
-            if self._pending_plan_reply is not reply or not dialog.winfo_exists():
+            if self._pending_plan_reply is not reply or not tarjeta.winfo_exists():
                 return
             if restante["s"] <= 0:
                 self._resolve_plan_approval(True)  # nadie canceló
                 return
             etiqueta.configure(text=jarvis_power.describir_cuenta_atras(action, restante["s"]))
             restante["s"] -= 1
-            dialog.after(1000, tic)
+            tarjeta.after(1000, tic)
 
         tic()
-        dialog.update_idletasks()
-        self._center_over_jarvis(dialog)
-        dialog.lift()
-        dialog.focus_force()
         self._set_plan_voice_controls(recording=False)
         verbo = jarvis_power.VERBOS_RUTINA.get(action, "apagaré")
         self._announce(
@@ -1946,8 +1796,29 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             alarm=True,
         )
 
+    def _show_tool_confirmation(self, name, description, risk, arguments, reply) -> None:
+        """«¿Autorizas esta acción?» de una herramienta que pidió el modelo."""
+        self._pending_plan_reply = reply
+        self._pending_approval_kind = "tool"
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo="¿AUTORIZAS ESTA ACCIÓN?", color=ERROR if risk == "high" else CYAN,
+            aprobar="AUTORIZAR", rechazar="NO",
+            pista="Di «sí» o «no», sin «Hey Jarvis». ENTER autoriza · ESC rechaza.",
+        )
+        self._plan_dialog = tarjeta
+        try:
+            etiqueta = self.tool_registry.get(name).display_name
+        except ToolError:
+            etiqueta = name
+        tk.Label(cuerpo, text=f"{etiqueta} · riesgo {risk}\n{description}", bg=PANEL_LIGHT, fg=TEXT,
+                 font=("Segoe UI", 10), wraplength=680, justify="left").pack(anchor="w")
+        tk.Label(cuerpo, text=json.dumps(arguments, ensure_ascii=False, indent=2), bg=PANEL, fg=MUTED,
+                 font=("Consolas", 9), justify="left", padx=10, pady=8, anchor="w").pack(fill="x", pady=(6, 0))
+        self._set_plan_voice_controls(recording=False)
+        self._set_status(self._approval_hint("tool"), CYAN)
+
     def _show_power_confirmation(self, action: str, reply: queue.Queue[bool]) -> None:
-        """Diálogo «¿Apago el equipo?» que acepta botones, teclado o voz (F9)."""
+        """Tarjeta «¿Apago el equipo?» que acepta botones, teclado o voz."""
         if self._closing or self._pending_plan_reply is not None:
             if self._pending_plan_reply is not None:
                 logging.error("Se pidió confirmar energía con otra aprobación pendiente.")
@@ -1957,53 +1828,14 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._pending_approval_kind = "power"
         self._pending_power_action = action
         pregunta = jarvis_power.PREGUNTAS_CONFIRMACION.get(action, "¿Confirmas la acción?")
-
-        dialog = tk.Toplevel(self.root)
-        self._plan_dialog = dialog
-        dialog.title("Confirmar acción de energía")
-        dialog.configure(bg=BG)
-        dialog.resizable(False, False)
-        dialog.transient(self.root)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
-        container = tk.Frame(dialog, bg=BG, padx=24, pady=20)
-        container.pack(fill="both", expand=True)
-        tk.Label(
-            container, text="CONFIRMAR", bg=BG, fg=ERROR, font=("Consolas", 12, "bold"),
-        ).pack(anchor="w")
-        tk.Label(
-            container, text=pregunta, bg=BG, fg=TEXT, font=("Segoe UI", 12),
-            wraplength=460, justify="left",
-        ).pack(anchor="w", pady=(10, 12))
-        tk.Label(
-            container,
-            text="Di «sí» o «no» (F9 para hablar). ENTER confirma · ESC cancela.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(0, 12))
-        buttons = tk.Frame(container, bg=BG)
-        buttons.pack(fill="x")
-        estilo = dict(relief="flat", padx=12, pady=9, font=("Consolas", 9, "bold"), cursor="hand2")
-        self._plan_voice_button = tk.Button(
-            buttons, text="🎙  HABLAR (F9)", command=self._toggle_recording,
-            bg=PANEL_LIGHT, fg=CYAN, **estilo,
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo="CONFIRMAR", color=ERROR, aprobar="SÍ", rechazar="NO",
+            aprobar_bg=ERROR, aprobar_fg=BG,
+            pista="Di «sí» o «no», sin «Hey Jarvis». ENTER confirma · ESC cancela.",
         )
-        self._plan_voice_button.pack(side="left")
-        self._plan_reject_button = tk.Button(
-            buttons, text="NO", command=lambda: self._resolve_plan_approval(False),
-            bg=PANEL_LIGHT, fg=TEXT, **estilo,
-        )
-        self._plan_reject_button.pack(side="right")
-        self._plan_approve_button = tk.Button(
-            buttons, text="SÍ", command=lambda: self._resolve_plan_approval(True),
-            bg=ERROR, fg=BG, **estilo,
-        )
-        self._plan_approve_button.pack(side="right", padx=(0, 8))
-        dialog.bind("<Return>", lambda _e: self._resolve_plan_approval(True))
-        dialog.bind("<Escape>", lambda _e: self._resolve_plan_approval(False))
-        dialog.update_idletasks()
-        self._center_over_jarvis(dialog)
-        dialog.grab_set()
-        dialog.lift()
-        dialog.focus_force()
+        self._plan_dialog = tarjeta
+        tk.Label(cuerpo, text=pregunta, bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 12),
+                 wraplength=680, justify="left").pack(anchor="w")
         self._set_plan_voice_controls(recording=False)
         self._set_status(self._approval_hint("power"), CYAN)
 
@@ -2030,6 +1862,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._set_status("GENERANDO RESPUESTA…", CYAN)
                     elif event[0] == "tool_confirmation":
                         _, name, description, risk, arguments, reply = event
+                        if not self._closing and self._pending_plan_reply is None:
+                            self._show_tool_confirmation(name, description, risk, arguments, reply)
+                            continue
                         if self._closing:
                             approved = False
                         else:
@@ -2388,14 +2223,14 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._start_direct_tool_action(tool_name, arguments, command)
                     elif event[0] == "direct_action_done":
                         _, _tool_name, response = event
-                        self._add_message("assistant", response)
+                        self._show_direct_response(_tool_name, response)
                         self._set_idle()
                         if _tool_name in ("configure_display", "fix_display_scaling") \
                                 and self._current_page == "ajustes":
                             self._refresh_monitor_map()
                     elif event[0] == "direct_action_error":
                         _, _tool_name, message = event
-                        self._add_message("assistant", message)
+                        self._show_direct_response(_tool_name, message)
                         if not message.startswith("Cancelé"):
                             self._set_status("ACCIÓN NO COMPLETADA", ERROR)
                         else:
@@ -2403,6 +2238,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._set_idle()
                     elif event[0] == "action_result":
                         self._show_action_result(event[1])
+                        try:
+                            tarjeta = self._add_action_card(event[1])
+                            self._last_action_cards[event[1].herramienta] = tarjeta
+                        except tk.TclError:
+                            logging.exception("No se pudo dibujar la tarjeta de la acción.")
                     elif event[0] == "youtube_search":
                         _, query, play_index, command = event
                         self._start_youtube_search(
@@ -2500,6 +2340,15 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 self.root.after(100, self._poll_events)
 
 
+    def _show_direct_response(self, herramienta: str, texto: str) -> None:
+        """La respuesta de un comando directo va dentro de su tarjeta de acción
+        (si se dibujó); si no, como mensaje normal."""
+        tarjeta = self._last_action_cards.pop(herramienta, None)
+        if tarjeta is not None and tarjeta.winfo_exists():
+            tarjeta.jarvis_poner_cuerpo(texto)
+        else:
+            self._add_message("assistant", texto)
+
     def _show_action_result(self, resultado: ResultadoAccion) -> None:
         etiqueta = resultado.etiqueta.upper()
         if resultado.exitosa:
@@ -2589,75 +2438,63 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     def _show_display_keep_dialog(self, descripcion: str, reply: queue.Queue[bool]) -> None:
         """Como Windows: si no se confirma en 15 s, la configuración se revierte."""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Configuración de monitores")
-        dialog.configure(bg=BG)
-        dialog.attributes("-topmost", True)
-        dialog.resizable(False, False)
         restante = {"segundos": self.DISPLAY_KEEP_SECONDS, "resuelto": False}
         # Se registra como confirmación pendiente para que también se pueda
         # responder por voz con «sí»/«no» (sin «Hey Jarvis»), como las demás.
         por_voz = self._pending_plan_reply is None
-        if por_voz:
-            self._pending_plan_reply = reply
-            self._pending_approval_kind = "display"
-            self._plan_dialog = dialog
 
         def responder(valor: bool) -> None:
             if restante["resuelto"]:
                 return
             restante["resuelto"] = True
+            if cuenta.winfo_exists():
+                cuenta.configure(text="")
             if self._pending_plan_reply is reply:
-                self._resolve_plan_approval(valor)  # cierra el diálogo y responde
+                self._resolve_plan_approval(valor)  # marca la tarjeta y responde
                 return
             try:
                 reply.put_nowait(valor)
             except queue.Full:
                 pass
-            if dialog.winfo_exists():
-                dialog.destroy()
+            if tarjeta.winfo_exists():
+                tarjeta.jarvis_resolver(valor, "✓  MANTENIDA" if valor else "✕  REVERTIDA")
 
-        container = tk.Frame(dialog, bg=BG, padx=24, pady=20)
-        container.pack(fill="both", expand=True)
-        tk.Label(container, text="¿MANTENER ESTA CONFIGURACIÓN DE PANTALLAS?", bg=BG, fg=CYAN,
-                 font=("Consolas", 12, "bold")).pack(anchor="w")
-        tk.Label(container, text=descripcion, bg=BG, fg=TEXT, font=("Segoe UI", 10),
-                 wraplength=460, justify="left").pack(anchor="w", pady=(10, 6))
-        cuenta = tk.Label(container, bg=BG, fg=MUTED, font=("Segoe UI", 9))
-        cuenta.pack(anchor="w", pady=(0, 12))
-        botones = tk.Frame(container, bg=BG)
-        botones.pack(fill="x")
-        estilo = dict(relief="flat", padx=14, pady=9, font=("Consolas", 9, "bold"), cursor="hand2")
-        tk.Button(botones, text="REVERTIR", command=lambda: responder(False),
-                  bg=PANEL_LIGHT, fg=TEXT, **estilo).pack(side="right")
-        tk.Button(botones, text="MANTENER", command=lambda: responder(True),
-                  bg=CYAN, fg=BG, **estilo).pack(side="right", padx=(0, 8))
-        dialog.bind("<Return>", lambda _e: responder(True))
-        dialog.bind("<Escape>", lambda _e: responder(False))
-        dialog.protocol("WM_DELETE_WINDOW", lambda: responder(False))
+        if por_voz:
+            self._pending_plan_reply = reply
+            self._pending_approval_kind = "display"
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo="¿MANTENER ESTA CONFIGURACIÓN DE PANTALLAS?", color=CYAN,
+            aprobar="MANTENER", rechazar="REVERTIR", voz=False,
+            pista=("Di «sí» o «no» · " if por_voz else "") + "ENTER mantiene · ESC revierte.",
+            al_aprobar=lambda: responder(True), al_rechazar=lambda: responder(False),
+        )
+        if por_voz:
+            self._plan_dialog = tarjeta
+        tk.Label(cuerpo, text=descripcion, bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10),
+                 wraplength=680, justify="left").pack(anchor="w")
+        cuenta = tk.Label(cuerpo, bg=PANEL_LIGHT, fg=MUTED, font=("Segoe UI", 9))
+        cuenta.pack(anchor="w", pady=(6, 0))
+        try:
+            # Encima de todo un momento: tras cambiar monitores la ventana puede quedar detrás.
+            self.root.attributes("-topmost", True)
+            self.root.after(1500, lambda: self.root.attributes("-topmost", False))
+            self.root.bell()
+        except tk.TclError:
+            pass
 
         def tic() -> None:
-            if restante["resuelto"] or not dialog.winfo_exists():
+            if not tarjeta.winfo_exists():
+                return
+            if restante["resuelto"] or (por_voz and self._pending_plan_reply is not reply):
+                cuenta.configure(text="")  # ya se respondió (por botón o por voz)
                 return
             if restante["segundos"] <= 0:
                 responder(False)
                 return
-            cuenta.configure(
-                text=f"Si no respondes, se revertirá en {restante['segundos']} s. "
-                + ("Di «sí» o «no» · " if por_voz else "")
-                + "ENTER mantiene · ESC revierte."
-            )
+            cuenta.configure(text=f"Si no respondes, se revertirá en {restante['segundos']} s.")
             restante["segundos"] -= 1
-            dialog.after(1000, tic)
+            tarjeta.after(1000, tic)
 
-        # Centrado sobre la ventana de Jarvis (donde el usuario está mirando), en las
-        # coordenadas de Tk. Antes se usaban píxeles físicos del monitor principal y,
-        # con la TV al 300 % de escala, el diálogo quedaba fuera de la pantalla.
-        self._center_over_jarvis(dialog)
-        dialog.after(700, lambda: dialog.winfo_exists() and self._center_over_jarvis(dialog))
-        dialog.lift()
-        dialog.focus_force()
-        dialog.bell()
         tic()
 
     def _center_over_jarvis(self, dialog: tk.Toplevel) -> None:
@@ -2868,6 +2705,25 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     # --- Inicio con Windows ---------------------------------------------------
 
     _PREFERENCIA_INICIO_WINDOWS = "inicio_windows"
+
+    _PREFERENCIA_ANIMACIONES = "animaciones"
+
+    def _refresh_animations_button(self) -> None:
+        boton = getattr(self, "animations_button", None)
+        if boton is not None:
+            activas = self._animations_enabled()
+            boton.configure(
+                text="✦  ANIMACIONES: SÍ" if activas else "✦  ANIMACIONES: NO",
+                fg=CYAN if activas else MUTED,
+            )
+
+    def _toggle_animations(self) -> None:
+        self._animations = not self._animations_enabled()
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_ANIMACIONES, "1" if self._animations else "0")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia de animaciones.")
+        self._refresh_animations_button()
 
     _PREFERENCIA_BARRA_AUTO = "barra_auto"
 
@@ -3217,6 +3073,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         Mantiene el comportamiento previo: el usuario lo pidió explícitamente,
         así que se ejecuta con ``confirmed=True``.
         """
+        self._last_action_cards.pop(tool_name, None)  # su respuesta irá a la tarjeta nueva
         self._start_busy(
             busy_message or self._DIRECT_ACTION_BUSY.get(tool_name, "EJECUTANDO ACCIÓN…")
         )
@@ -3318,6 +3175,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "power": ("SÍ", "NO"),
         "screen": ("SÍ", "NO"),
         "display": ("SÍ", "NO"),
+        "tool": ("SÍ", "NO"),
     }
 
     def _approval_hint(self, kind: str) -> str:
@@ -3350,7 +3208,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     def _capture_hidden(self, monitor: jarvis_vision.Monitor, on_done) -> None:
         """Oculta las ventanas de Jarvis, captura el monitor y las vuelve a mostrar."""
-        candidatas = [self.root, self.chat_window, self._plan_dialog]
+        candidatas = [self.root, self.chat_window]
+        if isinstance(self._plan_dialog, tk.Toplevel):
+            candidatas.append(self._plan_dialog)
         if self._routines_panel is not None and self._routines_panel.is_open():
             # Incrustado en la ventana principal: se oculta con ella.
             if isinstance(self._routines_panel.window, tk.Toplevel):
@@ -3395,27 +3255,20 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         reply: queue.Queue[bool] = queue.Queue(maxsize=1)
         self._pending_plan_reply = reply
         self._pending_approval_kind = "vision"
-        dialog = tk.Toplevel(self.root)
-        self._plan_dialog = dialog
-        dialog.title("Vista previa de la captura")
-        dialog.configure(bg=BG)
-        dialog.transient(self.root)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self._resolve_plan_approval(False))
-        container = tk.Frame(dialog, bg=BG, padx=20, pady=16)
-        container.pack(fill="both", expand=True)
-        tk.Label(
-            container, text="¿ANALIZO ESTA CAPTURA?", bg=BG, fg=CYAN,
-            font=("Consolas", 12, "bold"),
-        ).pack(anchor="w")
-        info = tk.Label(container, bg=BG, fg=MUTED, font=("Consolas", 8), justify="left")
-        info.pack(anchor="w", pady=(4, 8))
+        tarjeta, container = self._confirmation_card(
+            titulo="¿ANALIZO ESTA CAPTURA?", color=CYAN, aprobar="🔍  ANALIZAR", rechazar="CANCELAR",
+            pista="Di «analizar» o «cancelar», sin «Hey Jarvis». ENTER analiza · ESC cancela.",
+        )
+        self._plan_dialog = tarjeta
+        info = tk.Label(container, bg=PANEL_LIGHT, fg=MUTED, font=("Consolas", 8), justify="left")
+        info.pack(anchor="w", pady=(0, 8))
         preview = tk.Label(container, bg=PANEL)
-        preview.pack()
+        preview.pack(anchor="w")
 
         def mostrar() -> None:
             imagen = datos["imagen"]
             miniatura = imagen.copy()
-            miniatura.thumbnail((880, 500))
+            miniatura.thumbnail((680, 380))
             foto = ImageTk.PhotoImage(miniatura)
             preview.configure(image=foto)
             preview.image = foto
@@ -3429,9 +3282,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         mostrar()
 
         if len(datos["monitores"]) > 1:
-            selector = tk.Frame(container, bg=BG)
+            selector = tk.Frame(container, bg=PANEL_LIGHT)
             selector.pack(anchor="w", pady=(8, 0))
-            tk.Label(selector, text="Cambiar a:", bg=BG, fg=MUTED, font=("Consolas", 8)).pack(side="left")
+            tk.Label(selector, text="Cambiar a:", bg=PANEL_LIGHT, fg=MUTED, font=("Consolas", 8)).pack(side="left")
 
             def cambiar(monitor: jarvis_vision.Monitor) -> None:
                 def listo(imagen, error) -> None:
@@ -3439,7 +3292,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._set_status("ERROR DE CAPTURA", ERROR)
                         return
                     datos["monitor"], datos["imagen"] = monitor, imagen
-                    if dialog.winfo_exists():
+                    if tarjeta.winfo_exists():
                         mostrar()
 
                 self._capture_hidden(monitor, listo)
@@ -3447,47 +3300,21 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             for monitor in datos["monitores"]:
                 tk.Button(
                     selector, text=f"MONITOR {monitor.numero}",
-                    command=lambda m=monitor: cambiar(m), bg=PANEL_LIGHT, fg=CYAN,
+                    command=lambda m=monitor: cambiar(m), bg=PANEL, fg=CYAN, activebackground=HOVER,
                     relief="flat", padx=10, pady=4, font=("Consolas", 8, "bold"), cursor="hand2",
                 ).pack(side="left", padx=(6, 0))
 
-        tk.Label(container, text="Pregunta para el modelo:", bg=BG, fg=MUTED,
+        tk.Label(container, text="Pregunta para el modelo:", bg=PANEL_LIGHT, fg=MUTED,
                  font=("Consolas", 8)).pack(anchor="w", pady=(10, 2))
         pregunta = tk.StringVar(value=datos["pregunta"] or jarvis_vision.PREGUNTA_POR_DEFECTO)
         pregunta.trace_add("write", lambda *_: datos.update(pregunta=pregunta.get()))
         datos["pregunta"] = pregunta.get()
-        entry = tk.Entry(container, textvariable=pregunta, bg=PANEL_LIGHT, fg=TEXT,
-                         insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), width=90)
+        entry = tk.Entry(container, textvariable=pregunta, bg=PANEL, fg=TEXT,
+                         insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), width=80)
         entry.pack(fill="x", ipady=6)
-
-        tk.Label(
-            container,
-            text="Di «analizar» o «cancelar» (F9 para hablar). ENTER analiza · ESC cancela.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 9),
-        ).pack(anchor="w", pady=(10, 10))
-        buttons = tk.Frame(container, bg=BG)
-        buttons.pack(fill="x")
-        estilo = dict(relief="flat", padx=12, pady=9, font=("Consolas", 9, "bold"), cursor="hand2")
-        self._plan_voice_button = tk.Button(
-            buttons, text="🎙  HABLAR (F9)", command=self._toggle_recording,
-            bg=PANEL_LIGHT, fg=CYAN, **estilo,
-        )
-        self._plan_voice_button.pack(side="left")
-        self._plan_reject_button = tk.Button(
-            buttons, text="CANCELAR", command=lambda: self._resolve_plan_approval(False),
-            bg=PANEL_LIGHT, fg=TEXT, **estilo,
-        )
-        self._plan_reject_button.pack(side="right")
-        self._plan_approve_button = tk.Button(
-            buttons, text="🔍  ANALIZAR", command=lambda: self._resolve_plan_approval(True),
-            bg=CYAN, fg=BG, **estilo,
-        )
-        self._plan_approve_button.pack(side="right", padx=(0, 8))
-        dialog.bind("<Return>", lambda _e: self._resolve_plan_approval(True))
-        dialog.bind("<Escape>", lambda _e: self._resolve_plan_approval(False))
-        dialog.lift()
-        dialog.focus_force()
-        entry.focus_set()
+        entry.bind("<Return>", lambda _e: (self._resolve_plan_approval(True), "break")[1])
+        entry.bind("<Escape>", lambda _e: (self._resolve_plan_approval(False), "break")[1])
+        tarjeta.after_idle(entry.focus_set)
         self._set_status("REVISA LA CAPTURA: " + self._approval_hint("vision"), CYAN)
         threading.Thread(
             target=self._vision_worker, args=(reply, datos), name="JarvisVision", daemon=True

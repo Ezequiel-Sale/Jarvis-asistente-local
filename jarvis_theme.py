@@ -140,3 +140,21 @@ def recolorear(raiz: tk.Misc, mapa: dict[str, str]) -> int:
                         widget.tag_configure(etiqueta, {opcion: nuevo})
                         cambios += 1
     return cambios
+
+
+def mezclar(desde: str, hasta: str, t: float) -> str:
+    """Color intermedio entre dos «#RRGGBB» (t = 0 → desde, 1 → hasta)."""
+    t = min(max(t, 0.0), 1.0)
+    a = [int(desde[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(hasta[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02X}" for x, y in zip(a, b))
+
+
+def traducir(color: str, desde: str) -> str:
+    """El mismo token en el tema actual (para animaciones que empezaron con otro tema)."""
+    if desde == _actual:
+        return color
+    for token, valor in TEMAS[desde].items():
+        if valor.upper() == color.upper():
+            return TEMAS[_actual][token]
+    return color

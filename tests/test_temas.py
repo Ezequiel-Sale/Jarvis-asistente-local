@@ -1,5 +1,6 @@
 """Temas: paletas completas y cambio en vivo sin reiniciar (Tk real, oculta)."""
 
+import time
 import tkinter as tk
 import unittest
 from unittest.mock import Mock, patch
@@ -34,6 +35,14 @@ def _colores(raiz: tk.Misc) -> set[str]:
                     if valor.startswith("#"):
                         vistos.add(valor.upper())
     return vistos
+
+
+def _esperar_animaciones(root: tk.Misc) -> None:
+    """Deja terminar los fundidos (≈150 ms) para comparar colores finales."""
+    fin = time.monotonic() + 0.4
+    while time.monotonic() < fin:
+        root.update()
+        time.sleep(0.02)
 
 
 class PaletteTests(unittest.TestCase):
@@ -75,7 +84,7 @@ class LiveSwitchTests(unittest.TestCase):
             self.vista = _Vista(self.root, crear_registro_herramientas(Mock()))
         self.vista._add_message("assistant", "Hola")
         self.vista._add_message("user", "Qué tal")
-        self.root.update()
+        _esperar_animaciones(self.root)
 
     def test_switch_recolors_existing_widgets_and_new_drawings(self) -> None:
         cian = {v.upper() for v in jarvis_theme.TEMAS["cian"].values()}
@@ -84,7 +93,7 @@ class LiveSwitchTests(unittest.TestCase):
                 mapa = jarvis_theme.activar(nombre)
                 jarvis_theme.recolorear(self.root, mapa)
                 self.vista._draw_orb()
-                self.root.update()
+                _esperar_animaciones(self.root)
                 paleta = {v.upper() for v in jarvis_theme.TEMAS[nombre].values()}
                 colores = _colores(self.root)
                 self.assertTrue(colores, "no se encontró ningún color")
