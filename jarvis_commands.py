@@ -845,6 +845,29 @@ _VERBOS_ENERGIA = {
 }
 
 
+def detectar_decision_monitores(texto: str) -> bool | None:
+    """Respuesta por voz a «¿Mantener esta configuración de pantallas?».
+
+    Además del «sí»/«no» de siempre acepta «mantener», «mantenla», «déjala así»,
+    «revierte» o «vuelve atrás».
+    """
+    frase = " ".join(re.findall(r"[a-z0-9]+", _normalizar_consulta(texto)))
+    if re.fullmatch(
+        r"(?:si\s+)?(?:mantener|mantenla|mantenlo|mantenerla|manten(?:la|lo)?|"
+        r"dejala(?:\s+asi)?|dejalo(?:\s+asi)?|asi\s+esta\s+bien|esta\s+bien|perfecto)"
+        r"(?:\s+(?:la\s+)?configuracion)?(?:\s+por\s+favor)?",
+        frase,
+    ):
+        return True
+    if re.fullmatch(
+        r"(?:no\s+)?(?:revierte|revertir|revertila|revertilo|deshaz|deshazlo|"
+        r"vuelve\s+(?:atras|como\s+estaba)|como\s+estaba)(?:\s+.*)?",
+        frase,
+    ):
+        return False
+    return detectar_decision_energia(texto, "")
+
+
 def detectar_decision_energia(texto: str, accion: str) -> bool | None:
     """Respuesta por voz a «¿Apago/Reinicio/Suspendo el equipo?».
 

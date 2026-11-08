@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import jarvis_displays as d
+import jarvis_vision
 from jarvis_app import JarvisApp
 from jarvis_commands import detectar_comando_monitores
 
@@ -250,6 +251,70 @@ class KeepOrRevertTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             JarvisApp._tool_configure_display(host, "extend", 3)
         restaurar.assert_called_once_with("previa")
+
+
+
+class StableNumberingTests(unittest.TestCase):
+    def test_new_monitors_take_their_windows_number(self) -> None:
+        mapa = d.asignar_numeros([("kg", 1), ("vx", 2), ("tv", 3)], {})
+        self.assertEqual(mapa, {"kg": 1, "vx": 2, "tv": 3})
+
+    def test_remembered_number_survives_windows_renumbering(self) -> None:
+        # Caso real: al volver a extender, Windows dio DISPLAY2 a la Smart TV.
+        recordado = {"kg": 1, "vx": 2, "tv": 3}
+        mapa = d.asignar_numeros([("kg", 1), ("tv", 2), ("vx", None)], recordado)
+        self.assertEqual(mapa, recordado)
+
+    def test_new_monitor_never_steals_a_remembered_number(self) -> None:
+        mapa = d.asignar_numeros([("kg", 1), ("nuevo", 2), ("vx", None)], {"kg": 1, "vx": 2})
+        self.assertEqual(mapa["vx"], 2)
+        self.assertEqual(mapa["nuevo"], 3)
+
+    def test_duplicated_numbers_from_old_maps_are_repaired(self) -> None:
+        mapa = d.asignar_numeros([("a", 2), ("b", None)], {"a": 2, "b": 2})
+        self.assertEqual(sorted(mapa.values()), [1, 2])
+
+    def test_gdi_translation_for_vision(self) -> None:
+        pantallas = [
+            d.Pantalla("kg", "KG", ADAPTER, 1, True, 1, 0, gdi=1),
+            d.Pantalla("vx", "VX", ADAPTER, 2, True, 2, 2, gdi=3),
+            d.Pantalla("tv", "TV", ADAPTER, 3, True, 3, 1, gdi=2),
+        ]
+        with patch.object(d, "listar_pantallas", return_value=(pantallas, {})):
+            equivalencias, _ = d.numeros_por_gdi({})
+        self.assertEqual(equivalencias, {1: 1, 3: 2, 2: 3})
+
+    def test_extend_targets_the_physical_monitor(self) -> None:
+        pantallas = [
+            d.Pantalla("kg", "KG271U N3", ADAPTER, 1, True, 1, 0, gdi=1),
+            d.Pantalla("vx", "VX2428-FHD", ADAPTER, 2, False, 2, None),
+            d.Pantalla("tv", "Smart TV Pro", ADAPTER, 3, True, 3, 1, gdi=2),
+        ]
+        _deseado, texto = d.planificar("extend", (2,), pantallas)
+        self.assertEqual(texto, "Extendí el escritorio al monitor 2 (VX2428-FHD).")
+
+
+class VisionNumberingTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        jarvis_vision.configurar_numeracion(None)
+
+    def test_vision_uses_stable_numbers(self) -> None:
+        monitores = [jarvis_vision.Monitor(1, 0, 0, 10, 10, True), jarvis_vision.Monitor(2, 10, 0, 10, 10, False)]
+        jarvis_vision.configurar_numeracion(lambda: {2: 3})
+        self.assertEqual([m.numero for m in jarvis_vision.renumerar(monitores)], [1, 3])
+
+    def test_falls_back_to_windows_numbers_on_error_or_clash(self) -> None:
+        monitores = [jarvis_vision.Monitor(1, 0, 0, 10, 10, True), jarvis_vision.Monitor(2, 10, 0, 10, 10, False)]
+        jarvis_vision.configurar_numeracion(lambda: {2: 1})
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual([m.numero for m in jarvis_vision.renumerar(monitores)], [1, 2])
+
+        def falla():
+            raise OSError("sin API")
+
+        jarvis_vision.configurar_numeracion(falla)
+        with self.assertLogs(level="ERROR"):
+            self.assertEqual([m.numero for m in jarvis_vision.renumerar(monitores)], [1, 2])
 
 
 if __name__ == "__main__":

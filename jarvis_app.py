@@ -58,6 +58,7 @@ from jarvis_commands import (
     detectar_comando_escucha,
     detectar_comando_inicio_windows,
     detectar_decision_energia,
+    detectar_decision_monitores,
     detectar_comando_monitores,
     detectar_consulta_sistema,
     detectar_borrado_historial,
@@ -99,6 +100,15 @@ from jarvis_tool_registry import (
 )
 from jarvis_tools import crear_registro_herramientas
 from jarvis_verifiers import crear_verificadores
+
+
+def _numeracion_fija_monitores() -> dict[int, int]:
+    """{DISPLAYN: número fijo} para que visión, clic y vídeo numeren como los monitores."""
+    mapa = jarvis_displays.cargar_mapa(core.obtener_preferencia)
+    equivalencias, nuevo = jarvis_displays.numeros_por_gdi(mapa)
+    if nuevo != mapa:
+        jarvis_displays.guardar_mapa(core.guardar_preferencia, nuevo)
+    return equivalencias
 
 
 class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
@@ -222,6 +232,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._learning_running = False
         self._vectors_synced = False
         self.root.after(30000, self._check_learning)
+        self.root.after(2000, self._check_close_request)
         self._set_status("INICIANDO SERVICIOS DOCKER…", CYAN)
         threading.Thread(
             target=self._docker_start_worker,
@@ -255,6 +266,25 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     def _request_tray_exit(self, _icon, _item) -> None:
         self.events.put(("tray_exit",))
+
+    # Jarvis corre como administrador y no se puede cerrar desde fuera sin
+    # elevar. Para instalar una versión nueva basta con crear este archivo en
+    # su carpeta: Jarvis lo borra y se cierra limpiamente (como «Salir»).
+    SOLICITUD_CIERRE = "cerrar.solicitud"
+
+    def _check_close_request(self) -> None:
+        if self._closing:
+            return
+        solicitud = core.APP_DIR / self.SOLICITUD_CIERRE
+        try:
+            if solicitud.exists():
+                solicitud.unlink()
+                logging.info("Cierre solicitado con %s; Jarvis se cierra.", self.SOLICITUD_CIERRE)
+                self._close()
+                return
+        except OSError:
+            logging.exception("No se pudo leer la solicitud de cierre.")
+        self.root.after(2000, self._check_close_request)
 
     def _request_tray_autostart(self, _icon, _item) -> None:
         activar = not self._autostart_wanted
@@ -384,6 +414,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             jarvis_displays.guardar_mapa(core.guardar_preferencia, mapa)
         except Exception:
             logging.exception("No se pudo actualizar el mapa de monitores.")
+        jarvis_vision.configurar_numeracion(_numeracion_fija_monitores)
 
     def _on_mcp_connected(self, servidor: str, herramientas: list[HerramientaMCP]) -> None:
         """Se llama desde el hilo MCP; el registro de herramientas es seguro entre hilos."""
@@ -955,6 +986,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             "vision": detectar_decision_vision,
             "power": lambda frase: detectar_decision_energia(frase, self._pending_power_action or ""),
             "screen": lambda frase: detectar_decision_energia(frase, ""),
+            "display": detectar_decision_monitores,
         }.get(kind, detectar_decision_aprobacion_plan)
         decision = detector(texto)
         if decision is None:
@@ -2500,11 +2532,21 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         dialog.attributes("-topmost", True)
         dialog.resizable(False, False)
         restante = {"segundos": self.DISPLAY_KEEP_SECONDS, "resuelto": False}
+        # Se registra como confirmación pendiente para que también se pueda
+        # responder por voz con «sí»/«no» (sin «Hey Jarvis»), como las demás.
+        por_voz = self._pending_plan_reply is None
+        if por_voz:
+            self._pending_plan_reply = reply
+            self._pending_approval_kind = "display"
+            self._plan_dialog = dialog
 
         def responder(valor: bool) -> None:
             if restante["resuelto"]:
                 return
             restante["resuelto"] = True
+            if self._pending_plan_reply is reply:
+                self._resolve_plan_approval(valor)  # cierra el diálogo y responde
+                return
             try:
                 reply.put_nowait(valor)
             except queue.Full:
@@ -2539,7 +2581,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 return
             cuenta.configure(
                 text=f"Si no respondes, se revertirá en {restante['segundos']} s. "
-                "ENTER mantiene · ESC revierte."
+                + ("Di «sí» o «no» · " if por_voz else "")
+                + "ENTER mantiene · ESC revierte."
             )
             restante["segundos"] -= 1
             dialog.after(1000, tic)
@@ -3133,6 +3176,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "vision": ("SÍ", "NO"),
         "power": ("SÍ", "NO"),
         "screen": ("SÍ", "NO"),
+        "display": ("SÍ", "NO"),
     }
 
     def _approval_hint(self, kind: str) -> str:

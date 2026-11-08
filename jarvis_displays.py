@@ -10,8 +10,10 @@ Seguridad:
 - Antes de aplicar se guarda la configuración actual (``ConfiguracionGuardada``)
   para poder revertirla exactamente.
 - Nunca se deja el equipo sin ningún monitor activo.
-- Numeración: la de Windows (\\\\.\\DISPLAYN) mientras el monitor está activo; se
-  recuerda por monitor físico para poder reactivar uno desactivado.
+- Numeración fija por monitor físico: la primera vez que se ve un monitor toma su
+  número de Windows (\\\\.\\DISPLAYN) y lo conserva para siempre, aunque Windows
+  le cambie el DISPLAYN al desactivar y volver a extender monitores. La visión,
+  el clic y el control de vídeo usan la misma numeración (``numeros_por_gdi``).
 """
 
 import ctypes
@@ -142,8 +144,9 @@ class Pantalla:
     adapter: tuple[int, int]
     target_id: int
     activa: bool
-    numero: int | None  # número de Windows (DISPLAYN) o el recordado
+    numero: int | None  # número fijo del monitor físico (ver ``asignar_numeros``)
     source_id: int | None  # fuente actual si está activa
+    gdi: int | None = None  # N de \\.\DISPLAYN mientras está activo (cambia al reconfigurar)
 
     @property
     def descripcion(self) -> str:
@@ -240,43 +243,67 @@ def listar_pantallas(
     activos_por_destino = {
         (_clave_adapter(p.targetInfo.adapterId), p.targetInfo.id): p for p in activos
     }
-    vistos: dict[tuple[tuple[int, int], int], Pantalla] = {}
+    datos: dict[tuple[tuple[int, int], int], dict] = {}
     for path in todos:
         if not path.targetInfo.targetAvailable:
             continue
         clave_destino = (_clave_adapter(path.targetInfo.adapterId), path.targetInfo.id)
-        if clave_destino in vistos:
+        if clave_destino in datos:
             continue
         nombre, ruta = _nombre_destino(path.targetInfo.adapterId, path.targetInfo.id)
         if not ruta:
             continue
         activo = activos_por_destino.get(clave_destino)
-        numero = None
+        gdi = None
         source_id = None
         if activo is not None:
             source_id = int(activo.sourceInfo.id)
-            gdi = _nombre_fuente(activo.sourceInfo.adapterId, activo.sourceInfo.id)
-            match = re.search(r"(\d+)$", gdi)
-            if match:
-                numero = int(match.group(1))
-                # El número se libera de cualquier otro monitor que lo tuviera recordado.
-                for otra, valor in list(mapa.items()):
-                    if valor == numero and otra != ruta:
-                        del mapa[otra]
-                mapa[ruta] = numero
-        if numero is None:
-            numero = mapa.get(ruta)
-        vistos[clave_destino] = Pantalla(
-            clave=ruta,
-            nombre=nombre or "monitor",
-            adapter=clave_destino[0],
-            target_id=clave_destino[1],
-            activa=activo is not None,
-            numero=numero,
-            source_id=source_id,
-        )
-    pantallas = sorted(vistos.values(), key=lambda p: (p.numero is None, p.numero or 0, p.nombre))
+            match = re.search(r"(\d+)$", _nombre_fuente(activo.sourceInfo.adapterId, activo.sourceInfo.id))
+            gdi = int(match.group(1)) if match else None
+        datos[clave_destino] = {
+            "clave": ruta, "nombre": nombre or "monitor", "adapter": clave_destino[0],
+            "target_id": clave_destino[1], "activa": activo is not None,
+            "source_id": source_id, "gdi": gdi,
+        }
+    mapa = asignar_numeros([(d["clave"], d["gdi"]) for d in datos.values()], mapa)
+    pantallas = [Pantalla(numero=mapa.get(d["clave"]), **d) for d in datos.values()]
+    pantallas.sort(key=lambda p: (p.numero is None, p.numero or 0, p.nombre))
     return pantallas, mapa
+
+
+def asignar_numeros(
+    monitores: list[tuple[str, int | None]], mapa: dict[str, int]
+) -> dict[str, int]:
+    """Número fijo para cada monitor físico ``(ruta, DISPLAYN o None)``.
+
+    Un monitor ya recordado conserva siempre su número: Windows reasigna los
+    DISPLAYN al desactivar y volver a extender, y antes eso hacía que la Smart TV
+    «robara» el número 2 al monitor que estaba apagado. Un monitor nuevo toma su
+    DISPLAYN si está libre o, si no, el número libre más bajo.
+    """
+    resultado: dict[str, int] = {}
+    usados: set[int] = set()
+    for ruta, numero in mapa.items():  # descarta duplicados de mapas antiguos
+        if numero not in usados and numero > 0:
+            resultado[ruta] = numero
+            usados.add(numero)
+    nuevos = [(ruta, gdi) for ruta, gdi in monitores if ruta not in resultado]
+    nuevos.sort(key=lambda m: (m[1] is None, m[1] or 0))
+    for ruta, gdi in nuevos:
+        numero = gdi if gdi and gdi not in usados else next(n for n in range(1, 100) if n not in usados)
+        resultado[ruta] = numero
+        usados.add(numero)
+    return resultado
+
+
+def numeros_por_gdi(mapa: dict[str, int] | None = None) -> tuple[dict[int, int], dict[str, int]]:
+    """{DISPLAYN: número fijo} de los monitores activos, y el mapa actualizado."""
+    pantallas, mapa = listar_pantallas(mapa)
+    equivalencias: dict[int, int] = {}
+    for pantalla in pantallas:  # ordenadas por número: en un duplicado gana el menor
+        if pantalla.activa and pantalla.gdi is not None and pantalla.numero is not None:
+            equivalencias.setdefault(pantalla.gdi, pantalla.numero)
+    return equivalencias, mapa
 
 
 def guardar_configuracion() -> ConfiguracionGuardada:

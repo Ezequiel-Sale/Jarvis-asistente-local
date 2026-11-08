@@ -11,7 +11,8 @@ import io
 import logging
 import os
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 import requests
 
@@ -25,7 +26,7 @@ PREGUNTA_POR_DEFECTO = "Describe qué se ve en esta pantalla y señala lo más r
 
 @dataclass(frozen=True, slots=True)
 class Monitor:
-    numero: int  # el mismo que muestra Windows en Configuración > Pantalla
+    numero: int  # número fijo del monitor físico (el de jarvis_displays)
     x: int
     y: int
     ancho: int
@@ -84,7 +85,33 @@ def listar_monitores() -> list[Monitor]:
     finally:
         if anterior:
             user32.SetThreadDpiAwarenessContext(anterior)
-    return sorted(encontrados, key=lambda m: m.numero)
+    return sorted(renumerar(encontrados), key=lambda m: m.numero)
+
+
+# Traduce los DISPLAYN de Windows a la numeración fija de jarvis_displays. La
+# configura jarvis_app al arrancar; sin ella se usan los números de Windows.
+_numeracion: "Callable[[], dict[int, int]] | None" = None
+
+
+def configurar_numeracion(funcion: "Callable[[], dict[int, int]] | None") -> None:
+    global _numeracion
+    _numeracion = funcion
+
+
+def renumerar(monitores: list[Monitor]) -> list[Monitor]:
+    """Aplica la numeración fija; si falla o hay choques, deja los de Windows."""
+    if _numeracion is None:
+        return monitores
+    try:
+        equivalencias = _numeracion()
+    except Exception:
+        logging.exception("No se pudo leer la numeración fija de monitores.")
+        return monitores
+    nuevos = [replace(m, numero=equivalencias.get(m.numero, m.numero)) for m in monitores]
+    if len({m.numero for m in nuevos}) != len(nuevos):
+        logging.warning("La numeración fija de monitores choca; uso la de Windows.")
+        return monitores
+    return nuevos
 
 
 def elegir_monitor(monitores: list[Monitor], numero: int | None) -> Monitor:

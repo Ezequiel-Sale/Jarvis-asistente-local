@@ -34,7 +34,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 - **Palabra de activación**: la escucha de «Hey Jarvis» es local y se queda en memoria; solo se transcribe lo que dices después. Se desactiva con «deja de escucharme».
 - **Rutinas que apagan, reinician o suspenden**: al llegar la hora avisan por voz con 60 s de cuenta atrás y se cancelan con un clic o diciendo «cancela».
 - **Apagar, reiniciar y suspender**: siempre piden confirmación (con botones o diciendo «sí»/«no»), aunque lo digas directamente; apagar y reiniciar esperan 10 s para que puedas decir «cancela el apagado».
-- **Cambios de monitores**: se validan antes de aplicarse y se revierten solos a los 15 s si no los confirmas.
+- **Cambios de monitores**: se validan antes de aplicarse y se revierten solos a los 15 s si no los confirmas (con el botón, ENTER o diciendo «sí»/«no»).
 - **Visión**: solo captura cuando lo pides, muestra una vista previa y la imagen nunca se guarda en disco.
 - **Archivos (MCP)**: solo lectura y solo dentro de la carpeta configurada.
 - **Seguimiento**: cada acción tiene tiempo máximo, se puede cancelar (botón *Cancelar* o Esc), se verifica cuando es posible y queda en un historial.
