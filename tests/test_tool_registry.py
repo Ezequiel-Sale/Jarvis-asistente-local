@@ -58,6 +58,9 @@ class _TestHost:
     def _tool_set_compact_mode(self, enabled: bool) -> str:
         return self._record(("compact", enabled), "compact")
 
+    def _tool_clean_disk(self, categories: list) -> str:
+        return self._record(("clean", tuple(categories)), "cleaned")
+
     def _tool_move_window(self, app: str, monitor: int | None = None, screen_name: str | None = None) -> str:
         return self._record(("move", app, monitor, screen_name), "moved")
 

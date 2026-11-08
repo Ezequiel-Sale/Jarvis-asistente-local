@@ -29,7 +29,10 @@ import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
 import jarvis_monitor_view
+import jarvis_cleanup
+import jarvis_dashboard
 import jarvis_floating
+import jarvis_hardware
 import jarvis_routines
 import jarvis_windows
 import jarvis_theme
@@ -66,6 +69,7 @@ from jarvis_commands import (
     detectar_comando_monitores,
     detectar_comando_tema,
     detectar_comando_compacto,
+    detectar_comando_limpieza,
     detectar_consulta_sistema,
     detectar_borrado_historial,
     detectar_decision_vision,
@@ -243,6 +247,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.battery_watcher.start()
         self.reminder_watcher = jarvis_reminders.VigilanteRecordatorios(self.events)
         self.reminder_watcher.start()
+        self.health_watcher = jarvis_hardware.VigilanteSalud(self.events)
+        self.health_watcher.start()
         self._barra_auto = self._barra_auto_preferida()
         self.taskbar_watcher = jarvis_displays.VigilanteBarras(self.events, lambda: self._barra_auto)
         self.taskbar_watcher.start()
@@ -263,7 +269,14 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._learning_running = False
         self._vectors_synced = False
         self.root.after(30000, self._check_learning)
+        try:
+            # Un aviso de cierre que quedó de antes (Jarvis ya estaba cerrado) no cuenta.
+            (core.APP_DIR / self.SOLICITUD_CIERRE).unlink(missing_ok=True)
+        except OSError:
+            logging.exception("No se pudo borrar una solicitud de cierre antigua.")
         self.root.after(2000, self._check_close_request)
+        self._dashboard_running = False
+        self.root.after(1500, self._schedule_dashboard)
         self._set_status("INICIANDO SERVICIOS DOCKER…", CYAN)
         threading.Thread(
             target=self._docker_start_worker,
@@ -305,6 +318,37 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     # elevar. Para instalar una versión nueva basta con crear este archivo en
     # su carpeta: Jarvis lo borra y se cierra limpiamente (como «Salir»).
     SOLICITUD_CIERRE = "cerrar.solicitud"
+
+    DASHBOARD_MS = 5000
+
+    def _refresh_home_now(self) -> None:
+        """Lee los datos del panel en un hilo (si la página está a la vista)."""
+        if self._closing or getattr(self, "_dashboard_running", False):
+            return
+        try:
+            if self._current_page != "inicio" or self.root.state() in ("withdrawn", "iconic"):
+                return
+        except tk.TclError:
+            return
+        self._dashboard_running = True
+        vigilante = getattr(self, "health_watcher", None)
+        salud = vigilante.ultimo if vigilante is not None else None
+
+        def recolectar() -> None:
+            try:
+                datos = jarvis_dashboard.recolectar(salud)
+            except Exception:
+                logging.exception("No se pudieron reunir los datos del panel de inicio.")
+                datos = jarvis_dashboard.DatosPanel()
+            self.events.put(("dashboard_data", datos))
+
+        threading.Thread(target=recolectar, name="JarvisPanel", daemon=True).start()
+
+    def _schedule_dashboard(self) -> None:
+        if self._closing:
+            return
+        self._refresh_home_now()
+        self.root.after(self.DASHBOARD_MS, self._schedule_dashboard)
 
     def _check_close_request(self) -> None:
         if self._closing:
@@ -539,6 +583,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         if porcentaje is not None:
             self._execute_volume_action(porcentaje, text)
             return
+        limpieza = detectar_comando_limpieza(text)
+        if limpieza is not None:
+            self._start_cleanup(text, limpieza["solo"])
+            return
         system_query = (
             detectar_consulta_fecha_hora(text)
             or jarvis_reminders.detectar_comando(text)
@@ -753,6 +801,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             porcentaje = detectar_comando_volumen(transcript)
             if porcentaje is not None:
                 self.events.put(("volume_action", porcentaje, transcript))
+                return
+            limpieza = detectar_comando_limpieza(transcript)
+            if limpieza is not None:
+                self.events.put(("cleanup_start", transcript, limpieza["solo"]))
                 return
             system_query = (
                 detectar_consulta_fecha_hora(transcript)
@@ -1956,6 +2008,17 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             self._exit_compact_mode()
                         else:
                             self._enter_compact_mode()
+                    elif event[0] == "cleanup_start":
+                        # Como «system_query»: la transcripción ya mostró la frase y dejó
+                        # a Jarvis «ocupado»; se libera antes de empezar la limpieza.
+                        self._set_idle()
+                        self._start_cleanup(event[1], event[2])
+                    elif event[0] == "cleanup_preview":
+                        self._show_cleanup_preview(*event[1:])
+                    elif event[0] == "cleanup_decision":
+                        self._on_cleanup_decision(*event[1:])
+                    elif event[0] == "health_alert":
+                        self._announce(event[1], alarm=True)
                     elif event[0] == "taskbar_misplaced":
                         self._on_taskbar_misplaced(event[1])
                     elif event[0] == "display_keep":
@@ -2152,7 +2215,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         )
                     elif event[0] == "ollama_gpu_notice":
                         self._add_message("assistant", event[1])
+                    elif event[0] == "dashboard_data":
+                        self._dashboard_running = False
+                        self._render_home(event[1])
                     elif event[0] == "docker_services_ready":
+                        self._voice_services_ready = True
                         logging.info("Servicios Docker de STT y TTS listos.")
                         if not self._closing and not self.busy and self.recorder is None:
                             self._set_status("SERVICIOS DOCKER LISTOS", CYAN)
@@ -2477,6 +2544,110 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             if pantalla.numero and clave in jarvis_windows.normalizar(pantalla.nombre):
                 return pantalla.numero
         raise ValueError(f"No encontré ningún monitor llamado «{nombre}».")
+
+    # --- Limpieza ------------------------------------------------------------------
+
+    def _start_cleanup(self, command: str, solo: str | None) -> None:
+        """«Libera espacio»: mide (en un hilo), muestra la tarjeta con casillas y espera."""
+        if self.busy or self._pending_plan_reply is not None:
+            self._add_message("assistant", "Espera a que termine lo que estoy haciendo y vuelve a pedírmelo.")
+            return
+        self._start_busy("MIDIENDO CUÁNTO SE PUEDE LIBERAR…")
+        conversation_id = self.conversation_id
+
+        def medir() -> None:
+            try:
+                categorias = jarvis_cleanup.analizar()
+            except Exception as error:
+                logging.exception("Falló el análisis de limpieza.")
+                self.events.put(("direct_action_error", "clean_disk", f"No pude medir el disco: {error}"))
+                return
+            self.events.put(("cleanup_preview", categorias, solo, command, conversation_id))
+
+        threading.Thread(target=medir, name="JarvisLimpiezaAnalisis", daemon=True).start()
+
+    def _show_cleanup_preview(self, categorias, solo, command, conversation_id) -> None:
+        if solo is not None:
+            categorias = [c for c in categorias if c.clave == solo]
+        if not categorias:
+            self._add_message("assistant", "No encontré nada que valga la pena borrar. 👍")
+            self._set_idle()
+            return
+        if self._pending_plan_reply is not None:
+            self._add_message("assistant", "Hay otra confirmación abierta; vuelve a pedírmelo después.")
+            self._set_idle()
+            return
+        if solo is not None:
+            for categoria in categorias:
+                categoria.marcada = True
+        reply: queue.Queue[bool] = queue.Queue(maxsize=1)
+        self._pending_plan_reply = reply
+        self._pending_approval_kind = "cleanup"
+        total = sum(c.bytes for c in categorias)
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo=f"PUEDO LIBERAR HASTA {jarvis_cleanup.tamano_legible(total).upper()}",
+            color=CYAN, aprobar="LIBERAR ESPACIO", rechazar="NO BORRAR NADA",
+            pista="Marca lo que quieras borrar. Di «sí» para borrar lo marcado o «no». ESC cancela.",
+            resumen=f"¿Libero espacio? Hasta {jarvis_cleanup.tamano_legible(total)} (lo marcado en la tarjeta).",
+        )
+        self._plan_dialog = tarjeta
+        marcas: dict[str, tk.BooleanVar] = {}
+        seleccion = tk.Label(cuerpo, bg=PANEL_LIGHT, fg=CYAN, font=("Consolas", 9, "bold"))
+
+        def actualizar(*_args) -> None:
+            elegido = sum(c.bytes for c in categorias if marcas[c.clave].get())
+            seleccion.configure(text=f"Seleccionado: {jarvis_cleanup.tamano_legible(elegido)}")
+
+        for categoria in categorias:
+            fila = tk.Frame(cuerpo, bg=PANEL_LIGHT)
+            fila.pack(fill="x", pady=2)
+            marca = tk.BooleanVar(value=categoria.marcada)
+            marca.trace_add("write", actualizar)
+            marcas[categoria.clave] = marca
+            tk.Checkbutton(
+                fila, variable=marca, bg=PANEL_LIGHT, activebackground=PANEL_LIGHT, selectcolor=PANEL,
+                fg=TEXT, activeforeground=TEXT, text=categoria.nombre, font=("Segoe UI", 10, "bold"),
+                cursor="hand2", anchor="w",
+            ).pack(side="left")
+            tk.Label(fila, text=jarvis_cleanup.tamano_legible(categoria.bytes), bg=PANEL_LIGHT, fg=CYAN,
+                     font=("Consolas", 9, "bold")).pack(side="left", padx=(8, 0))
+            tk.Label(fila, text=categoria.descripcion, bg=PANEL_LIGHT, fg=MUTED,
+                     font=("Segoe UI", 9)).pack(side="left", padx=(10, 0))
+        seleccion.pack(anchor="w", pady=(6, 0))
+        actualizar()
+        self._cleanup_marks = marcas
+        self._set_plan_voice_controls(recording=False)
+        self._set_status(self._approval_hint("cleanup"), CYAN)
+
+        def esperar() -> None:
+            try:
+                aprobado = reply.get(timeout=300)
+            except queue.Empty:
+                self.events.put(("plan_confirmation_timeout", reply))
+                aprobado = False
+            self.events.put(("cleanup_decision", aprobado, command, conversation_id))
+
+        threading.Thread(target=esperar, name="JarvisLimpiezaEspera", daemon=True).start()
+
+    def _on_cleanup_decision(self, aprobado: bool, command: str, conversation_id: str) -> None:
+        marcas = getattr(self, "_cleanup_marks", {}) or {}
+        self._cleanup_marks = {}
+        claves = [clave for clave, marca in marcas.items() if marca.get()]
+        if not aprobado or not claves:
+            self._add_message("assistant", "De acuerdo, no borré nada.")
+            self._set_idle()
+            return
+        self._start_direct_tool_action("clean_disk", {"categories": claves}, command,
+                                       conversation_id=conversation_id)
+
+    def _tool_clean_disk(self, categories: list) -> str:
+        resultados = jarvis_cleanup.limpiar([str(c) for c in categories])
+        try:
+            libre = jarvis_cleanup.tamano_legible(jarvis_cleanup.disco_libre())
+            extra = f"\nAhora hay **{libre}** libres en el disco del sistema."
+        except OSError:
+            extra = ""
+        return jarvis_cleanup.describir_resultado(resultados) + extra
 
     def _tool_fix_display_scaling(self, monitor: int | None = None) -> str:
         mapa = jarvis_displays.cargar_mapa(core.obtener_preferencia)
@@ -3030,6 +3201,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "fix_display_scaling": "REAJUSTANDO EL ESCALADO…",
         "set_theme": "CAMBIANDO EL TEMA…",
         "set_compact_mode": "CAMBIANDO EL MODO DE VENTANA…",
+        "clean_disk": "LIBERANDO ESPACIO…",
         "move_window": "MOVIENDO VENTANAS…",
         "power_control": "ESPERANDO CONFIRMACIÓN…",
         "cancel_power_action": "CANCELANDO EL APAGADO…",
@@ -3267,6 +3439,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "screen": ("SÍ", "NO"),
         "display": ("SÍ", "NO"),
         "tool": ("SÍ", "NO"),
+        "cleanup": ("SÍ", "NO"),
     }
 
     def _approval_hint(self, kind: str) -> str:
@@ -3515,6 +3688,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.headphones_watcher.stop()
         self.battery_watcher.stop()
         self.reminder_watcher.stop()
+        self.health_watcher.stop()
         self.taskbar_watcher.stop()
         self._stop_wakeword()
         if self._routines_panel is not None:

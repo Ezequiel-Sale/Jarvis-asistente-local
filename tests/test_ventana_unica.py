@@ -54,7 +54,10 @@ class SingleWindowTests(unittest.TestCase):
 
     def test_chat_is_part_of_the_main_window(self) -> None:
         self.assertIs(self.vista.chat_window, self.root)
-        self.assertEqual(self.vista._current_page, "chat")
+        # La primera página es el panel de inicio (decisión del usuario, 2026-11-08).
+        self.assertEqual(self.vista._current_page, "inicio")
+        self.assertEqual(self.vista.page_title.cget("text"), "INICIO")
+        self.vista._show_page("chat")
         self.assertEqual(self.vista.page_title.cget("text"), "CHAT")
 
     def test_sections_switch_without_new_windows(self) -> None:

@@ -12,7 +12,9 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 |---|---|
 | **Conversación con memoria** | «Recuerda que prefiero Brave», «¿qué recuerdas sobre mi navegador?». Busca recuerdos por significado y **aprende solo** de las conversaciones («¿qué aprendiste de mí?», «desactiva el aprendizaje automático») |
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
-| **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» |
+| **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» (incluye temperaturas de la GPU y la CPU; avisa solo si algo se calienta demasiado) |
+| **Limpieza** | «Libera espacio», «vacía la papelera», «borra los archivos temporales»: muestra cuánto ocupa cada cosa (temporales, papelera, caché de Brave, Docker, modelos de Ollama sin usar) y borra solo lo que marques tras confirmar |
+| **Panel de inicio** | Primera página: hora, clima, salud del equipo, próximos recordatorios y rutinas, lo que suena, batería de los auriculares y estado de los servicios |
 | **Multimedia** | «Reanuda el vídeo del monitor 2», «pausa el vídeo del monitor 1 y reanuda el del monitor 2», «dale play al vídeo de la segunda pantalla», «silencia la pestaña que suena», «mutea YouTube», «devuélvele el sonido al vídeo», «Pausa la música», «siguiente canción», «la anterior», «¿qué está sonando?», «pon el volumen de Spotify al 30», «silencia Discord» |
 | **Temporizadores y recordatorios** | «Pon un temporizador de 10 minutos», «recuérdame en 20 minutos sacar la ropa», «recuérdame mañana a las 9 pagar la luz», «pon una alarma a las 7», «¿qué recordatorios tengo?», «cancela el temporizador» |
 | **Auriculares G533** | «¿Cuánta batería tienen los auriculares?»; aviso automático cuando baja del 15 % |
@@ -75,6 +77,7 @@ flowchart LR
   (el segundo solo es necesario para la visión de pantalla; el tercero, para buscar recuerdos por significado)
 - [Node.js](https://nodejs.org) (para el servidor MCP de archivos)
 - Opcional: navegador Brave para las funciones web
+- Opcional: driver [PawnIO](https://pawnio.eu) para ver la temperatura de la CPU (la GPU no lo necesita). Las temperaturas se leen con [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (MPL 2.0), incluido en `vendor/`
 
 ## Instalación
 

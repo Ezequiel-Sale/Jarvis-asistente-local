@@ -8,12 +8,16 @@ a = Analysis(
     binaries=[],
     # collect_data_files('openwakeword') incluye los modelos de «Hey Jarvis»
     # (descargados con openwakeword.utils.download_models; ver README).
-    datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.')]
-    + collect_data_files('openwakeword'),
+    datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.'),
+           # Sensores de temperatura (LibreHardwareMonitor, MPL 2.0) y sus dependencias.
+           ('vendor/LibreHardwareMonitor', 'vendor/LibreHardwareMonitor')]
+    + collect_data_files('openwakeword') + collect_data_files('pythonnet')
+    + collect_data_files('clr_loader'),
     hiddenimports=['pystray._win32', 'pystray._util.win32',
                    'winrt.windows.media.control', 'winrt.windows.foundation',
                    # Interfaces COM de UI Automation ya generadas (clic en pantalla).
-                   'uiautomation', *collect_submodules('comtypes.gen')],
+                   'uiautomation', *collect_submodules('comtypes.gen'),
+                   'pythonnet', 'clr', 'clr_loader', *collect_submodules('clr_loader')],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

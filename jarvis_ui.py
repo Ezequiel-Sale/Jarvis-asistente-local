@@ -81,14 +81,15 @@ class JarvisUIMixin:
             pages.grid_rowconfigure(0, weight=1)
             pages.grid_columnconfigure(0, weight=1)
             self._pages: dict[str, tk.Frame] = {}
-            for nombre in ("chat", "rutinas", "ajustes"):
+            for nombre in ("inicio", "chat", "rutinas", "ajustes"):
                 pagina = tk.Frame(pages, bg=BG)
                 pagina.grid(row=0, column=0, sticky="nsew")
                 self._pages[nombre] = pagina
             self._build_chat_page(self._pages["chat"])
             self._build_settings_page(self._pages["ajustes"])
+            self._build_home_page(self._pages["inicio"])
             self._current_page = ""
-            self._show_page("chat")
+            self._show_page("inicio")  # el panel de inicio es la primera página
             self._draw_orb()
             self.root.after(40, self._animate_orb)
 
@@ -127,7 +128,8 @@ class JarvisUIMixin:
             tk.Frame(sidebar, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 10))
 
             self._nav_buttons: dict[str, tk.Button] = {}
-            for nombre, texto in (("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"), ("ajustes", "⚙   AJUSTES")):
+            for nombre, texto in (("inicio", "⌂   INICIO"), ("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"),
+                                  ("ajustes", "⚙   AJUSTES")):
                 boton = tk.Button(
                     sidebar, text=texto, anchor="w", command=lambda n=nombre: self._show_page(n),
                     bg=PANEL, fg=MUTED, activebackground=HOVER, activeforeground=TEXT,
@@ -142,7 +144,8 @@ class JarvisUIMixin:
                 bg=PANEL, fg=MUTED, justify="left", font=("Consolas", 8),
             ).pack(side="bottom", anchor="w", padx=22, pady=18)
 
-        _PAGE_TITLES = {"chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES", "ajustes": "AJUSTES"}
+        _PAGE_TITLES = {"inicio": "INICIO", "chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES",
+                        "ajustes": "AJUSTES"}
 
         def _show_page(self, nombre: str) -> None:
             if nombre not in self._pages:
@@ -165,6 +168,8 @@ class JarvisUIMixin:
                 self._load_routines_page()
             if nombre == "ajustes":
                 self._refresh_monitor_map()
+            if nombre == "inicio":
+                self._refresh_home_now()
 
         def _build_chat_page(self, page: tk.Frame) -> None:
             content = tk.Frame(page, bg=BG, padx=28, pady=16)
@@ -519,6 +524,177 @@ class JarvisUIMixin:
                 menu.tk_popup(event.x_root, event.y_root)
             finally:
                 menu.grab_release()
+
+        # --- Panel de inicio ------------------------------------------------------
+
+        def _home_card(self, parent: tk.Misc, titulo: str) -> tk.Frame:
+            marco = tk.Frame(parent, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+            tk.Label(marco, text=titulo, bg=PANEL, fg=MUTED, font=("Consolas", 9, "bold")).pack(anchor="w")
+            cuerpo = tk.Frame(marco, bg=PANEL)
+            cuerpo.pack(fill="both", expand=True, pady=(8, 0))
+            marco.jarvis_cuerpo = cuerpo
+            return marco
+
+        def _build_home_page(self, page: tk.Frame) -> None:
+            import jarvis_dashboard
+
+            lienzo = tk.Canvas(page, bg=BG, highlightthickness=0, bd=0)
+            lienzo.pack(fill="both", expand=True)
+            cuerpo = tk.Frame(lienzo, bg=BG, padx=28, pady=18)
+            ventana = lienzo.create_window((0, 0), window=cuerpo, anchor="nw")
+            cuerpo.bind("<Configure>", lambda _e: lienzo.configure(scrollregion=lienzo.bbox("all")))
+            lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana, width=e.width))
+            cuerpo.jarvis_scroll = lienzo
+            cuerpo.grid_columnconfigure((0, 1), weight=1, uniform="inicio")
+
+            # Encabezado: hora, fecha, saludo, clima y accesos rápidos.
+            hero = tk.Frame(cuerpo, bg=PANEL, padx=22, pady=18, highlightthickness=1, highlightbackground=BORDER)
+            hero.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+            hero.grid_columnconfigure(1, weight=1)
+            izquierda = tk.Frame(hero, bg=PANEL)
+            izquierda.grid(row=0, column=0, sticky="nw")
+            self.home_greet = tk.Label(izquierda, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 11))
+            self.home_greet.pack(anchor="w")
+            self.home_clock = tk.Label(izquierda, text="--:--", bg=PANEL, fg=CYAN, font=("Segoe UI", 40, "bold"))
+            self.home_clock.pack(anchor="w")
+            self.home_date = tk.Label(izquierda, text="", bg=PANEL, fg=TEXT, font=("Segoe UI", 12))
+            self.home_date.pack(anchor="w")
+            derecha = tk.Frame(hero, bg=PANEL)
+            derecha.grid(row=0, column=1, sticky="nsew", padx=(28, 0))
+            tk.Label(derecha, text="CLIMA", bg=PANEL, fg=MUTED, font=("Consolas", 9, "bold")).pack(anchor="w")
+            self.home_weather = tk.Label(derecha, text="Consultando…", bg=PANEL, fg=TEXT, font=("Segoe UI", 10),
+                                         justify="left", anchor="w", wraplength=460)
+            self.home_weather.pack(anchor="w", fill="x", pady=(4, 10))
+            accesos = tk.Frame(derecha, bg=PANEL)
+            accesos.pack(anchor="w")
+            for texto, comando in (("🎙  HABLAR", self._on_orb_click), ("🧹  LIBERAR ESPACIO",
+                                   lambda: self._start_cleanup("Panel de inicio: liberar espacio", None)),
+                                   ("▣  MODO COMPACTO", self._enter_compact_mode)):
+                self._ui_button(accesos, texto, comando).pack(side="left", padx=(0, 8))
+
+            # Salud del equipo.
+            salud = self._home_card(cuerpo, "SALUD DEL EQUIPO")
+            salud.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
+            self._home_bars = {}
+            for clave, nombre in (("gpu", "GPU"), ("gpu_hot", "GPU punto caliente"), ("gpu_load", "Carga GPU"),
+                                  ("cpu", "CPU"), ("cpu_load", "Carga CPU"), ("ram", "Memoria RAM"),
+                                  ("disco", "Disco del sistema")):
+                fila = tk.Frame(salud.jarvis_cuerpo, bg=PANEL)
+                fila.pack(fill="x", pady=3)
+                tk.Label(fila, text=nombre, bg=PANEL, fg=TEXT, font=("Segoe UI", 9), width=17,
+                         anchor="w").pack(side="left")
+                barra = tk.Canvas(fila, width=130, height=8, bg=PANEL_LIGHT, highlightthickness=0, bd=0)
+                barra.pack(side="left", padx=(4, 10))
+                valor = tk.Label(fila, text="…", bg=PANEL, fg=MUTED, font=("Consolas", 9), anchor="w")
+                valor.pack(side="left")
+                self._home_bars[clave] = (barra, valor)
+            self.home_health_note = tk.Label(salud.jarvis_cuerpo, text="", bg=PANEL, fg=MUTED,
+                                             font=("Segoe UI", 8), justify="left", wraplength=380)
+            self.home_health_note.pack(anchor="w", pady=(6, 0))
+
+            proximo = self._home_card(cuerpo, "PRÓXIMO")
+            proximo.grid(row=1, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
+            self.home_upcoming = tk.Label(proximo.jarvis_cuerpo, text="…", bg=PANEL, fg=TEXT, font=("Segoe UI", 10),
+                                          justify="left", anchor="nw", wraplength=420)
+            self.home_upcoming.pack(anchor="w", fill="x")
+
+            sonando = self._home_card(cuerpo, "SONANDO AHORA · AURICULARES")
+            sonando.grid(row=2, column=0, sticky="nsew", padx=(0, 6))
+            self.home_media = tk.Label(sonando.jarvis_cuerpo, text="…", bg=PANEL, fg=TEXT, font=("Segoe UI", 10),
+                                       justify="left", anchor="w", wraplength=400)
+            self.home_media.pack(anchor="w", fill="x")
+            self.home_battery = tk.Label(sonando.jarvis_cuerpo, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 10),
+                                         anchor="w")
+            self.home_battery.pack(anchor="w", pady=(8, 0))
+
+            servicios = self._home_card(cuerpo, "SERVICIOS")
+            servicios.grid(row=2, column=1, sticky="nsew", padx=(6, 0))
+            self.home_services = tk.Label(servicios.jarvis_cuerpo, text="…", bg=PANEL, fg=TEXT,
+                                          font=("Consolas", 9), justify="left", anchor="w")
+            self.home_services.pack(anchor="w", fill="x")
+            self._saludo = jarvis_dashboard.saludo
+            self._tick_home_clock()
+
+        def _tick_home_clock(self) -> None:
+            from datetime import datetime
+
+            reloj = getattr(self, "home_clock", None)
+            if reloj is None or not reloj.winfo_exists():
+                return
+            ahora = datetime.now()
+            dias = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+            meses = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+                     "septiembre", "octubre", "noviembre", "diciembre")
+            reloj.configure(text=ahora.strftime("%H:%M"))
+            self.home_date.configure(text=f"{dias[ahora.weekday()].capitalize()} {ahora.day} de "
+                                          f"{meses[ahora.month - 1]} de {ahora.year}")
+            self.home_greet.configure(text=self._saludo(ahora.hour))
+            reloj.after(1000, self._tick_home_clock)
+
+        def _set_home_bar(self, clave: str, fraccion: float | None, texto: str, alerta: bool = False) -> None:
+            barra, valor = self._home_bars[clave]
+            barra.delete("all")
+            if fraccion is not None:
+                ancho = max(0.0, min(1.0, fraccion)) * int(barra.cget("width"))
+                barra.create_rectangle(0, 0, ancho, 8, fill=ERROR if alerta else CYAN, outline="")
+            valor.configure(text=texto, fg=ERROR if alerta else (TEXT if fraccion is not None else MUTED))
+
+        def _render_home(self, datos) -> None:
+            import jarvis_hardware as hw
+
+            if not hasattr(self, "home_weather") or not self.home_weather.winfo_exists():
+                return
+            self.home_weather.configure(text=datos.clima or "Sin datos del clima (¿sin internet o sin ciudad? "
+                                                            "Dime «mi ciudad es …»).")
+            s = datos.salud
+
+            def temp(clave, valor, limite):
+                if valor is None:
+                    self._set_home_bar(clave, None, "sin dato")
+                else:
+                    self._set_home_bar(clave, valor / 110, f"{valor:.0f} °C", alerta=valor >= limite)
+
+            temp("gpu", s.gpu, hw.LIMITE_GPU)
+            temp("gpu_hot", s.gpu_punto_caliente, hw.LIMITE_GPU_PUNTO_CALIENTE)
+            temp("cpu", s.cpu, hw.LIMITE_CPU)
+            for clave, valor in (("gpu_load", s.gpu_carga), ("cpu_load", s.cpu_carga)):
+                if valor is None:
+                    self._set_home_bar(clave, None, "sin dato")
+                else:
+                    self._set_home_bar(clave, valor / 100, f"{valor:.0f} %")
+            self._set_home_bar("ram", datos.ram_pct / 100, f"{datos.ram_pct:.0f} % · {datos.ram_texto}",
+                               alerta=datos.ram_pct >= 90)
+            self._set_home_bar("disco", datos.disco_pct / 100, datos.disco_texto, alerta=datos.disco_pct >= 90)
+            nota = []
+            if s.cpu is None and s.cpu_nombre:
+                nota.append("La temperatura de la CPU necesita el driver PawnIO (pawnio.eu).")
+            if hw.sensores.error:
+                nota.append("Sensores no disponibles: " + hw.sensores.error)
+            self.home_health_note.configure(text="\n".join(nota))
+            lineas = []
+            if datos.recordatorios:
+                lineas += ["⏰  " + r for r in datos.recordatorios]
+            if datos.rutinas:
+                lineas += ["⏱  " + r for r in datos.rutinas]
+            self.home_upcoming.configure(text="\n".join(lineas) or "Nada programado. Prueba «recuérdame en 20 "
+                                                                   "minutos…» o crea una rutina.")
+            self.home_media.configure(text=datos.sonando or "No suena nada.")
+            if datos.auriculares is None:
+                self.home_battery.configure(text="🎧  G533: no detectado")
+            elif not datos.auriculares:
+                self.home_battery.configure(text="🎧  G533: apagado")
+            else:
+                carga = f"{datos.bateria} %" if datos.bateria is not None else "sin dato"
+                self.home_battery.configure(text=f"🎧  G533: batería {carga}",
+                                            fg=ERROR if datos.bateria is not None and datos.bateria <= 15 else MUTED)
+            modelos = ", ".join(datos.modelos_cargados) if datos.modelos_cargados else "ninguno cargado"
+            voz = getattr(self, "_voice_services_ready", None)
+            self.home_services.configure(text=(
+                f"Ollama     {'en línea' if datos.ollama_ok else 'sin conexión'}\n"
+                f"Modelos    {modelos}\n"
+                f"Voz        {'lista' if voz else ('iniciando…' if voz is None else 'sin conexión')}\n"
+                f"Sensores   {'LibreHardwareMonitor' if not hw.sensores.error else 'no disponibles'}"
+            ))
 
         def _refresh_theme_buttons(self) -> None:
             actual = jarvis_theme.tema_actual()

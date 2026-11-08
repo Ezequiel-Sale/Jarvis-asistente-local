@@ -21,6 +21,7 @@ class ToolEventHost(Protocol):
     def _tool_set_jarvis_audio(self, enabled: bool) -> str: ...
     def _tool_set_theme(self, theme: str) -> str: ...
     def _tool_set_compact_mode(self, enabled: bool) -> str: ...
+    def _tool_clean_disk(self, categories: list) -> str: ...
     def _tool_move_window(
         self, app: str, monitor: int | None = None, screen_name: str | None = None
     ) -> str: ...
@@ -108,6 +109,22 @@ def crear_registro_herramientas(
         label="Activar o silenciar el audio de Jarvis",
         timeout_seconds=20,
         verifier=verificadores.get("set_jarvis_audio"),
+    )
+    registry.register(
+        "clean_disk",
+        "Borra las categorías de limpieza elegidas por el usuario en la tarjeta de «libera espacio».",
+        {
+            "type": "object",
+            "properties": {"categories": {"type": "array", "items": {"type": "string"}}},
+            "required": ["categories"],
+            "additionalProperties": False,
+        },
+        host._tool_clean_disk,
+        risk=ToolRisk.HIGH,
+        requires_confirmation=True,
+        label="Liberar espacio",
+        timeout_seconds=600,
+        exposed=False,  # el modelo no puede borrar archivos: solo la tarjeta confirmada
     )
     registry.register(
         "set_compact_mode",
@@ -410,7 +427,7 @@ def _registrar_consultas_sistema(registry: ToolRegistry) -> None:
         "get_system_status",
         (
             "Solo lectura. Informa el uso de CPU, RAM, espacio libre en el disco del "
-            "sistema, tiempo encendido y batería si existe."
+            "sistema, tiempo encendido, temperaturas de la GPU y la CPU, y batería si existe."
         ),
         {
             "type": "object",

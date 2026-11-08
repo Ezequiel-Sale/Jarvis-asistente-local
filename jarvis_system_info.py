@@ -340,7 +340,14 @@ def consultar_procesos(sort_by: str = "memory", limit: int = 5) -> str:
 
 
 def consultar_estado_equipo() -> str:
-    return formatear_estado(obtener_estado_equipo())
+    texto = formatear_estado(obtener_estado_equipo())
+    try:
+        import jarvis_hardware
+
+        lineas = jarvis_hardware.describir(jarvis_hardware.sensores.leer())
+    except Exception:
+        lineas = []
+    return texto + ("\n" + "\n".join(lineas) if lineas else "")
 
 
 # --- Fecha y hora -------------------------------------------------------------

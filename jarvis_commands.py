@@ -1079,3 +1079,28 @@ def detectar_comando_compacto(texto: str) -> tuple[str, dict[str, object]] | Non
     if _COMPACTO_OFF.fullmatch(consulta):
         return "set_compact_mode", {"enabled": False}
     return None
+
+
+_LIMPIEZA = re.compile(
+    r"^(?:libera|liberar|liberame|haz|hace|hacer|haceme|limpia|limpiar|limpiame)\s+"
+    r"(?:(?:un\s+poco\s+de\s+|algo\s+de\s+)?espacio(?:\s+(?:en|del)\s+(?:el\s+)?disco)?"
+    r"|(?:una\s+)?limpieza(?:\s+(?:del|de)\s+(?:el\s+)?(?:disco|equipo|pc))?"
+    r"|(?:el\s+)?(?:disco|equipo|pc))$"
+)
+_LIMPIEZA_SOLO = (
+    (re.compile(r"^(?:vacia|vaciar|vaciame|limpia|limpiar)\s+(?:la\s+)?papelera(?:\s+de\s+reciclaje)?$"), "papelera"),
+    (re.compile(r"^(?:borra|borrar|limpia|limpiar|elimina)\s+(?:los\s+)?(?:archivos\s+)?temporales$"), "temporales"),
+    (re.compile(r"^(?:borra|borrar|limpia|limpiar)\s+(?:la\s+)?(?:cache|cach)\s+(?:de|del)\s+(?:brave|navegador)$"),
+     "cache_brave"),
+)
+
+
+def detectar_comando_limpieza(texto: str) -> dict[str, object] | None:
+    """«libera espacio», «haz una limpieza del disco», «vacía la papelera»… → {"solo": clave|None}."""
+    consulta = _normalizar_consulta(texto)
+    if _LIMPIEZA.fullmatch(consulta):
+        return {"solo": None}
+    for patron, clave in _LIMPIEZA_SOLO:
+        if patron.fullmatch(consulta):
+            return {"solo": clave}
+    return None
