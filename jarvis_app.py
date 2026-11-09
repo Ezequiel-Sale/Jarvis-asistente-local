@@ -3344,6 +3344,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "set_theme": "CAMBIANDO EL TEMA…",
         "set_compact_mode": "CAMBIANDO EL MODO DE VENTANA…",
         "set_voice": "CAMBIANDO LA VOZ…",
+        "video_fullscreen": "CAMBIANDO LA PANTALLA COMPLETA…",
         "clean_disk": "LIBERANDO ESPACIO…",
         "move_window": "MOVIENDO VENTANAS…",
         "power_control": "ESPERANDO CONFIRMACIÓN…",

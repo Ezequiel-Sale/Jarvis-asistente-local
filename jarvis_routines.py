@@ -61,6 +61,7 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "set_jarvis_audio",
         "set_theme",
         "set_voice",
+        "video_fullscreen",
         "open_new_browser_tab",
         "navigate_browser",
         "launch_game",

@@ -209,6 +209,11 @@ _BOTON_PLAY = re.compile(rf"^(?:reproducir|play){_TECLAS_BOTON}\s+k$")
 _BOTON_PAUSA = re.compile(rf"^(?:pausa|pausar|pause){_TECLAS_BOTON}\s+k$")
 _BOTON_SIGUIENTE = re.compile(rf"^(?:siguiente|next){_TECLAS_BOTON}\s+(?:mayus|shift)\s+n$")
 _BOTON_ANTERIOR = re.compile(rf"^(?:anterior|previous){_TECLAS_BOTON}\s+(?:mayus|shift)\s+p$")
+# YouTube: «Pantalla completa (f)» / «Salir de pantalla completa (f)»; en inglés «Full screen (f)».
+_BOTON_PANTALLA_COMPLETA = re.compile(rf"^(?:pantalla\s+completa|full\s*screen){_TECLAS_BOTON}\s+f$")
+_BOTON_SALIR_PANTALLA_COMPLETA = re.compile(
+    rf"^(?:salir\s+de\s+(?:la\s+)?pantalla\s+completa|exit\s+full\s*screen){_TECLAS_BOTON}\s+f$"
+)
 
 
 def clasificar_boton(nombre: str) -> str | None:
@@ -219,6 +224,8 @@ def clasificar_boton(nombre: str) -> str | None:
         ("pause", _BOTON_PAUSA),
         ("next", _BOTON_SIGUIENTE),
         ("previous", _BOTON_ANTERIOR),
+        ("exit_fullscreen", _BOTON_SALIR_PANTALLA_COMPLETA),
+        ("fullscreen", _BOTON_PANTALLA_COMPLETA),
     ):
         if patron.match(nombre):
             return clave
@@ -276,6 +283,63 @@ def _reproductor_en_monitor(action: str, numero: int) -> str | None:
                 "previous": "Volví al vídeo anterior",
             }[action] + f" del monitor {numero}."
     return None
+
+
+def _botones_reproductor(zona) -> list[dict[str, object]]:
+    """Botones clasificados de cada ventana Chromium (de arriba abajo), opcionalmente de un monitor."""
+    import uiautomation as auto
+
+    encontrados = []
+    for ventana in auto.GetRootControl().GetChildren():
+        if ventana.ClassName != "Chrome_WidgetWin_1":
+            continue
+        if zona is not None and not _en_zona(ventana.BoundingRectangle, zona):
+            continue
+        botones: dict[str, object] = {}
+        for control, _ in auto.WalkControl(ventana, maxDepth=40):
+            if control.ControlTypeName != "ButtonControl":
+                continue
+            clave = clasificar_boton(control.Name)
+            if clave is not None and clave not in botones:
+                botones[clave] = control
+        if "fullscreen" in botones or "exit_fullscreen" in botones:
+            encontrados.append(botones)
+    return encontrados
+
+
+def pantalla_completa(enabled: bool, monitor: int | None = None, *, espera: float = 1.5) -> str:
+    """Pone el vídeo de la pestaña activa en pantalla completa o lo saca (botón del reproductor).
+
+    Sin ``monitor``, el primer reproductor de arriba abajo (la ventana de delante).
+    Brave expone la página tras la primera consulta de accesibilidad: si no se ve
+    ningún reproductor, se espera un momento y se vuelve a mirar.
+    """
+    import ctypes
+
+    import uiautomation as auto
+
+    import jarvis_vision
+
+    zona = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), monitor) if monitor else None
+    donde = f" del monitor {monitor}" if monitor else ""
+    ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    with auto.UIAutomationInitializerInThread():
+        reproductores = _botones_reproductor(zona)
+        if not reproductores:
+            time.sleep(max(0.0, espera))
+            reproductores = _botones_reproductor(zona)
+        if not reproductores:
+            raise LookupError(f"No encontré ningún vídeo{donde} con botón de pantalla completa.")
+        botones = reproductores[0]
+        if enabled:
+            if "exit_fullscreen" in botones:
+                return f"El vídeo{donde} ya está en pantalla completa."
+            botones["fullscreen"].GetInvokePattern().Invoke()
+            return f"Puse el vídeo{donde} en pantalla completa."
+        if "exit_fullscreen" not in botones:
+            return f"El vídeo{donde} no está en pantalla completa."
+        botones["exit_fullscreen"].GetInvokePattern().Invoke()
+        return f"Saqué el vídeo{donde} de pantalla completa."
 
 
 def controlar_reproduccion(
@@ -693,6 +757,22 @@ _ACTIVAR_PESTANA = re.compile(
 )
 
 
+_PANTALLA_COMPLETA = r"(?:la\s+)?pantalla\s+completa"
+_PONER_PANTALLA_COMPLETA = re.compile(
+    rf"^(?:pon|ponme|poner|ponlo|ponle|haz|hace|deja|dejalo|mete|abre)\s+(?:{_VIDEO}\s+)?(?:en\s+|a\s+)?{_PANTALLA_COMPLETA}"
+    rf"(?:\s+(?:a|al|el|en\s+el)\s+{_VIDEO})?$"
+    rf"|^{_PANTALLA_COMPLETA}(?:\s+(?:al|el|en\s+el)\s+{_VIDEO})?$"
+    rf"|^(?:agranda|agrandar|amplia|ampliar|maximiza|maximizar)\s+{_VIDEO}$"
+)
+_QUITAR_PANTALLA_COMPLETA = re.compile(
+    rf"^(?:sal|salir|salte|sali|quita|quitar|quitale|saca|sacar|sacalo|desactiva|cierra)\s+(?:de\s+)?{_PANTALLA_COMPLETA}"
+    rf"(?:\s+(?:a|al|del|de|en\s+el)\s+{_VIDEO})?$"
+    rf"|^(?:saca|sacar|sacalo)\s+{_VIDEO}\s+de\s+{_PANTALLA_COMPLETA}$"
+    rf"|^(?:achica|achicar|reduce|reducir|minimiza|minimizar)\s+{_VIDEO}$"
+    rf"|^(?:vuelve|volve|deja|pon)\s+{_VIDEO}\s+(?:a|al|en)\s+(?:tamano\s+normal|modo\s+normal|normal)$"
+)
+
+
 def _separar_monitor(consulta: str) -> tuple[str, int | None]:
     m = _EN_MONITOR.search(consulta)
     if m is None:
@@ -709,7 +789,7 @@ def _argumentos_pestana(m: re.Match, mute: bool, extra: dict) -> dict[str, objec
 
 # «pausa el vídeo del monitor 1 y reanuda el del monitor 2»: varias órdenes seguidas.
 _UNION = re.compile(r"\s+(?:y\s+(?:luego\s+|despues\s+|tambien\s+)?|luego\s+|despues\s+)")
-_PASOS_SECUENCIA = {"media_control", "mute_browser_tab"}
+_PASOS_SECUENCIA = {"media_control", "mute_browser_tab", "video_fullscreen"}
 MAX_PASOS = 4
 
 
@@ -728,7 +808,8 @@ def detectar_secuencia(consulta: str) -> list[dict[str, object]] | None:
 
 def ejecutar_secuencia(steps: list[dict[str, object]]) -> str:
     """Ejecuta en orden pasos multimedia de riesgo bajo (órdenes compuestas)."""
-    funciones = {"media_control": controlar_reproduccion, "mute_browser_tab": silenciar_pestana}
+    funciones = {"media_control": controlar_reproduccion, "mute_browser_tab": silenciar_pestana,
+                 "video_fullscreen": pantalla_completa}
     if not 1 <= len(steps) <= MAX_PASOS:
         raise ValueError(f"Indica entre 1 y {MAX_PASOS} pasos.")
     resultados = []
@@ -739,7 +820,7 @@ def ejecutar_secuencia(steps: list[dict[str, object]]) -> str:
             raise ValueError(f"Paso no permitido: {paso.get('tool')}")
         try:
             resultados.append(funcion(**argumentos))
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, LookupError) as error:
             resultados.append(f"No pude: {error}")
     return " ".join(resultados)
 
@@ -761,6 +842,10 @@ def _detectar_uno(consulta: str) -> tuple[str, dict[str, object]] | None:
         return "mute_browser_tab", _argumentos_pestana(m, True, extra)
     if (m := _ACTIVAR_PESTANA.fullmatch(sin_monitor)) is not None:
         return "mute_browser_tab", _argumentos_pestana(m, False, extra)
+    if _QUITAR_PANTALLA_COMPLETA.fullmatch(sin_monitor):
+        return "video_fullscreen", {"enabled": False, **extra}
+    if _PONER_PANTALLA_COMPLETA.fullmatch(sin_monitor):
+        return "video_fullscreen", {"enabled": True, **extra}
     if _PAUSA.fullmatch(sin_monitor):
         return "media_control", {"action": "pause", **extra}
     if _REANUDA.fullmatch(sin_monitor):
@@ -843,6 +928,25 @@ def registrar_herramientas(registry, verificadores=None) -> None:
         label="Controlar reproducción",
         timeout_seconds=10,
         verifier=verificadores.get("media_control"),
+    )
+    registry.register(
+        "video_fullscreen",
+        (
+            "Pone en pantalla completa (enabled=true) o saca de ella (enabled=false) el vídeo "
+            "de YouTube u otro reproductor de la pestaña activa de Brave/Chrome; monitor opcional."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+            },
+            "required": ["enabled"],
+            "additionalProperties": False,
+        },
+        pantalla_completa,
+        label="Pantalla completa del vídeo",
+        timeout_seconds=20,
     )
     registry.register(
         "get_now_playing",
