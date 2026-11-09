@@ -33,6 +33,7 @@ import jarvis_audio_devices
 import jarvis_cleanup
 import jarvis_dashboard
 import jarvis_floating
+import jarvis_games_watch
 import jarvis_voices
 import jarvis_hardware
 import jarvis_routines
@@ -266,6 +267,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.reminder_watcher.start()
         self.health_watcher = jarvis_hardware.VigilanteSalud(self.events)
         self.health_watcher.start()
+        self.games_watcher = jarvis_games_watch.VigilanteJuegos(self.events)
+        self.games_watcher.start()
         self._barra_auto = self._barra_auto_preferida()
         self.taskbar_watcher = jarvis_displays.VigilanteBarras(self.events, lambda: self._barra_auto)
         self.taskbar_watcher.start()
@@ -1285,7 +1288,14 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             )
         return "Se ejecutará automáticamente" if automatic else "Pedirá aprobación cada vez que se active"
 
-    def _handle_device_event(self, trigger: str) -> None:
+    _ESTADOS_EVENTO = {
+        "auriculares_conectados": "AURICULARES CONECTADOS",
+        "auriculares_desconectados": "AURICULARES DESCONECTADOS",
+        "juego_abierto": "MODO JUEGO: {detalle}",
+        "juego_cerrado": "JUEGO CERRADO: {detalle}",
+    }
+
+    def _handle_device_event(self, trigger: str, detalle: str = "") -> None:
         try:
             routines = jarvis_routines.rutinas_para_evento(trigger)
         except Exception:
@@ -1294,12 +1304,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         for routine in routines:
             self._pending_routines.put(routine)
         if routines and not self.busy:
-            self._set_status(
-                "AURICULARES CONECTADOS"
-                if trigger == jarvis_routines.DISPARADOR_AURICULARES_CONECTADOS
-                else "AURICULARES DESCONECTADOS",
-                CYAN,
-            )
+            texto = self._ESTADOS_EVENTO.get(trigger, trigger.upper())
+            self._set_status(texto.format(detalle=detalle.upper()).rstrip(": "), CYAN)
 
     # --- Clic y escritura en pantalla ------------------------------------------
 
@@ -2081,6 +2087,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             self._set_status("OLLAMA NO DISPONIBLE", ERROR)
                     elif event[0] == "device_event":
                         self._handle_device_event(event[1])
+                    elif event[0] in ("game_started", "game_stopped"):
+                        self._handle_device_event(
+                            jarvis_routines.DISPARADOR_JUEGO_ABIERTO if event[0] == "game_started"
+                            else jarvis_routines.DISPARADOR_JUEGO_CERRADO,
+                            detalle=event[1],
+                        )
                     elif event[0] == "routine_due":
                         self._pending_routines.put(event[1])
                     elif event[0] == "routine_result":
@@ -3820,6 +3832,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.battery_watcher.stop()
         self.reminder_watcher.stop()
         self.health_watcher.stop()
+        self.games_watcher.stop()
         self.taskbar_watcher.stop()
         self._stop_wakeword()
         if self._routines_panel is not None:

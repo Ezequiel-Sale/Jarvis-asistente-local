@@ -49,12 +49,16 @@ DISPARADORES = (
     ("time", "A una hora"),
     ("headphones_connected", "Al conectar los auriculares"),
     ("headphones_disconnected", "Al desconectar los auriculares"),
+    ("game_started", "Al abrir un juego (modo juego)"),
+    ("game_stopped", "Al cerrar el juego"),
 )
 _DB_A_FORM = {
     jarvis_routines.DISPARADOR_FRASE: "frase",
     jarvis_routines.DISPARADOR_HORA: "time",
     jarvis_routines.DISPARADOR_AURICULARES_CONECTADOS: "headphones_connected",
     jarvis_routines.DISPARADOR_AURICULARES_DESCONECTADOS: "headphones_disconnected",
+    jarvis_routines.DISPARADOR_JUEGO_ABIERTO: "game_started",
+    jarvis_routines.DISPARADOR_JUEGO_CERRADO: "game_stopped",
 }
 
 

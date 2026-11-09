@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS rutinas (
     activa INTEGER NOT NULL DEFAULT 1 CHECK (activa IN (0, 1)),
     dias_semana TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
     ultima_ejecucion TEXT,
-    -- 'hora' (usa hora/dias_semana) o un evento: 'auriculares_conectados', 'auriculares_desconectados'
+    -- 'hora' (usa hora/dias_semana), 'frase' o un evento: 'auriculares_conectados',
+    -- 'auriculares_desconectados', 'juego_abierto', 'juego_cerrado'
     disparador TEXT NOT NULL DEFAULT 'hora',
     -- 'preguntar' o 'automatica' (solo si todas las acciones son de riesgo bajo)
     modo_permiso TEXT NOT NULL DEFAULT 'preguntar',

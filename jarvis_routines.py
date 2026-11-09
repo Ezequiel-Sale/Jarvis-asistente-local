@@ -18,19 +18,27 @@ DISPARADOR_FRASE = "frase"
 MAX_PASOS = 10
 DISPARADOR_AURICULARES_CONECTADOS = "auriculares_conectados"
 DISPARADOR_AURICULARES_DESCONECTADOS = "auriculares_desconectados"
+# Modo juego automático (jarvis_games_watch): al abrir el primer juego / al cerrar el último.
+DISPARADOR_JUEGO_ABIERTO = "juego_abierto"
+DISPARADOR_JUEGO_CERRADO = "juego_cerrado"
 DISPARADORES_EVENTO = frozenset(
-    {DISPARADOR_AURICULARES_CONECTADOS, DISPARADOR_AURICULARES_DESCONECTADOS}
+    {DISPARADOR_AURICULARES_CONECTADOS, DISPARADOR_AURICULARES_DESCONECTADOS,
+     DISPARADOR_JUEGO_ABIERTO, DISPARADOR_JUEGO_CERRADO}
 )
 # Valores que usa la herramienta schedule_routine (en inglés, como el resto de su esquema)
 _TRIGGER_FROM_TOOL = {
     "time": DISPARADOR_HORA,
     "headphones_connected": DISPARADOR_AURICULARES_CONECTADOS,
     "headphones_disconnected": DISPARADOR_AURICULARES_DESCONECTADOS,
+    "game_started": DISPARADOR_JUEGO_ABIERTO,
+    "game_stopped": DISPARADOR_JUEGO_CERRADO,
 }
 _TRIGGER_TO_TOOL = {value: key for key, value in _TRIGGER_FROM_TOOL.items()}
 _TRIGGER_LABELS = {
     DISPARADOR_AURICULARES_CONECTADOS: "al conectar los auriculares",
     DISPARADOR_AURICULARES_DESCONECTADOS: "al desconectar los auriculares",
+    DISPARADOR_JUEGO_ABIERTO: "al abrir un juego",
+    DISPARADOR_JUEGO_CERRADO: "al cerrar un juego",
 }
 PERMISO_PREGUNTAR = "preguntar"
 PERMISO_AUTOMATICA = "automatica"
@@ -158,6 +166,21 @@ _EVENT_ROUTINE = re.compile(
     r"cuando\s+(?:yo\s+)?(?:se\s+)?"
     r"(?P<event>conect\w*|enchuf\w*|enciend\w*|desconect\w*|desenchuf\w*|apag\w*|quit\w*)"
     r"\s+(?:los\s+|mis\s+)?(?:auriculares|cascos|aud[ií]fonos|headset)(?:\s+g533)?"
+    r"\s*[,:]?\s*(?P<rest>.+)$",
+    re.IGNORECASE,
+)
+# «cuando abra un juego, cambia la salida a auriculares» / «cuando cierre el juego, …»
+_GAME_ROUTINE = re.compile(
+    r"^\s*(?:jarvis[,:\s]+)?"
+    r"(?:(?:crea|crear|programa|programar|agenda|agendar)\s+una\s+"
+    r"(?:rutina|automatizaci[oó]n)\s+(?:para\s+que\s+|que\s+)?)?"
+    r"cuando\s+(?:yo\s+)?"
+    r"(?:(?P<abrir>abra|abro|inicie|inicio|arranque|empiece)\s+(?:un|una|alg[uú]n|el|la|mi)?\s*"
+    r"(?:juego|videojuego|partida)"
+    r"|(?P<jugar>empiece\s+a\s+jugar|juegue|me\s+ponga\s+a\s+jugar)"
+    r"|(?P<cerrar>cierre|cierro|salga\s+del?|termine)\s+(?:un|una|alg[uú]n|el|la|mi)?\s*"
+    r"(?:juego|videojuego|partida)"
+    r"|(?P<dejar>termine\s+de\s+jugar|deje\s+de\s+jugar))"
     r"\s*[,:]?\s*(?P<rest>.+)$",
     re.IGNORECASE,
 )
@@ -341,7 +364,8 @@ def _validate_trigger(value: object) -> str:
         if value == DISPARADOR_HORA or value in DISPARADORES_EVENTO or value == DISPARADOR_FRASE:
             return value
     raise ValueError(
-        "el disparador debe ser time, headphones_connected o headphones_disconnected."
+        "el disparador debe ser time, headphones_connected, headphones_disconnected, "
+        "game_started o game_stopped."
     )
 
 
@@ -376,9 +400,12 @@ def describir_disparador(
 
 
 def _event_routine_name(trigger: str) -> str:
-    base = "Al conectar auriculares" if trigger == DISPARADOR_AURICULARES_CONECTADOS else (
-        "Al desconectar auriculares"
-    )
+    base = {
+        DISPARADOR_AURICULARES_CONECTADOS: "Al conectar auriculares",
+        DISPARADOR_AURICULARES_DESCONECTADOS: "Al desconectar auriculares",
+        DISPARADOR_JUEGO_ABIERTO: "Al abrir un juego",
+        DISPARADOR_JUEGO_CERRADO: "Al cerrar un juego",
+    }.get(trigger, "Rutina")
     existentes = {name.casefold() for _, name, _, _, _ in listar_rutinas()}
     if base.casefold() not in existentes:
         return base
@@ -466,9 +493,10 @@ def _parsear_pasos(remainder: str) -> list[dict[str, object]]:
 def _parsear_rutina_evento(
     match: re.Match[str],
     registry: ToolRegistry | None,
+    trigger: str | None = None,
 ) -> RoutineCreationRequest:
-    event = match.group("event").casefold()
-    trigger = (
+    event = (match.groupdict().get("event") or "").casefold()
+    trigger = trigger or (
         DISPARADOR_AURICULARES_DESCONECTADOS
         if event.startswith(("des", "apag", "quit"))
         else DISPARADOR_AURICULARES_CONECTADOS
@@ -578,6 +606,13 @@ def parsear_solicitud_creacion(
     event_match = _EVENT_ROUTINE.search(text)
     if event_match is not None:
         return _parsear_rutina_evento(event_match, registry)
+    game_match = _GAME_ROUTINE.search(text)
+    if game_match is not None:
+        return _parsear_rutina_evento(
+            game_match, registry,
+            DISPARADOR_JUEGO_CERRADO if (game_match.group("cerrar") or game_match.group("dejar"))
+            else DISPARADOR_JUEGO_ABIERTO,
+        )
 
     power_match = _POWER_SHORTCUT.match(text)
     if power_match is not None:
@@ -1093,7 +1128,8 @@ def registrar_herramienta(
             "trigger indica cuándo se ejecuta: time (a una hora; usa time en formato "
             "HH:MM de 24 horas y days con números del 1 (lunes) al 7 (domingo) "
             "separados por comas), headphones_connected (al conectar los auriculares) "
-            "o headphones_disconnected (al desconectarlos). "
+            "headphones_disconnected (al desconectarlos), game_started (al abrir un juego) "
+            "o game_stopped (al cerrar el último juego). "
             "steps_json debe ser una cadena JSON como "
             "'[{\"tool\":\"set_system_volume\",\"arguments\":{\"percentage\":30}}]'. "
             "automatic=true solo si el usuario pide que se ejecute sin preguntar; "
