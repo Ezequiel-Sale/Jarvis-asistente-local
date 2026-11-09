@@ -542,3 +542,20 @@ def cambiar_dispositivo_salida(dispositivo: str) -> str:
             ole32.CoUninitialize()
 
     return endpoint_name
+
+
+def salida_predeterminada() -> str:
+    """Nombre de la salida de audio predeterminada, p. ej. «Speakers (G533 Gaming Headset)»."""
+    import comtypes
+    from pycaw.pycaw import AudioUtilities
+
+    comtypes.CoInitialize()
+    try:
+        return str(AudioUtilities.GetSpeakers().FriendlyName or "")
+    finally:
+        comtypes.CoUninitialize()
+
+
+def es_auriculares(nombre: str) -> bool:
+    nombre = nombre.lower()
+    return "g533" in nombre or "headset" in nombre or "auricular" in nombre or "headphone" in nombre

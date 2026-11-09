@@ -136,6 +136,11 @@ def _host(**estado) -> Mock:
     host._pending_approval_kind = None
     host.player_thread = None
     host.player_paused = False
+    host._live_speaker = None
+    host._interrupt_enabled = True
+    host._interrupt_deadline = 0.0
+    host._headphones_output = lambda: False  # por defecto, altavoces
+    host._jarvis_speaking = lambda: JarvisApp._jarvis_speaking(host)
     for clave, valor in estado.items():
         setattr(host, clave, valor)
     return host
@@ -166,6 +171,49 @@ class CanListenTests(unittest.TestCase):
         pausado.is_alive.return_value = True
         host = _host(player_thread=pausado, player_paused=True)
         self.assertTrue(JarvisApp._can_listen_for_wakeword(host))
+
+
+class InterruptTests(unittest.TestCase):
+    def _hablando(self, **estado):
+        reproductor = Mock()
+        reproductor.is_alive.return_value = True
+        return _host(player_thread=reproductor, **estado)
+
+    def test_listens_while_speaking_only_with_headphones(self) -> None:
+        self.assertFalse(JarvisApp._can_listen_for_wakeword(self._hablando()))
+        self.assertTrue(JarvisApp._can_listen_for_wakeword(self._hablando(_headphones_output=lambda: True)))
+        apagado = self._hablando(_headphones_output=lambda: True, _interrupt_enabled=False)
+        self.assertFalse(JarvisApp._can_listen_for_wakeword(apagado))
+
+    def test_live_answer_counts_as_speaking(self) -> None:
+        hablador = Mock(empezo=True)
+        hablador.cancelado.is_set.return_value = False
+        host = _host(busy=True, _live_speaker=hablador, _headphones_output=lambda: True)
+        self.assertTrue(JarvisApp._can_listen_for_wakeword(host))
+        hablador.cancelado.is_set.return_value = True  # ya se calló
+        self.assertFalse(JarvisApp._can_listen_for_wakeword(host))
+
+    def test_detection_while_speaking_stops_voice_and_cancels(self) -> None:
+        hablador = Mock(empezo=True)
+        hablador.cancelado.is_set.return_value = False
+        host = _host(busy=True, _live_speaker=hablador)
+        host._interrupt_speech = lambda: JarvisApp._interrupt_speech(host)
+        host.INTERRUPCION_ESPERA = JarvisApp.INTERRUPCION_ESPERA
+        with patch("jarvis_app.jarvis_wakeword.reproducir_pitido"):
+            JarvisApp._on_wakeword_detected(host)
+        host._stop_player.assert_called_once()
+        hablador.cancelar.assert_called_once()
+        host.cancel_token.cancel.assert_called_once()
+        self.assertGreater(host._interrupt_deadline, 0)
+
+    @patch("jarvis_app.limpiar_audio")
+    def test_command_after_interrupt_waits_for_cancellation(self, limpiar: Mock) -> None:
+        import time as _time
+
+        host = _host(busy=True, _interrupt_deadline=_time.monotonic() + 5)
+        JarvisApp._on_wakeword_command(host, "orden.wav")
+        limpiar.assert_not_called()  # no se descarta: se reintenta
+        host.root.after.assert_called_once()
 
 
 class WakewordCommandRoutingTests(unittest.TestCase):

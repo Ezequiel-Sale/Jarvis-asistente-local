@@ -61,6 +61,9 @@ class _TestHost:
     def _tool_clean_disk(self, categories: list) -> str:
         return self._record(("clean", tuple(categories)), "cleaned")
 
+    def _tool_set_voice(self, voice: str) -> str:
+        return self._record(("voice", voice), "voice")
+
     def _tool_move_window(self, app: str, monitor: int | None = None, screen_name: str | None = None) -> str:
         return self._record(("move", app, monitor, screen_name), "moved")
 
@@ -84,7 +87,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 31)
+        self.assertEqual(len(tools), 32)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -120,6 +123,7 @@ class ToolRegistryTests(unittest.TestCase):
                 "set_theme",
                 "move_window",
                 "set_compact_mode",
+                "set_voice",
             },
         )
 

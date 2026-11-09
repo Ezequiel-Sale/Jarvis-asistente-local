@@ -1104,3 +1104,21 @@ def detectar_comando_limpieza(texto: str) -> dict[str, object] | None:
         if patron.fullmatch(consulta):
             return {"solo": clave}
     return None
+
+
+_CAMBIA_VOZ = re.compile(
+    r"^(?:cambia|cambiar|cambiame|pon|poner|ponme|usa|usar|elige|habla\s+con)\s+"
+    r"(?:(?:tu|la|de)\s+)?voz\s+(?:a|por|de|en)?\s*(?:la\s+|el\s+)?(?:voz\s+)?(?:de\s+)?(?P<voz>.+)$"
+    r"|^(?:habla|hablame)\s+(?:con\s+)?(?:la\s+)?voz\s+(?:de\s+)?(?P<voz2>.+)$"
+)
+
+
+def detectar_comando_voz(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«cambia tu voz a la argentina», «usa la voz de Daniela», «pon la voz sharvard mujer»."""
+    import jarvis_voices
+
+    match = _CAMBIA_VOZ.fullmatch(_normalizar_consulta(texto))
+    if match is None:
+        return None
+    voz = jarvis_voices.buscar(match.group("voz") or match.group("voz2") or "")
+    return ("set_voice", {"voice": voz.clave}) if voz is not None else None

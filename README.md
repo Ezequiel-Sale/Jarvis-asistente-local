@@ -25,7 +25,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Clic en pantalla** | «Haz clic en el vídeo que dice Me enamoré del monitor 1», «pulsa Aceptar en el monitor 2», «escribe "hola" en el buscador del monitor 3» (siempre muestra dónde va a hacer clic y espera tu «sí») |
 | **Visión de pantalla** | «Mira el monitor 2 y dime qué error sale» (con vista previa y confirmación) |
 | **Integraciones** | Clima (Open-Meteo, sin cuenta) y lectura de archivos de Documentos vía [MCP](https://modelcontextprotocol.io) |
-| **Voz** | «Hey Jarvis… sube el volumen», «desactiva la palabra de activación», «deja de escucharme» |
+| **Voz** | «Hey Jarvis… sube el volumen», «desactiva la palabra de activación», «deja de escucharme». Con los auriculares puestos, decir «Hey Jarvis» mientras habla lo interrumpe. Seis voces (España, México y Argentina) para elegir en **⚙ Ajustes** o con «cambia tu voz a la argentina» |
 | **Apariencia** | Temas Cian, Mark (rojo y dorado) y Claro: «cambia al tema rojo», «pon el modo claro» o desde **⚙ Ajustes**. Las respuestas muestran negritas, listas, código, tablas y enlaces; cada acción aparece como una tarjeta con su estado, y las confirmaciones aparecen dentro del chat. Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la respuesta (y las confirmaciones con SÍ / NO) sin quitarte el foco. «Modo compacto» deja solo el orbe en una ventanita siempre visible |
 | **Diagnóstico** | «Diagnóstico», «historial de acciones», «¿cuál fue la última acción?» |
 
@@ -95,7 +95,7 @@ flowchart LR
    .venv313/Scripts/python.exe -m pip install -r requirements.txt
    ```
 2. Copiar `.env.example` como `.env` y elegir una contraseña para Grafana.
-3. Colocar la voz de Piper `es_ES-davefx-medium` (`.onnx` y `.onnx.json`, de [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)) en `piper-voices/`.
+3. Colocar la voz de Piper `es_ES-davefx-medium` (`.onnx` y `.onnx.json`, de [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)) en `piper-voices/`. Opcionales (para elegir en Ajustes): `es_ES-sharvard-medium`, `es_MX-ald-medium`, `es_MX-claude-high` y `es_AR-daniela-high`.
 4. Descargar el modelo de la palabra de activación:
    ```bash
    .venv313/Scripts/python.exe -c "from openwakeword import utils; utils.download_models(model_names=['hey_jarvis'])"

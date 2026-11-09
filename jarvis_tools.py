@@ -21,6 +21,7 @@ class ToolEventHost(Protocol):
     def _tool_set_jarvis_audio(self, enabled: bool) -> str: ...
     def _tool_set_theme(self, theme: str) -> str: ...
     def _tool_set_compact_mode(self, enabled: bool) -> str: ...
+    def _tool_set_voice(self, voice: str) -> str: ...
     def _tool_clean_disk(self, categories: list) -> str: ...
     def _tool_move_window(
         self, app: str, monitor: int | None = None, screen_name: str | None = None
@@ -125,6 +126,23 @@ def crear_registro_herramientas(
         label="Liberar espacio",
         timeout_seconds=600,
         exposed=False,  # el modelo no puede borrar archivos: solo la tarjeta confirmada
+    )
+    import jarvis_voices
+
+    registry.register(
+        "set_voice",
+        "Cambia la voz con la que habla Jarvis. " + "; ".join(
+            f"{v.clave}: {v.descripcion}" for v in jarvis_voices.VOCES
+        ) + ".",
+        {
+            "type": "object",
+            "properties": {"voice": {"type": "string", "enum": [v.clave for v in jarvis_voices.VOCES]}},
+            "required": ["voice"],
+            "additionalProperties": False,
+        },
+        host._tool_set_voice,
+        label="Cambiar la voz",
+        timeout_seconds=20,
     )
     registry.register(
         "set_compact_mode",

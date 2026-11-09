@@ -413,7 +413,7 @@ class JarvisUIMixin:
                 tk.Label(marco, text=titulo, bg=PANEL, fg=TEXT,
                          font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
                 tk.Label(marco, text=descripcion, bg=PANEL, fg=MUTED, justify="left",
-                         wraplength=620, font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
+                         wraplength=540, font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
                 boton = self._ui_button(marco, texto, comando, fg=MUTED)
                 boton.configure(width=30)
                 boton.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
@@ -433,6 +433,11 @@ class JarvisUIMixin:
                  "Si tras cambiar monitores la barra de tareas de la TV queda fuera de su sitio, "
                  "Jarvis baja y sube su escala automáticamente (igual que «arregla el escalado»).",
                  "taskbar_button", "▭  ARREGLO AUTOMÁTICO …", self._toggle_taskbar_button)
+            self._build_voice_settings(cuerpo)
+            fila("Interrumpir con «Hey Jarvis»",
+                 "Mientras Jarvis habla, decir «Hey Jarvis» lo calla y te escucha. Solo con la salida en "
+                 "los auriculares: por los altavoces el micrófono oiría su propia voz.",
+                 "interrupt_button", "✋  INTERRUMPIR …", self._toggle_interrupt)
             fila("Aviso flotante",
                  "Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la "
                  "respuesta, y las confirmaciones con SÍ / NO, sin quitarte el foco.",
@@ -695,6 +700,38 @@ class JarvisUIMixin:
                 f"Voz        {'lista' if voz else ('iniciando…' if voz is None else 'sin conexión')}\n"
                 f"Sensores   {'LibreHardwareMonitor' if not hw.sensores.error else 'no disponibles'}"
             ))
+
+        def _build_voice_settings(self, cuerpo: tk.Frame) -> None:
+            import jarvis_voices
+
+            marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+            marco.pack(fill="x", pady=(0, 10))
+            tk.Label(marco, text="Voz de Jarvis", bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 11, "bold")).pack(anchor="w")
+            tk.Label(marco, text="Elige con qué voz te responde. ▶ dice una frase de prueba. "
+                     "También: «cambia tu voz a la argentina», «usa la voz de Daniela».",
+                     bg=PANEL, fg=MUTED, font=("Segoe UI", 9), justify="left", wraplength=620).pack(anchor="w", pady=(2, 8))
+            self._voice_buttons: dict[str, tk.Button] = {}
+            for voz in jarvis_voices.VOCES:
+                fila = tk.Frame(marco, bg=PANEL)
+                fila.pack(fill="x", pady=2)
+                instalada = jarvis_voices.instalada(voz)
+                boton = self._ui_button(fila, voz.nombre.upper(), lambda c=voz.clave: self._set_voice(c), fg=MUTED)
+                boton.configure(width=20, anchor="w", state="normal" if instalada else "disabled")
+                boton.pack(side="left")
+                self._voice_buttons[voz.clave] = boton
+                probar = self._ui_button(fila, "▶", lambda c=voz.clave: self._test_voice(c), fg=CYAN)
+                probar.configure(state="normal" if instalada else "disabled")
+                probar.pack(side="left", padx=(6, 0))
+                tk.Label(fila, text=voz.descripcion + ("" if instalada else " · no instalada"), bg=PANEL,
+                         fg=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(12, 0))
+            self._refresh_voice_buttons()
+
+        def _refresh_voice_buttons(self) -> None:
+            actual = getattr(self, "_voice_key", None)
+            for clave, boton in getattr(self, "_voice_buttons", {}).items():
+                boton.configure(bg=CYAN_DARK if clave == actual else PANEL_LIGHT,
+                                fg=CYAN if clave == actual else MUTED)
 
         def _refresh_theme_buttons(self) -> None:
             actual = jarvis_theme.tema_actual()
@@ -1387,6 +1424,7 @@ class JarvisUIMixin:
 
         def _set_idle(self) -> None:
             self.busy = False
+            self._live_speaker = None
             self.cancel_button.pack_forget()
             self.send_button.configure(state="normal")
             self.mic_button.configure(state="normal")

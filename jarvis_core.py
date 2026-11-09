@@ -44,7 +44,17 @@ APP_DIR = (
 )
 DB_PATH = APP_DIR / "jarvis_memory.db"
 RESPONSES_DIR = APP_DIR / "responses"
-VOZ_PIPER = "es_ES-davefx-medium"
+VOZ_PIPER = "es_ES-davefx-medium"  # se cambia en Ajustes (jarvis_voices); este es el valor por defecto
+VOZ_HABLANTE: str | None = None  # para voces con varias personas (sharvard: «M» / «F»)
+
+
+def _voz_wyoming(voz: str | None = None, hablante: str | None = None) -> dict:
+    """Wyoming Piper carga la voz pedida desde /data (piper-voices) en cada petición."""
+    datos = {"name": voz or VOZ_PIPER}
+    elegido = hablante if voz else (hablante or VOZ_HABLANTE)
+    if elegido:
+        datos["speaker"] = elegido
+    return datos
 MODEL_LLM = "qwen2.5-coder:14b"  # Modelo instalado en Ollama
 # Modelo con visión para analizar capturas y ubicar dónde hacer clic. Qwen3-VL 8B
 # (~10 GB) cabe entero en la GPU de 16 GB. Comparado el 2026-11-07 en los monitores
@@ -588,7 +598,14 @@ def borrar_historial_conversaciones() -> str:
     return conversacion_id
 
 
-def generar_audio_tts(respuesta: str, identificador: str | None = None) -> str:
+def generar_audio_tts(
+    respuesta: str,
+    identificador: str | None = None,
+    *,
+    voz: str | None = None,
+    hablante: str | None = None,
+) -> str:
+    """Sintetiza con Piper. Sin ``voz`` usa la elegida (``VOZ_PIPER``/``VOZ_HABLANTE``)."""
     if identificador is None:
         identificador = guardar_respuesta(respuesta)
     RESPONSES_DIR.mkdir(parents=True, exist_ok=True)
@@ -611,7 +628,7 @@ def generar_audio_tts(respuesta: str, identificador: str | None = None) -> str:
             client.settimeout(TTS_TIMEOUT)
             reader = client.makefile("rb")
             data = json.dumps(
-                {"text": respuesta, "voice": {"name": VOZ_PIPER}},
+                {"text": respuesta, "voice": _voz_wyoming(voz, hablante)},
                 ensure_ascii=False,
             ).encode("utf-8")
             header = json.dumps(

@@ -29,9 +29,11 @@ import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
 import jarvis_monitor_view
+import jarvis_audio_devices
 import jarvis_cleanup
 import jarvis_dashboard
 import jarvis_floating
+import jarvis_voices
 import jarvis_hardware
 import jarvis_routines
 import jarvis_windows
@@ -70,6 +72,7 @@ from jarvis_commands import (
     detectar_comando_tema,
     detectar_comando_compacto,
     detectar_comando_limpieza,
+    detectar_comando_voz,
     detectar_consulta_sistema,
     detectar_borrado_historial,
     detectar_decision_vision,
@@ -205,6 +208,15 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except Exception:
             self._animations = True
         try:
+            voz = jarvis_voices.por_clave(core.obtener_preferencia(jarvis_voices.PREFERENCIA))
+            if not jarvis_voices.instalada(voz):
+                voz = jarvis_voices.por_clave(jarvis_voices.POR_DEFECTO)
+            jarvis_voices.aplicar(voz)
+            self._voice_key = voz.clave
+        except Exception:
+            logging.exception("No se pudo cargar la voz guardada.")
+            self._voice_key = jarvis_voices.POR_DEFECTO
+        try:
             self._floating_enabled = core.obtener_preferencia(self._PREFERENCIA_AVISO) != "0"
         except Exception:
             self._floating_enabled = True
@@ -212,6 +224,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._build_layout()
         self._refresh_animations_button()
         self.floating = jarvis_floating.AvisoFlotante(self.root, self._show_from_tray)
+        try:
+            self._interrupt_enabled = core.obtener_preferencia(self._PREFERENCIA_INTERRUMPIR) != "0"
+        except Exception:
+            self._interrupt_enabled = True
+        self._refresh_interrupt_button()
         self.compact_window = None
         self._refresh_floating_button()
         self.tool_registry = crear_registro_herramientas(
@@ -596,6 +613,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             or detectar_comando_monitores(text)
             or detectar_comando_tema(text)
             or detectar_comando_compacto(text)
+            or detectar_comando_voz(text)
             or detectar_comando_energia(text)
             or self.plugins.detectar_comando(text)
         )
@@ -815,6 +833,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 or detectar_comando_monitores(transcript)
                 or detectar_comando_tema(transcript)
                 or detectar_comando_compacto(transcript)
+                or detectar_comando_voz(transcript)
                 or detectar_comando_energia(transcript)
             )
             plugins = getattr(self, "plugins", None)
@@ -955,6 +974,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             )
                     else:
                         hablador = self._new_live_speaker()
+                        self._live_speaker = hablador  # para poder interrumpirlo con «Hey Jarvis»
                         answer = procesar_con_herramientas(
                             text,
                             conversation_id,
@@ -2017,6 +2037,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._show_cleanup_preview(*event[1:])
                     elif event[0] == "cleanup_decision":
                         self._on_cleanup_decision(*event[1:])
+                    elif event[0] == "voice_sample":
+                        self._play_audio(event[1])
+                    elif event[0] == "voice_sample_error":
+                        self._set_status("NO PUDE PROBAR LA VOZ", ERROR)
+                        self._add_message("assistant", event[1])
                     elif event[0] == "health_alert":
                         self._announce(event[1], alarm=True)
                     elif event[0] == "taskbar_misplaced":
@@ -2173,6 +2198,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                                 else:
                                     self._exit_compact_mode()
                                     result = "Volví a la ventana completa."
+                            elif action == "set_voice":
+                                result = self._set_voice(value)
                             elif action == "set_theme":
                                 result = self._set_theme(value)
                             elif action == "minimize_jarvis":
@@ -2740,6 +2767,45 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         name = cambiar_dispositivo_salida(device)
         return f"Salida de audio cambiada a {name}."
 
+    def _tool_set_voice(self, voice: str) -> str:
+        return self._request_tool_ui_action("set_voice", voice)
+
+    def _set_voice(self, clave: str) -> str:
+        """Hilo de Tk: cambia la voz, la guarda y dice una frase con ella."""
+        voz = jarvis_voices.por_clave(clave)
+        if not jarvis_voices.instalada(voz):
+            raise FileNotFoundError(
+                f"No tengo instalada la voz {voz.nombre} (falta {voz.modelo}.onnx en piper-voices)."
+            )
+        jarvis_voices.aplicar(voz)
+        self._voice_key = voz.clave
+        try:
+            core.guardar_preferencia(jarvis_voices.PREFERENCIA, voz.clave)
+        except Exception:
+            logging.exception("No se pudo guardar la voz elegida.")
+        self._refresh_voice_buttons()
+        self._refresh_settings_info()
+        self._test_voice(voz.clave)
+        logging.info("Voz cambiada a %s.", voz.modelo)
+        return f"Ahora hablo con la voz {voz.nombre} ({voz.descripcion})."
+
+    def _test_voice(self, clave: str) -> None:
+        """Dice la frase de prueba con esa voz (sin cambiar la elegida)."""
+        voz = jarvis_voices.por_clave(clave)
+
+        def sintetizar() -> None:
+            try:
+                ruta = core.generar_audio_tts(
+                    jarvis_voices.FRASE_PRUEBA, f"prueba_voz_{voz.clave}", voz=voz.modelo, hablante=voz.hablante
+                )
+            except Exception as error:
+                logging.exception("No se pudo probar la voz %s.", voz.modelo)
+                self.events.put(("voice_sample_error", f"No pude probar la voz {voz.nombre}: {error}"))
+                return
+            self.events.put(("voice_sample", ruta))
+
+        threading.Thread(target=sintetizar, name="JarvisPruebaVoz", daemon=True).start()
+
     def _tool_set_theme(self, theme: str) -> str:
         return self._request_tool_ui_action("set_theme", theme)
 
@@ -2888,17 +2954,44 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             "Botón: activar «Hey Jarvis»" if activar else "Botón: desactivar «Hey Jarvis»",
         )
 
+    def _jarvis_speaking(self) -> bool:
+        """¿Está sonando la voz de Jarvis? (reproductor o respuesta en vivo). Sin Tk."""
+        player = getattr(self, "player_thread", None)
+        if player is not None and player.is_alive() and not getattr(self, "player_paused", False):
+            return True
+        hablador = getattr(self, "_live_speaker", None)
+        return bool(hablador is not None and hablador.empezo and not hablador.cancelado.is_set())
+
+    _CACHE_SALIDA = 3.0
+
+    def _headphones_output(self) -> bool:
+        """La salida predeterminada son los auriculares (consulta cacheada 3 s; sin Tk)."""
+        ahora = time.monotonic()
+        if ahora - getattr(self, "_salida_revisada", -1e9) >= self._CACHE_SALIDA:
+            self._salida_revisada = ahora
+            try:
+                self._salida_auriculares = jarvis_audio_devices.es_auriculares(
+                    jarvis_audio_devices.salida_predeterminada()
+                )
+            except Exception:
+                logging.debug("No se pudo leer la salida de audio predeterminada.", exc_info=True)
+                self._salida_auriculares = False
+        return getattr(self, "_salida_auriculares", False)
+
     def _can_listen_for_wakeword(self) -> bool:
-        """Se consulta desde el hilo del detector: solo lee atributos, sin Tk."""
+        """Se consulta desde el hilo del detector: solo lee atributos, sin Tk.
+
+        Mientras Jarvis habla solo se escucha si la salida son los auriculares
+        (por los altavoces el micrófono oiría su propia voz) y la interrupción está
+        activada: así «Hey Jarvis» lo puede cortar.
+        """
         if self._closing or self.recorder is not None:
             return False
+        if self._jarvis_speaking():
+            return getattr(self, "_interrupt_enabled", True) and self._headphones_output()
         if self.busy and self._pending_plan_reply is None:
             return False
-        player = getattr(self, "player_thread", None)
-        reproduciendo = (
-            player is not None and player.is_alive() and not getattr(self, "player_paused", False)
-        )
-        return not reproduciendo
+        return True
 
     def _start_wakeword(self) -> bool:
         if self.wakeword_detector is not None and self.wakeword_detector.is_alive():
@@ -2923,6 +3016,23 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     # --- Inicio con Windows ---------------------------------------------------
 
     _PREFERENCIA_INICIO_WINDOWS = "inicio_windows"
+
+    _PREFERENCIA_INTERRUMPIR = "interrumpir"
+
+    def _refresh_interrupt_button(self) -> None:
+        boton = getattr(self, "interrupt_button", None)
+        if boton is not None:
+            activo = getattr(self, "_interrupt_enabled", True)
+            boton.configure(text="✋  INTERRUMPIR: SÍ" if activo else "✋  INTERRUMPIR: NO",
+                            fg=CYAN if activo else MUTED)
+
+    def _toggle_interrupt(self) -> None:
+        self._interrupt_enabled = not getattr(self, "_interrupt_enabled", True)
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_INTERRUMPIR, "1" if self._interrupt_enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia de interrupción.")
+        self._refresh_interrupt_button()
 
     _PREFERENCIA_AVISO = "aviso_flotante"
     _PREFERENCIA_COMPACTO = "compacto_pos"
@@ -3062,7 +3172,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             f"MODELO DE IA     {core.MODEL_LLM}\n"
             f"VISIÓN           {core.MODEL_VISION}\n"
             f"VOZ A TEXTO      {core.STT_MODEL}\n"
-            f"VOZ              {core.VOZ_PIPER}\n"
+            f"VOZ              {core.VOZ_PIPER}{' (' + core.VOZ_HABLANTE + ')' if core.VOZ_HABLANTE else ''}\n"
             f"ADMINISTRADOR    {admin}"
         ))
 
@@ -3137,7 +3247,22 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             CYAN,
         )
 
+    INTERRUPCION_ESPERA = 10.0
+
+    def _interrupt_speech(self) -> None:
+        """«Hey Jarvis» mientras habla: se calla y deja la respuesta en curso."""
+        self._stop_player()
+        hablador = getattr(self, "_live_speaker", None)
+        if hablador is not None:
+            hablador.cancelar()
+        if self.busy and self._pending_plan_reply is None:
+            self.cancel_token.cancel()
+        self._interrupt_deadline = time.monotonic() + self.INTERRUPCION_ESPERA
+        logging.info("Jarvis interrumpido con «Hey Jarvis».")
+
     def _on_wakeword_detected(self) -> None:
+        if self._jarvis_speaking():
+            self._interrupt_speech()
         try:
             jarvis_wakeword.reproducir_pitido()
         except Exception:
@@ -3153,6 +3278,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     def _on_wakeword_command(self, audio_path: str) -> None:
         """Procesa la orden dicha tras «Hey Jarvis» como una grabación de F9."""
         plan_approval = self._pending_plan_reply is not None
+        if (self.busy and not plan_approval and not self._closing
+                and time.monotonic() < getattr(self, "_interrupt_deadline", 0.0)):
+            # Se acaba de interrumpir una respuesta: esperar a que termine de cancelarse.
+            self.root.after(250, lambda: self._on_wakeword_command(audio_path))
+            return
         if self._closing or self.recorder is not None or (self.busy and not plan_approval):
             limpiar_audio(audio_path)
             return
@@ -3201,6 +3331,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "fix_display_scaling": "REAJUSTANDO EL ESCALADO…",
         "set_theme": "CAMBIANDO EL TEMA…",
         "set_compact_mode": "CAMBIANDO EL MODO DE VENTANA…",
+        "set_voice": "CAMBIANDO LA VOZ…",
         "clean_disk": "LIBERANDO ESPACIO…",
         "move_window": "MOVIENDO VENTANAS…",
         "power_control": "ESPERANDO CONFIRMACIÓN…",
