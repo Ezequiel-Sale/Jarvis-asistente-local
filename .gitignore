@@ -41,3 +41,11 @@ ollama-data/
 .claude/settings.local.json
 Thumbs.db
 desktop.ini
+
+# App de Android (movil/)
+movil/.gradle/
+movil/build/
+movil/app/build/
+movil/local.properties
+movil/.kotlin/
+movil/*.apk

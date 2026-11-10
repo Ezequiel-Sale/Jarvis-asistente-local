@@ -28,12 +28,14 @@ import jarvis_voz_stream
 import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
+import jarvis_mobile
 import jarvis_monitor_view
 import jarvis_audio_devices
 import jarvis_cleanup
 import jarvis_dashboard
 import jarvis_floating
 import jarvis_games_watch
+import jarvis_gpu_tuning
 import jarvis_voices
 import jarvis_hardware
 import jarvis_routines
@@ -74,6 +76,7 @@ from jarvis_commands import (
     detectar_comando_compacto,
     detectar_comando_limpieza,
     detectar_comando_voz,
+    detectar_comando_gpu,
     detectar_consulta_sistema,
     detectar_borrado_historial,
     detectar_decision_vision,
@@ -225,6 +228,17 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._build_layout()
         self._refresh_animations_button()
         self.floating = jarvis_floating.AvisoFlotante(self.root, self._show_from_tray)
+        self._mobile_callbacks: dict[str, tuple] = {}
+        self.mobile = jarvis_mobile.ServidorMovil(
+            self.events,
+            jarvis_mobile.Vinculacion(core.obtener_preferencia, core.guardar_preferencia),
+            ocupado=lambda: bool(self.busy),
+        )
+        try:
+            self._mobile_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_ACTIVO) == "1"
+        except Exception:
+            self._mobile_enabled = False
+        self._ensure_mobile_server()
         try:
             self._interrupt_enabled = core.obtener_preferencia(self._PREFERENCIA_INTERRUMPIR) != "0"
         except Exception:
@@ -269,6 +283,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.health_watcher.start()
         self.games_watcher = jarvis_games_watch.VigilanteJuegos(self.events)
         self.games_watcher.start()
+        self._gpu_profile_enabled = self._gpu_profile_preferido()
+        self.gpu_watcher = jarvis_gpu_tuning.VigilanteGPU(
+            self.events, lambda: self._gpu_profile_enabled, core.obtener_preferencia, core.guardar_preferencia
+        )
+        self.gpu_watcher.start()
+        self._refresh_gpu_profile_button()
         self._barra_auto = self._barra_auto_preferida()
         self.taskbar_watcher = jarvis_displays.VigilanteBarras(self.events, lambda: self._barra_auto)
         self.taskbar_watcher.start()
@@ -617,6 +637,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             or detectar_comando_tema(text)
             or detectar_comando_compacto(text)
             or detectar_comando_voz(text)
+            or detectar_comando_gpu(text)
             or detectar_comando_energia(text)
             or self.plugins.detectar_comando(text)
         )
@@ -837,6 +858,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 or detectar_comando_tema(transcript)
                 or detectar_comando_compacto(transcript)
                 or detectar_comando_voz(transcript)
+                or detectar_comando_gpu(transcript)
                 or detectar_comando_energia(transcript)
             )
             plugins = getattr(self, "plugins", None)
@@ -1432,7 +1454,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tarjeta, cuerpo = self._confirmation_card(
             titulo=titulo, color=CYAN, aprobar=aprobar, rechazar="NO",
             pista="Di «sí» o «no», sin «Hey Jarvis». ENTER confirma · ESC cancela.",
-            necesita_ventana=True,
+            necesita_ventana=True, resumen=f"{titulo.capitalize()} {detalle}", imagen=miniatura,
         )
         self._plan_dialog = tarjeta
         tk.Label(cuerpo, text=detalle, bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10),
@@ -2048,6 +2070,23 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     elif event[0] == "voice_sample_error":
                         self._set_status("NO PUDE PROBAR LA VOZ", ERROR)
                         self._add_message("assistant", event[1])
+                    elif event[0] == "mobile_text":
+                        self._on_mobile_text(event[1])
+                    elif event[0] == "mobile_audio":
+                        self._on_wakeword_command(event[1])
+                    elif event[0] == "mobile_answer":
+                        respuestas = self._mobile_callbacks.pop(event[1], None)
+                        if respuestas is not None:
+                            respuestas[0 if event[2] else 1]()
+                    elif event[0] == "mobile_cancel":
+                        self._cancel_current_operation()
+                    elif event[0] == "mobile_paired":
+                        self.mobile_code.configure(text="✓ Celular vinculado")
+                        self._refresh_mobile_settings()
+                    elif event[0] == "gpu_profile_applied":
+                        self._add_message("assistant", "🛠 " + event[1])
+                    elif event[0] == "gpu_profile_warning":
+                        self._announce(event[1], alarm=True)
                     elif event[0] == "health_alert":
                         self._announce(event[1], alarm=True)
                     elif event[0] == "taskbar_misplaced":
@@ -3049,6 +3088,136 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     _PREFERENCIA_AVISO = "aviso_flotante"
     _PREFERENCIA_COMPACTO = "compacto_pos"
 
+    # --- Undervolt de la GPU (jarvis_gpu_tuning) -----------------------------------------
+
+    def _gpu_profile_preferido(self) -> bool:
+        """Activado si existe el perfil y el usuario no lo desactivó."""
+        try:
+            valor = core.obtener_preferencia(jarvis_gpu_tuning.PREFERENCIA_ACTIVO)
+        except Exception:
+            valor = None
+        if valor is not None:
+            return valor == "1"
+        return jarvis_gpu_tuning.ruta_por_defecto().is_file()
+
+    def _refresh_gpu_profile_button(self) -> None:
+        boton = getattr(self, "gpu_profile_button", None)
+        if boton is not None:
+            boton.configure(
+                text="⚡  UNDERVOLT: SÍ" if self._gpu_profile_enabled else "⚡  UNDERVOLT: NO",
+                fg=CYAN if self._gpu_profile_enabled else MUTED,
+            )
+
+    def _toggle_gpu_profile(self) -> None:
+        self._gpu_profile_enabled = not self._gpu_profile_enabled
+        try:
+            core.guardar_preferencia(jarvis_gpu_tuning.PREFERENCIA_ACTIVO, "1" if self._gpu_profile_enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar el ajuste del undervolt.")
+        if self._gpu_profile_enabled:
+            self.gpu_watcher.desbloquear()
+        self._refresh_gpu_profile_button()
+
+    def _tool_apply_gpu_profile(self) -> str:
+        perfil, dev = self.gpu_watcher.perfil()
+        pendientes = jarvis_gpu_tuning.aplicar(perfil, dev)
+        self.gpu_watcher.desbloquear()
+        if pendientes:
+            raise RuntimeError("El driver de AMD no aceptó todos los valores del perfil.")
+        return f"Apliqué el undervolt a la GPU: {jarvis_gpu_tuning.describir(perfil)}."
+
+    def _tool_gpu_profile_status(self) -> str:
+        perfil, _dev = self.gpu_watcher.perfil()
+        estado, _dev_gpu, nombre = jarvis_gpu_tuning.leer_estado()
+        distintos = jarvis_gpu_tuning.diferencias(perfil, estado)
+        voltaje = estado[jarvis_gpu_tuning.OD8_OD_VOLTAGE].actual
+        if not distintos:
+            return f"El undervolt está aplicado en la {nombre}: {jarvis_gpu_tuning.describir(perfil)}."
+        vigilancia = "Lo reaplico solo en la próxima revisión." if self._gpu_profile_enabled and not \
+            self.gpu_watcher.bloqueado else "Di «aplica el undervolt» para ponerlo."
+        return (f"El undervolt NO está aplicado en la {nombre} (voltaje actual {voltaje:+d} mV, "
+                f"{len(distintos)} valores distintos del perfil). {vigilancia}")
+
+    # --- App del celular -------------------------------------------------------------
+
+    MOBILE_RETRY_MS = 30000
+
+    def _ensure_mobile_server(self) -> None:
+        """Abre o cierra el servidor según el ajuste; reintenta si Tailscale aún no está."""
+        if self._closing:
+            return
+        if not self._mobile_enabled:
+            self.mobile.detener()
+        elif not self.mobile.activo():
+            ip = None
+            try:
+                ip = jarvis_mobile.ip_tailscale()
+                if ip is not None:
+                    self.mobile.iniciar(ip)
+            except OSError as error:
+                logging.warning("No se pudo abrir el servidor del celular: %s", error)
+            if not self.mobile.activo():
+                self.root.after(self.MOBILE_RETRY_MS, self._ensure_mobile_server)
+        self._refresh_mobile_settings()
+
+    def _refresh_mobile_settings(self) -> None:
+        boton = getattr(self, "mobile_button", None)
+        if boton is None:
+            return
+        boton.configure(text="▯  CELULAR: SÍ" if self._mobile_enabled else "▯  CELULAR: NO",
+                        fg=CYAN if self._mobile_enabled else MUTED)
+        if not self._mobile_enabled:
+            texto = "Desactivado."
+        elif not self.mobile.activo():
+            texto = "Esperando a Tailscale: no está conectado en esta PC."
+        else:
+            vinculados = self.mobile.vinculacion.dispositivos()
+            texto = f"Dirección para la app:  {self.mobile.direccion}\n" + (
+                "Vinculados: " + ", ".join(vinculados) if vinculados else "Ningún celular vinculado todavía."
+            )
+        self.mobile_info.configure(text=texto)
+        self.mobile_pair_button.configure(state="normal" if self.mobile.activo() else "disabled")
+
+    def _toggle_mobile(self) -> None:
+        self._mobile_enabled = not self._mobile_enabled
+        try:
+            core.guardar_preferencia(jarvis_mobile.PREFERENCIA_ACTIVO, "1" if self._mobile_enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar el ajuste de la app del celular.")
+        self.mobile_code.configure(text="")
+        self._ensure_mobile_server()
+
+    def _pair_mobile(self) -> None:
+        codigo = self.mobile.vinculacion.nuevo_codigo()
+        self.mobile_code.configure(text=f"Código: {codigo[:3]} {codigo[3:]}   (vale 5 minutos)")
+
+    def _unpair_mobile(self) -> None:
+        if not messagebox.askyesno(
+            "Desvincular celulares",
+            "Todos los celulares vinculados dejarán de poder usar Jarvis hasta que los vincules de nuevo. "
+            "¿Continuar?",
+            parent=self.root,
+        ):
+            return
+        self.mobile.vinculacion.desvincular_todos()
+        self.mobile_code.configure(text="")
+        self._refresh_mobile_settings()
+
+    def _on_mobile_text(self, texto: str) -> None:
+        """Una orden escrita en el celular entra como si se escribiera en la PC."""
+        if self.busy or self.recorder is not None:
+            self.mobile.registro.publicar("notice", text="Estoy ocupado; espera a que termine.")
+            return
+        borrador = self.input.get("1.0", "end-1c")
+        self.input.delete("1.0", "end")
+        self.input.insert("1.0", texto)
+        self._send_text()
+        if borrador.strip():  # lo que se estaba escribiendo en la PC no se pierde
+            estado = str(self.input.cget("state"))
+            self.input.configure(state="normal")
+            self.input.insert("1.0", borrador)
+            self.input.configure(state=estado)
+
     def _refresh_floating_button(self) -> None:
         boton = getattr(self, "floating_button", None)
         if boton is not None:
@@ -3344,6 +3513,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "set_theme": "CAMBIANDO EL TEMA…",
         "set_compact_mode": "CAMBIANDO EL MODO DE VENTANA…",
         "set_voice": "CAMBIANDO LA VOZ…",
+        "apply_gpu_profile": "APLICANDO EL UNDERVOLT…",
+        "get_gpu_profile_status": "REVISANDO LA GPU…",
         "video_fullscreen": "CAMBIANDO LA PANTALLA COMPLETA…",
         "clean_disk": "LIBERANDO ESPACIO…",
         "move_window": "MOVIENDO VENTANAS…",
@@ -3666,7 +3837,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tarjeta, container = self._confirmation_card(
             titulo="¿ANALIZO ESTA CAPTURA?", color=CYAN, aprobar="🔍  ANALIZAR", rechazar="CANCELAR",
             pista="Di «analizar» o «cancelar», sin «Hey Jarvis». ENTER analiza · ESC cancela.",
-            necesita_ventana=True,
+            necesita_ventana=True, imagen=datos["imagen"],
+            resumen=f"¿Analizo esta captura del {datos['monitor'].descripcion.lower()}?",
         )
         self._plan_dialog = tarjeta
         info = tk.Label(container, bg=PANEL_LIGHT, fg=MUTED, font=("Consolas", 8), justify="left")
@@ -3826,6 +3998,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         aviso = getattr(self, "floating", None)
         if aviso is not None:
             aviso.destruir()
+        movil = getattr(self, "mobile", None)
+        if movil is not None:
+            movil.detener()
         self._set_status("DETENIENDO SERVICIOS DOCKER…", CYAN)
         self.global_hotkey_listener.stop()
         self.global_hotkey_listener.join(timeout=1)
@@ -3834,6 +4009,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.reminder_watcher.stop()
         self.health_watcher.stop()
         self.games_watcher.stop()
+        self.gpu_watcher.stop()
         self.taskbar_watcher.stop()
         self._stop_wakeword()
         if self._routines_panel is not None:

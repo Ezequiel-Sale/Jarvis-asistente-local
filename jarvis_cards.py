@@ -10,7 +10,7 @@ from jarvis_actions import EstadoAccion, ResultadoAccion
 ICONOS = {
     "configure_display": "🖥", "fix_display_scaling": "🖥", "move_window": "🗔",
     "set_system_volume": "🔊", "set_app_volume": "🔊", "set_output_device": "🎧",
-    "set_jarvis_audio": "🔈", "media_control": "⏯", "media_sequence": "⏯", "video_fullscreen": "⛶",
+    "set_jarvis_audio": "🔈", "media_control": "⏯", "media_sequence": "⏯", "video_fullscreen": "⛶", "apply_gpu_profile": "⚡",
     "mute_browser_tab": "🔇", "now_playing": "🎵", "search_youtube": "▶",
     "open_new_browser_tab": "🌐", "navigate_browser": "🌐", "launch_game": "🎮",
     "open_program": "📂", "manage_window": "🗔", "power_control": "⏻",

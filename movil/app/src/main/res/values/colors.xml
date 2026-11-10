@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tema Cian de Jarvis (jarvis_theme.py) -->
+    <color name="bg">#07111C</color>
+    <color name="panel">#0D1B2A</color>
+    <color name="panel_light">#132538</color>
+    <color name="cyan">#42E8D8</color>
+    <color name="cyan_dark">#123C43</color>
+    <color name="violet">#A98BFF</color>
+    <color name="text">#E8F0FA</color>
+    <color name="muted">#8293A8</color>
+    <color name="error">#FF7188</color>
+    <color name="border">#193246</color>
+</resources>

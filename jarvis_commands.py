@@ -1122,3 +1122,25 @@ def detectar_comando_voz(texto: str) -> tuple[str, dict[str, object]] | None:
         return None
     voz = jarvis_voices.buscar(match.group("voz") or match.group("voz2") or "")
     return ("set_voice", {"voice": voz.clave}) if voz is not None else None
+
+
+_UNDERVOLT = r"(?:el\s+|mi\s+)?(?:undervolt|under\s+volt|perfil\s+de\s+la\s+(?:gpu|grafica|placa(?:\s+de\s+video)?))"
+_APLICA_UNDERVOLT = re.compile(
+    rf"^(?:aplica|aplicar|aplicame|pon|poner|carga|cargar|activa|activar|reaplica|reaplicar|restaura|restaurar)\s+"
+    rf"{_UNDERVOLT}(?:\s+(?:de|a|en)\s+la\s+(?:gpu|grafica|placa(?:\s+de\s+video)?))?$"
+)
+_ESTADO_UNDERVOLT = re.compile(
+    rf"^(?:(?:esta|sigue)\s+(?:aplicado|puesto|activo|cargado)\s+{_UNDERVOLT}"
+    rf"|(?:como\s+esta|estado\s+de(?:l)?|revisa|revisar|comprueba|comprobar|verifica|verificar)\s+{_UNDERVOLT}"
+    rf"|{_UNDERVOLT}\s+(?:esta|sigue)\s+(?:aplicado|puesto|activo|cargado))$"
+)
+
+
+def detectar_comando_gpu(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«aplica el undervolt» / «¿está aplicado el undervolt?»."""
+    consulta = _normalizar_consulta(texto)
+    if _APLICA_UNDERVOLT.fullmatch(consulta):
+        return "apply_gpu_profile", {}
+    if _ESTADO_UNDERVOLT.fullmatch(consulta):
+        return "get_gpu_profile_status", {}
+    return None

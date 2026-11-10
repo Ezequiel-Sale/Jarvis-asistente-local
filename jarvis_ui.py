@@ -438,10 +438,16 @@ class JarvisUIMixin:
                  "Mientras Jarvis habla, decir «Hey Jarvis» lo calla y te escucha. Solo con la salida en "
                  "los auriculares: por los altavoces el micrófono oiría su propia voz.",
                  "interrupt_button", "✋  INTERRUMPIR …", self._toggle_interrupt)
+            self._build_mobile_settings(cuerpo)
             fila("Aviso flotante",
                  "Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la "
                  "respuesta, y las confirmaciones con SÍ / NO, sin quitarte el foco.",
                  "floating_button", "▤  AVISO FLOTANTE …", self._toggle_floating)
+            fila("Mantener el undervolt de la GPU",
+                 "Cada minuto comprueba que la GPU tenga aplicado tu perfil de Adrenalin (undervolt.xml en "
+                 "Documentos) y lo reaplica si se perdió tras un reinicio o un pantallazo. Si se pierde 3 veces "
+                 "en una hora deja de hacerlo y te avisa.",
+                 "gpu_profile_button", "⚡  UNDERVOLT …", self._toggle_gpu_profile)
             fila("Animaciones",
                  "Los mensajes, tarjetas y secciones aparecen con un fundido corto.",
                  "animations_button", "✦  ANIMACIONES …", self._toggle_animations)
@@ -701,6 +707,33 @@ class JarvisUIMixin:
                 f"Sensores   {'LibreHardwareMonitor' if not hw.sensores.error else 'no disponibles'}"
             ))
 
+        def _build_mobile_settings(self, cuerpo: tk.Frame) -> None:
+            marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+            marco.pack(fill="x", pady=(0, 10))
+            marco.grid_columnconfigure(0, weight=1)
+            tk.Label(marco, text="App del celular", bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+            tk.Label(marco, text="Chatea y da órdenes a esta PC desde la app de Android, en casa o fuera. "
+                     "Solo funciona por Tailscale (red privada y cifrada entre tus dispositivos) y con "
+                     "celulares que hayas vinculado con un código.", bg=PANEL, fg=MUTED, justify="left",
+                     wraplength=540, font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
+            botones = tk.Frame(marco, bg=PANEL)
+            botones.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
+            self.mobile_button = self._ui_button(botones, "▯  CELULAR …", self._toggle_mobile, fg=MUTED)
+            self.mobile_button.configure(width=30)
+            self.mobile_button.pack(anchor="e")
+            fila_botones = tk.Frame(botones, bg=PANEL)
+            fila_botones.pack(anchor="e", pady=(6, 0))
+            self.mobile_pair_button = self._ui_button(fila_botones, "VINCULAR CELULAR", self._pair_mobile)
+            self.mobile_pair_button.pack(side="left")
+            self._ui_button(fila_botones, "DESVINCULAR", self._unpair_mobile, fg=MUTED).pack(side="left", padx=(6, 0))
+            self.mobile_info = tk.Label(marco, text="", bg=PANEL, fg=MUTED, justify="left", anchor="w",
+                                        font=("Consolas", 9))
+            self.mobile_info.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            self.mobile_code = tk.Label(marco, text="", bg=PANEL, fg=CYAN, justify="left", anchor="w",
+                                        font=("Consolas", 16, "bold"))
+            self.mobile_code.grid(row=3, column=0, columnspan=2, sticky="w")
+
         def _build_voice_settings(self, cuerpo: tk.Frame) -> None:
             import jarvis_voices
 
@@ -919,6 +952,9 @@ class JarvisUIMixin:
                 )
             if self._orb_mode != getattr(self, "_floating_mode", "idle"):
                 self._floating_mode = self._orb_mode
+                movil = getattr(self, "mobile", None)
+                if movil is not None and movil.activo():
+                    movil.estado(self._orb_mode)
                 if self._floating_active():
                     self.floating.estado(
                         {"listening": "TE ESCUCHO…", "processing": "PROCESANDO…"}.get(self._orb_mode, "")
@@ -936,6 +972,41 @@ class JarvisUIMixin:
                 return self.root.state() in ("withdrawn", "iconic")
             except tk.TclError:
                 return False
+
+        # --- App del celular (jarvis_mobile) ---------------------------------------
+
+        def _notify_mobile(self, role: str, text: str) -> None:
+            movil = getattr(self, "mobile", None)
+            if movil is None or not movil.activo():
+                return
+            if role != "user":
+                import jarvis_markdown
+
+                text = jarvis_markdown.texto_plano(text)
+            movil.mensaje(role, text)
+
+        def _mobile_question(self, texto, si, no, aprobar_cb, rechazar_cb, imagen=None) -> str | None:
+            """Publica una confirmación para responderla desde el celular. Devuelve su id."""
+            movil = getattr(self, "mobile", None)
+            if movil is None or not movil.activo():
+                return None
+            import io
+            import secrets
+
+            datos = None
+            if imagen is not None:
+                try:
+                    copia = imagen.convert("RGB")
+                    copia.thumbnail((1280, 1280))
+                    memoria = io.BytesIO()
+                    copia.save(memoria, "JPEG", quality=80)
+                    datos = memoria.getvalue()
+                except Exception:
+                    datos = None
+            qid = "q" + secrets.token_hex(4)
+            self._mobile_callbacks = {qid: (aprobar_cb, rechazar_cb)}
+            movil.pregunta(qid, texto, si, no, datos)
+            return qid
 
         def _notify_floating(self, role: str, text: str) -> None:
             if not self._floating_active():
@@ -1043,6 +1114,7 @@ class JarvisUIMixin:
 
             self._fade_in(row)
             self._notify_floating(role, text)
+            self._notify_mobile(role, text)
             if should_follow:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
 
@@ -1145,15 +1217,16 @@ class JarvisUIMixin:
                 self._rich_text(cuerpo, texto, PANEL).pack(anchor="w", pady=(6, 0))
                 self._fade_in(cuerpo)
                 self._notify_floating("assistant", texto)
+                self._notify_mobile("assistant", texto)
                 if self._chat_following:
                     self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
 
             tarjeta.jarvis_poner_cuerpo = poner_cuerpo
             self._fade_in(fila)
             if resultado.origen != "directo":  # la respuesta de los directos llega con poner_cuerpo
-                self._notify_floating(
-                    "assistant", f"{jarvis_cards.icono(resultado.herramienta)} {resultado.etiqueta}: {texto_estado}"
-                )
+                resumen_accion = f"{jarvis_cards.icono(resultado.herramienta)} {resultado.etiqueta}: {texto_estado}"
+                self._notify_floating("assistant", resumen_accion)
+                self._notify_mobile("assistant", resumen_accion)
             if should_follow:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
             return tarjeta
@@ -1173,6 +1246,7 @@ class JarvisUIMixin:
             al_rechazar=None,
             resumen: str | None = None,
             necesita_ventana: bool = False,
+            imagen=None,
         ) -> tuple[tk.Frame, tk.Frame]:
             """Confirmación como tarjeta dentro del chat (antes eran ventanas aparte).
 
@@ -1183,6 +1257,9 @@ class JarvisUIMixin:
             """
             aprobar_cb = al_aprobar or (lambda: self._resolve_plan_approval(True))
             rechazar_cb = al_rechazar or (lambda: self._resolve_plan_approval(False))
+            qid_movil = self._mobile_question(
+                resumen or titulo.capitalize(), aprobar, rechazar, aprobar_cb, rechazar_cb, imagen
+            )
             en_aviso = self._floating_active() and not necesita_ventana
             if en_aviso:
                 # En la bandeja: la pregunta va al aviso flotante y no se roba el foco.
@@ -1229,6 +1306,11 @@ class JarvisUIMixin:
                 aviso = getattr(self, "floating", None)
                 if aviso is not None:
                     aviso.quitar_pregunta(texto or (f"✓ {aprobar}" if aprobado else f"✕ {rechazar}"))
+                if isinstance(qid_movil, str):
+                    getattr(self, "_mobile_callbacks", {}).pop(qid_movil, None)
+                    self.mobile.pregunta_resuelta(
+                        qid_movil, texto or (f"✓ {aprobar}" if aprobado else f"✕ {rechazar}")
+                    )
                 if not tarjeta.winfo_exists():
                     return
                 for hijo in pie.winfo_children():

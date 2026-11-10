@@ -27,6 +27,8 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Integraciones** | Clima (Open-Meteo, sin cuenta) y lectura de archivos de Documentos vía [MCP](https://modelcontextprotocol.io) |
 | **Voz** | «Hey Jarvis… sube el volumen», «desactiva la palabra de activación», «deja de escucharme». Con los auriculares puestos, decir «Hey Jarvis» mientras habla lo interrumpe. Seis voces (España, México y Argentina) para elegir en **⚙ Ajustes** o con «cambia tu voz a la argentina» |
 | **Apariencia** | Temas Cian, Mark (rojo y dorado) y Claro: «cambia al tema rojo», «pon el modo claro» o desde **⚙ Ajustes**. Las respuestas muestran negritas, listas, código, tablas y enlaces; cada acción aparece como una tarjeta con su estado, y las confirmaciones aparecen dentro del chat. Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la respuesta (y las confirmaciones con SÍ / NO) sin quitarte el foco. «Modo compacto» deja solo el orbe en una ventanita siempre visible |
+| **Undervolt de la GPU (AMD)** | Comprueba cada minuto que la GPU tenga aplicado tu perfil de Adrenalin (`undervolt.xml` en Documentos) y lo reaplica si se perdió tras un reinicio o un pantallazo negro. «Aplica el undervolt», «¿está aplicado el undervolt?». Si se pierde 3 veces en una hora deja de reaplicarlo y te avisa |
+| **App del celular (Android)** | Chat y órdenes a la PC desde el teléfono, por texto o voz, en casa o fuera. Va solo por [Tailscale](https://tailscale.com) (red privada y cifrada entre tus dispositivos), está desactivada por defecto y cada celular se vincula con un código que muestra Jarvis. Las confirmaciones se responden desde el teléfono |
 | **Diagnóstico** | «Diagnóstico», «historial de acciones», «¿cuál fue la última acción?» |
 
 ## Seguridad y privacidad
@@ -112,6 +114,19 @@ flowchart LR
 Jarvis inicia solo los contenedores de voz con Docker, aparece en la bandeja del sistema y solo permite una instancia abierta. La versión instalada **se inicia con Windows** (oculta en la bandeja); se desactiva en **⚙ Ajustes**, con la opción «Iniciar con Windows» del menú de la bandeja o diciendo «desactiva el inicio con Windows». Di **«Hey Jarvis»** seguido de tu orden, pulsa **F9** para hablar o escribe en el chat. Todo está en **una sola ventana**: la barra lateral tiene el orbe y las secciones **Chat**, **Rutinas** (lista y formulario de rutinas) y **Ajustes** (voz, «Hey Jarvis», inicio con Windows y modelos en uso).
 
 Las integraciones se configuran en `integraciones.json`, que se crea solo al arrancar.
+
+## App del celular (opcional)
+
+1. Instala Tailscale en la PC y en el celular con la misma cuenta.
+2. Compila la app (necesita un JDK 17 y el SDK de Android):
+   ```bash
+   cd movil
+   ```
+   ```bash
+   gradlew.bat assembleDebug
+   ```
+   e instala `movil/app/build/outputs/apk/debug/app-debug.apk` en el teléfono.
+3. En Jarvis: **⚙ Ajustes → App del celular**, actívala y pulsa «VINCULAR CELULAR». Escribe en la app la dirección y el código que aparecen.
 
 ## Tests y compilación
 

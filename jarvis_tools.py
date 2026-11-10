@@ -22,6 +22,8 @@ class ToolEventHost(Protocol):
     def _tool_set_theme(self, theme: str) -> str: ...
     def _tool_set_compact_mode(self, enabled: bool) -> str: ...
     def _tool_set_voice(self, voice: str) -> str: ...
+    def _tool_apply_gpu_profile(self) -> str: ...
+    def _tool_gpu_profile_status(self) -> str: ...
     def _tool_clean_disk(self, categories: list) -> str: ...
     def _tool_move_window(
         self, app: str, monitor: int | None = None, screen_name: str | None = None
@@ -143,6 +145,24 @@ def crear_registro_herramientas(
         host._tool_set_voice,
         label="Cambiar la voz",
         timeout_seconds=20,
+    )
+    registry.register(
+        "apply_gpu_profile",
+        "Aplica a la GPU AMD el perfil de ajuste (undervolt) que el usuario exportó desde Adrenalin.",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        host._tool_apply_gpu_profile,
+        risk=ToolRisk.MEDIUM,
+        label="Aplicar el undervolt de la GPU",
+        timeout_seconds=20,
+    )
+    registry.register(
+        "get_gpu_profile_status",
+        "Solo lectura. Indica si la GPU tiene aplicado el perfil de undervolt y sus valores actuales.",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        host._tool_gpu_profile_status,
+        label="Consultar el undervolt de la GPU",
+        timeout_seconds=15,
+        record_result=False,
     )
     registry.register(
         "set_compact_mode",
