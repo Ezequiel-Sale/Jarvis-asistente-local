@@ -17,7 +17,7 @@ import uuid
 import wave
 from pathlib import Path
 from collections import deque
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from prometheus_client import start_http_server, Counter, Histogram
 from audio_capture import grabar_audio, limpiar_audio
 
