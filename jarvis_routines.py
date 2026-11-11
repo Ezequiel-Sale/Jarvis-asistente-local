@@ -62,6 +62,7 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "set_theme",
         "set_voice",
         "video_fullscreen",
+        "video_theater",
         "apply_gpu_profile",
         "open_new_browser_tab",
         "navigate_browser",

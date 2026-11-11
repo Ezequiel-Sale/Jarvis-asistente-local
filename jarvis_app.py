@@ -3924,6 +3924,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "apply_gpu_profile": "APLICANDO EL UNDERVOLT…",
         "get_gpu_profile_status": "REVISANDO LA GPU…",
         "video_fullscreen": "CAMBIANDO LA PANTALLA COMPLETA…",
+        "video_theater": "CAMBIANDO EL MODO TEATRO…",
         "clean_disk": "LIBERANDO ESPACIO…",
         "move_window": "MOVIENDO VENTANAS…",
         "power_control": "ESPERANDO CONFIRMACIÓN…",

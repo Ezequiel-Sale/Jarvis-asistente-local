@@ -15,7 +15,7 @@ class ButtonTests(unittest.TestCase):
         self.assertEqual(m.clasificar_boton("Exit full screen (f)"), "exit_fullscreen")
         # Textos del chat u otros botones que mencionan la frase no cuentan.
         self.assertIsNone(m.clasificar_boton("Buscado pantalla completa|fullscreen Sin coincidencias"))
-        self.assertIsNone(m.clasificar_boton("Modo cine (t)"))
+        self.assertIsNone(m.clasificar_boton("Subtítulos (c)"))
 
 
 class PhraseTests(unittest.TestCase):
@@ -52,8 +52,10 @@ class ActionTests(unittest.TestCase):
         auto = Mock()
         auto.UIAutomationInitializerInThread.return_value.__enter__ = Mock()
         auto.UIAutomationInitializerInThread.return_value.__exit__ = Mock(return_value=False)
+        # Sin ventana de navegador (nunca se toca el Brave real): el estado sale del botón.
         with patch.dict("sys.modules", {"uiautomation": auto}), \
                 patch.object(m, "_botones_reproductor", lector), \
+                patch.object(m, "_ventana_navegador", return_value=None), \
                 patch("ctypes.windll", create=True):
             return m.pantalla_completa(enabled, espera=0), lector
 
@@ -75,8 +77,8 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(lector.call_count, 2)
         botones["exit_fullscreen"].GetInvokePattern.return_value.Invoke.assert_called_once()
 
-    def test_no_player(self) -> None:
-        with self.assertRaises(LookupError):
+    def test_no_player_and_no_browser(self) -> None:
+        with self.assertRaisesRegex(LookupError, "navegador"):
             self._ejecutar(True, [[], []])
 
 

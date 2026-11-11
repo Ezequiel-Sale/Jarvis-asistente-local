@@ -10,6 +10,8 @@ El título de lo que suena no se escribe en los registros.
 """
 
 import asyncio
+from ctypes import wintypes
+import ctypes
 import threading
 import logging
 import time
@@ -285,16 +287,56 @@ def elegir_sesion(
 # accesibilidad del navegador, ya normalizados: «Reproducir (k)»,
 # «Pausa combinación de teclas k», «Siguiente (Mayús+n)»…
 # YouTube: «Reproducir (k)», «Pausa combinación de teclas k»; Twitch: «Pause (space/k)».
+# Otros reproductores (Crunchyroll y similares) no ponen el atajo en el nombre:
+# «Reproducir», «Pantalla completa», «Enter fullscreen». El atajo es opcional.
 _TECLAS_BOTON = r"(?:\s+[a-z]+){0,4}?"
-_BOTON_PLAY = re.compile(rf"^(?:reproducir|play){_TECLAS_BOTON}\s+k$")
-_BOTON_PAUSA = re.compile(rf"^(?:pausa|pausar|pause){_TECLAS_BOTON}\s+k$")
+_BOTON_PLAY = re.compile(rf"^(?:reproducir|play)(?:{_TECLAS_BOTON}\s+k)?$")
+_BOTON_PAUSA = re.compile(rf"^(?:pausa|pausar|pause)(?:{_TECLAS_BOTON}\s+k)?$")
 _BOTON_SIGUIENTE = re.compile(rf"^(?:siguiente|next){_TECLAS_BOTON}\s+(?:mayus|shift)\s+n$")
 _BOTON_ANTERIOR = re.compile(rf"^(?:anterior|previous){_TECLAS_BOTON}\s+(?:mayus|shift)\s+p$")
 # YouTube: «Pantalla completa (f)» / «Salir de pantalla completa (f)»; en inglés «Full screen (f)».
-_BOTON_PANTALLA_COMPLETA = re.compile(rf"^(?:pantalla\s+completa|full\s*screen){_TECLAS_BOTON}\s+f$")
-_BOTON_SALIR_PANTALLA_COMPLETA = re.compile(
-    rf"^(?:salir\s+de\s+(?:la\s+)?pantalla\s+completa|exit\s+full\s*screen){_TECLAS_BOTON}\s+f$"
+_BOTON_PANTALLA_COMPLETA = re.compile(
+    rf"^(?:entrar\s+(?:en|a)\s+(?:la\s+)?|activar\s+(?:la\s+)?|ver\s+en\s+|enter\s+)?"
+    rf"(?:pantalla\s+completa|full\s*screen)(?:\s+mode)?(?:{_TECLAS_BOTON}\s+f)?$"
 )
+_BOTON_SALIR_PANTALLA_COMPLETA = re.compile(
+    rf"^(?:(?:salir\s+de|desactivar)\s+(?:la\s+)?pantalla\s+completa|exit\s+full\s*screen(?:\s+mode)?)"
+    rf"(?:{_TECLAS_BOTON}\s+f)?$"
+)
+
+# Modo teatro / modo cine: YouTube «Modo cine (t)» y, activo, «Vista predeterminada (t)»
+# (en inglés «Theater mode (t)» / «Default view (t)»); Twitch «Theatre Mode (alt+t)».
+_BOTON_MODO_TEATRO = re.compile(
+    rf"^(?:modo\s+(?:cine|teatro)|theat(?:er|re)\s+mode)(?:{_TECLAS_BOTON}\s+t)?$"
+)
+_BOTON_SALIR_MODO_TEATRO = re.compile(
+    rf"^(?:salir\s+del\s+modo\s+(?:cine|teatro)|exit\s+theat(?:er|re)\s+mode|vista\s+predeterminada|default\s+view)"
+    rf"(?:{_TECLAS_BOTON}\s+t)?$"
+)
+
+
+def _pulsar(control) -> bool:
+    """Pulsa un control de accesibilidad por la vía que ofrezca, sin mover el ratón.
+
+    Cada web expone sus botones distinto: YouTube admite «Invoke», pero los de
+    Twitch solo la acción por defecto de accesibilidad (LegacyIAccessible), y otros
+    reproductores, «Toggle». Antes solo se usaba Invoke y en Twitch fallaba con
+    «'NoneType' object has no attribute 'Invoke'». Devuelve si pudo pulsarlo.
+    """
+    for obtener, accion in (("GetInvokePattern", "Invoke"), ("GetTogglePattern", "Toggle"),
+                            ("GetLegacyIAccessiblePattern", "DoDefaultAction")):
+        try:
+            patron = getattr(control, obtener)()
+        except Exception:
+            continue
+        if patron is None:
+            continue
+        try:
+            getattr(patron, accion)()
+            return True
+        except Exception:
+            logging.debug("El botón no aceptó %s.", accion, exc_info=True)
+    return False
 
 
 def clasificar_boton(nombre: str) -> str | None:
@@ -307,6 +349,8 @@ def clasificar_boton(nombre: str) -> str | None:
         ("previous", _BOTON_ANTERIOR),
         ("exit_fullscreen", _BOTON_SALIR_PANTALLA_COMPLETA),
         ("fullscreen", _BOTON_PANTALLA_COMPLETA),
+        ("exit_theater", _BOTON_SALIR_MODO_TEATRO),
+        ("theater", _BOTON_MODO_TEATRO),
     ):
         if patron.match(nombre):
             return clave
@@ -354,7 +398,8 @@ def _reproductor_en_monitor(action: str, numero: int) -> str | None:
                     return f"El reproductor del monitor {numero} no tiene botón de vídeo {destino}."
             else:
                 boton = botones["pause" if reproduciendo else "play"]
-            boton.GetInvokePattern().Invoke()
+            if not _pulsar(boton):
+                raise OSError(f"El reproductor del monitor {numero} no dejó pulsar su botón.")
             return {
                 "play": "Reanudé el vídeo",
                 "pause": "Pausé el vídeo",
@@ -366,8 +411,9 @@ def _reproductor_en_monitor(action: str, numero: int) -> str | None:
     return None
 
 
-def _botones_reproductor(zona) -> list[dict[str, object]]:
-    """Botones clasificados de cada ventana Chromium (de arriba abajo), opcionalmente de un monitor."""
+def _botones_reproductor(zona, claves=("fullscreen", "exit_fullscreen")) -> list[dict[str, object]]:
+    """Botones clasificados de cada ventana Chromium (de arriba abajo), opcionalmente de un
+    monitor; solo las ventanas que tienen alguno de ``claves``."""
     import uiautomation as auto
 
     encontrados = []
@@ -383,44 +429,235 @@ def _botones_reproductor(zona) -> list[dict[str, object]]:
             clave = clasificar_boton(control.Name)
             if clave is not None and clave not in botones:
                 botones[clave] = control
-        if "fullscreen" in botones or "exit_fullscreen" in botones:
+        if any(clave in botones for clave in claves):
             encontrados.append(botones)
     return encontrados
 
 
-def pantalla_completa(enabled: bool, monitor: int | None = None, *, espera: float = 1.5) -> str:
-    """Pone el vídeo de la pestaña activa en pantalla completa o lo saca (botón del reproductor).
+NAVEGADORES = ("brave", "chrome", "msedge", "firefox", "opera", "vivaldi")
+VK_F, VK_ESCAPE, VK_T, VK_MENU = 0x46, 0x1B, 0x54, 0x12
+ESPERA_CAMBIO = 1.2  # s que se espera a que el navegador entre o salga de pantalla completa
+
+
+def _ventana_navegador(zona):
+    """La ventana del navegador de más arriba (la del monitor pedido, si se indicó), o None.
+    Nunca otras apps Chromium como Claude o VS Code."""
+    import jarvis_windows
+
+    user32 = ctypes.windll.user32
+    for ventana in jarvis_windows.listar_ventanas():  # de arriba abajo
+        if ventana.programa not in NAVEGADORES:
+            continue
+        if zona is not None:
+            rect = wintypes.RECT()
+            user32.GetWindowRect(ventana.hwnd, ctypes.byref(rect))
+            if not _en_zona(rect, zona):
+                continue
+        return ventana
+    return None
+
+
+def _en_pantalla_completa(hwnd: int) -> bool:
+    """Si la ventana cubre todo su monitor (así queda el navegador con un vídeo en pantalla completa)."""
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+    user32 = ctypes.windll.user32
+    user32.MonitorFromWindow.restype = wintypes.HMONITOR
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return False
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not user32.GetMonitorInfoW(user32.MonitorFromWindow(hwnd, 2), ctypes.byref(info)):
+        return False
+    m = info.rcMonitor
+    return rect.left <= m.left and rect.top <= m.top and rect.right >= m.right and rect.bottom >= m.bottom
+
+
+def _esperar_estado(hwnd: int, quiero: bool, comprobar, esperar: float) -> bool:
+    fin = time.monotonic() + esperar
+    while True:
+        if comprobar(hwnd) == quiero:
+            return True
+        if time.monotonic() >= fin:
+            return False
+        time.sleep(0.15)
+
+
+def _clic_real(control) -> bool:
+    """Clic de verdad en el centro del botón (y el puntero vuelve a donde estaba).
+
+    Los navegadores solo dejan entrar en pantalla completa con un gesto real del
+    usuario: la pulsación por accesibilidad «funciona» pero no cuenta (Twitch)."""
+    import jarvis_screen_actions as acciones
+
+    rect = control.BoundingRectangle
+    if rect.right <= rect.left or rect.bottom <= rect.top:
+        return False
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    antes = acciones._posicion_puntero(user32)
+    try:
+        acciones.hacer_clic((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+    except OSError:
+        logging.debug("No se pudo hacer clic en el botón del reproductor.", exc_info=True)
+        return False
+    finally:
+        if antes is not None:
+            try:
+                acciones.mover_puntero(*antes)
+            except OSError:
+                pass
+    return True
+
+
+def _tecla_en(hwnd: int, vk: int, con_alt: bool = False) -> bool:
+    """Una tecla (F, Esc, T, Alt+T) en la ventana del navegador (traída al frente): gesto real."""
+    import jarvis_input
+    import jarvis_windows
+
+    if ctypes.windll.user32.GetForegroundWindow() != hwnd:
+        jarvis_windows.enfocar(hwnd)
+        time.sleep(0.3)
+    try:
+        teclas = [("tecla", vk, 0, 0), ("tecla", vk, 0, 2)]
+        if con_alt:
+            teclas = [("tecla", VK_MENU, 0, 0), *teclas, ("tecla", VK_MENU, 0, 2)]
+        jarvis_input._send_input(teclas)
+    except OSError:
+        logging.debug("Windows no aceptó la tecla del reproductor.", exc_info=True)
+        return False
+    return True
+
+
+def pantalla_completa(enabled: bool, monitor: int | None = None, *, espera: float = 1.5,
+                      comprobar=None, esperar_cambio: float = ESPERA_CAMBIO) -> str:
+    """Pone el vídeo en pantalla completa o lo saca, y comprueba que de verdad cambió.
+
+    Intenta, de más suave a más directo, hasta que la ventana del navegador cubra el
+    monitor (o deje de cubrirlo): 1) pulsar el botón del reproductor por
+    accesibilidad (sin mover el ratón; vale en YouTube), 2) un clic real en ese
+    botón (Twitch: el navegador exige un gesto real), 3) la tecla F o Esc. Si nada
+    funciona, lo dice en vez de dar por hecho que funcionó.
 
     Sin ``monitor``, el primer reproductor de arriba abajo (la ventana de delante).
     Brave expone la página tras la primera consulta de accesibilidad: si no se ve
     ningún reproductor, se espera un momento y se vuelve a mirar.
     """
-    import ctypes
-
     import uiautomation as auto
 
     import jarvis_vision
 
     zona = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), monitor) if monitor else None
     donde = f" del monitor {monitor}" if monitor else ""
+    comprobar = comprobar or _en_pantalla_completa
     ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
     with auto.UIAutomationInitializerInThread():
         reproductores = _botones_reproductor(zona)
         if not reproductores:
             time.sleep(max(0.0, espera))
             reproductores = _botones_reproductor(zona)
+        ventana = _ventana_navegador(zona)
+        botones = reproductores[0] if reproductores else {}
+        if ventana is None and not botones:
+            raise LookupError(f"No encontré ningún navegador abierto{donde} con un vídeo.")
+        hwnd = ventana.hwnd if ventana is not None else None
+        # Estado actual: la ventana manda; sin ventana, el nombre del botón.
+        ahora = comprobar(hwnd) if hwnd is not None else "exit_fullscreen" in botones
+        if ahora == enabled:
+            return f"El vídeo{donde} ya está en pantalla completa." if enabled else \
+                f"El vídeo{donde} no está en pantalla completa."
+        boton = botones.get("fullscreen" if enabled else "exit_fullscreen")
+        intentos = []
+        if boton is not None:
+            intentos.append(("botón", lambda: _pulsar(boton)))
+            if enabled:
+                intentos.append(("clic", lambda: _clic_real(boton)))
+        if hwnd is not None:
+            intentos.append(("tecla", lambda: _tecla_en(hwnd, VK_F if enabled else VK_ESCAPE)))
+        hecho = "Puse el vídeo{} en pantalla completa." if enabled else "Saqué el vídeo{} de pantalla completa."
+        for via, intentar in intentos:
+            if not intentar():
+                continue
+            if hwnd is None:  # sin ventana que mirar: no se puede comprobar
+                return hecho.format(donde)
+            if _esperar_estado(hwnd, enabled, comprobar, esperar_cambio):
+                logging.info("Pantalla completa %s con: %s.", "activada" if enabled else "quitada", via)
+                return hecho.format(donde)
+        tecla = "F" if enabled else "Esc"
+        raise LookupError(
+            f"No pude {'poner' if enabled else 'sacar'} el vídeo{donde} "
+            f"{'en' if enabled else 'de'} pantalla completa: el reproductor no respondió al botón, "
+            f"a un clic ni a la tecla {tecla}. Haz clic una vez en el vídeo y vuelve a pedírmelo."
+        )
+
+
+def _firma_teatro(botones: dict) -> tuple:
+    """Lo que delata un cambio de modo teatro: el nombre del botón (YouTube pasa a
+    «Vista predeterminada») o su posición (el reproductor cambia de tamaño)."""
+    boton = botones.get("exit_theater") or botones.get("theater")
+    rect = getattr(boton, "BoundingRectangle", None)
+    lados = tuple(getattr(rect, lado, None) for lado in ("left", "top", "right", "bottom"))
+    return "exit_theater" in botones, lados
+
+
+def modo_teatro(enabled: bool, monitor: int | None = None, *, espera: float = 1.5,
+                esperar_cambio: float = ESPERA_CAMBIO) -> str:
+    """Activa o quita el modo teatro (modo cine) del reproductor de la pestaña activa.
+
+    Igual que la pantalla completa, comprueba que algo cambió y escala: pulsar el
+    botón por accesibilidad → clic real en él → la tecla del sitio (T en YouTube,
+    Alt+T en Twitch, según el atajo que anuncia el botón).
+    """
+    import uiautomation as auto
+
+    import jarvis_vision
+
+    zona = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), monitor) if monitor else None
+    donde = f" del monitor {monitor}" if monitor else ""
+    claves = ("theater", "exit_theater")
+    ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    with auto.UIAutomationInitializerInThread():
+        reproductores = _botones_reproductor(zona, claves)
         if not reproductores:
-            raise LookupError(f"No encontré ningún vídeo{donde} con botón de pantalla completa.")
+            time.sleep(max(0.0, espera))
+            reproductores = _botones_reproductor(zona, claves)
+        if not reproductores:
+            raise LookupError(f"No encontré ningún reproductor{donde} con modo teatro (modo cine).")
         botones = reproductores[0]
-        if enabled:
-            if "exit_fullscreen" in botones:
-                return f"El vídeo{donde} ya está en pantalla completa."
-            botones["fullscreen"].GetInvokePattern().Invoke()
-            return f"Puse el vídeo{donde} en pantalla completa."
-        if "exit_fullscreen" not in botones:
-            return f"El vídeo{donde} no está en pantalla completa."
-        botones["exit_fullscreen"].GetInvokePattern().Invoke()
-        return f"Saqué el vídeo{donde} de pantalla completa."
+        activo = "exit_theater" in botones
+        if activo == enabled:
+            return f"El vídeo{donde} ya está en modo teatro." if enabled else \
+                f"El vídeo{donde} no está en modo teatro."
+        boton = botones.get("exit_theater") or botones["theater"]
+        con_alt = " alt " in f" {_normal(getattr(boton, 'Name', '') or '')} "
+        ventana = _ventana_navegador(zona)
+        antes = _firma_teatro(botones)
+
+        def cambio() -> bool:
+            fin = time.monotonic() + esperar_cambio
+            while True:
+                ahora = _botones_reproductor(zona, claves)
+                if ahora and _firma_teatro(ahora[0]) != antes:
+                    return True
+                if time.monotonic() >= fin:
+                    return False
+                time.sleep(0.15)
+
+        intentos = [("botón", lambda: _pulsar(boton)), ("clic", lambda: _clic_real(boton))]
+        if ventana is not None:
+            intentos.append(("tecla", lambda: _tecla_en(ventana.hwnd, VK_T, con_alt)))
+        for via, intentar in intentos:
+            if intentar() and cambio():
+                logging.info("Modo teatro %s con: %s.", "activado" if enabled else "quitado", via)
+                return f"Puse el vídeo{donde} en modo teatro." if enabled else \
+                    f"Quité el modo teatro del vídeo{donde}."
+        raise LookupError(
+            f"No pude {'activar' if enabled else 'quitar'} el modo teatro{donde}: el reproductor no "
+            "respondió al botón, a un clic ni a su tecla. Haz clic una vez en el vídeo y vuelve a pedírmelo."
+        )
 
 
 def controlar_reproduccion(
@@ -650,7 +887,9 @@ def silenciar_pestana(mute: bool = True, monitor: int | None = None, match: str 
             if opcion is None:
                 auto.SendKeys("{Esc}")  # ya estaba como se pide (o no hay menú)
                 continue
-            opcion.GetInvokePattern().Invoke()
+            if not _pulsar(opcion):
+                auto.SendKeys("{Esc}")
+                continue
             hechas += 1
             time.sleep(0.2)
     logging.info("Pestañas %s: %s.", "silenciadas" if mute else "con sonido", hechas)
@@ -884,6 +1123,17 @@ def _separar_monitor(consulta: str) -> tuple[str, int | None]:
     numero = int(valor) if valor.isdigit() else _NUMEROS_MONITOR[valor]
     return consulta[: m.start()], numero
 
+_MODO_TEATRO = r"(?:el\s+)?modo\s+(?:teatro|cine)"
+_PONER_MODO_TEATRO = re.compile(
+    rf"^(?:pon|ponme|poner|ponlo|ponle|activa|activar|activame|deja|dejalo|cambia|cambiar)\s+"
+    rf"(?:{_VIDEO}\s+)?(?:en\s+|a\s+|al\s+)?{_MODO_TEATRO}(?:\s+(?:a|al|del|en\s+el)\s+{_VIDEO})?$"
+    rf"|^{_MODO_TEATRO}(?:\s+(?:al|del|en\s+el)\s+{_VIDEO})?$"
+)
+_QUITAR_MODO_TEATRO = re.compile(
+    rf"^(?:sal|salir|salte|sali|quita|quitar|quitale|saca|sacar|sacalo|desactiva|desactivar|cierra)\s+"
+    rf"(?:(?:de|del)\s+)?(?:{_VIDEO}\s+(?:de|del)\s+)?{_MODO_TEATRO}(?:\s+(?:a|al|del|de|en\s+el)\s+{_VIDEO})?$"
+)
+
 
 def _argumentos_pestana(m: re.Match, mute: bool, extra: dict) -> dict[str, object]:
     match = m.group("match") or ("youtube" if m.group("video") == "youtube" else "")
@@ -892,7 +1142,7 @@ def _argumentos_pestana(m: re.Match, mute: bool, extra: dict) -> dict[str, objec
 
 # «pausa el vídeo del monitor 1 y reanuda el del monitor 2»: varias órdenes seguidas.
 _UNION = re.compile(r"\s+(?:y\s+(?:luego\s+|despues\s+|tambien\s+)?|luego\s+|despues\s+)")
-_PASOS_SECUENCIA = {"media_control", "mute_browser_tab", "video_fullscreen"}
+_PASOS_SECUENCIA = {"media_control", "mute_browser_tab", "video_fullscreen", "video_theater"}
 MAX_PASOS = 4
 
 
@@ -912,7 +1162,7 @@ def detectar_secuencia(consulta: str) -> list[dict[str, object]] | None:
 def ejecutar_secuencia(steps: list[dict[str, object]]) -> str:
     """Ejecuta en orden pasos multimedia de riesgo bajo (órdenes compuestas)."""
     funciones = {"media_control": controlar_reproduccion, "mute_browser_tab": silenciar_pestana,
-                 "video_fullscreen": pantalla_completa}
+                 "video_fullscreen": pantalla_completa, "video_theater": modo_teatro}
     if not 1 <= len(steps) <= MAX_PASOS:
         raise ValueError(f"Indica entre 1 y {MAX_PASOS} pasos.")
     resultados = []
@@ -945,6 +1195,10 @@ def _detectar_uno(consulta: str) -> tuple[str, dict[str, object]] | None:
         return "mute_browser_tab", _argumentos_pestana(m, True, extra)
     if (m := _ACTIVAR_PESTANA.fullmatch(sin_monitor)) is not None:
         return "mute_browser_tab", _argumentos_pestana(m, False, extra)
+    if _QUITAR_MODO_TEATRO.fullmatch(sin_monitor):
+        return "video_theater", {"enabled": False, **extra}
+    if _PONER_MODO_TEATRO.fullmatch(sin_monitor):
+        return "video_theater", {"enabled": True, **extra}
     if _QUITAR_PANTALLA_COMPLETA.fullmatch(sin_monitor):
         return "video_fullscreen", {"enabled": False, **extra}
     if _PONER_PANTALLA_COMPLETA.fullmatch(sin_monitor):
@@ -1049,6 +1303,25 @@ def registrar_herramientas(registry, verificadores=None) -> None:
         },
         pantalla_completa,
         label="Pantalla completa del vídeo",
+        timeout_seconds=20,
+    )
+    registry.register(
+        "video_theater",
+        (
+            "Activa (enabled=true) o quita (enabled=false) el modo teatro / modo cine del "
+            "reproductor de la pestaña activa del navegador (YouTube, Twitch…); monitor opcional."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+            },
+            "required": ["enabled"],
+            "additionalProperties": False,
+        },
+        modo_teatro,
+        label="Modo teatro del vídeo",
         timeout_seconds=20,
     )
     registry.register(
