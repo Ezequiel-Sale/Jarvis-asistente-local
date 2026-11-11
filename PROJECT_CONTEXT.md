@@ -126,7 +126,7 @@ JARVIS/
 ├── jarvis_health.py         # Diagnóstico: Ollama/STT/TTS, latencias por etapa, fallos 24 h
 ├── jarvis_single_instance.py # Instancia única: mutex con nombre + evento para mostrar la ventana existente
 ├── jarvis_hotkeys.py        # Hilo GlobalHotkeyListener (F9 global)
-├── jarvis_wakeword.py       # Hilo DetectorPalabraActivacion («Hey Jarvis», openWakeWord) + SegmentadorVoz (fin de la orden por energía); la orden termina tras 1,3 s de silencio (máx. 25 s) y el ruido de fondo es el percentil 20 de los últimos 5 s (`estimar_ruido`: con la mediana, el propio «Hey Jarvis» subía el umbral y las órdenes largas se cortaban); cada orden deja en el log su duración y umbral, sin contenido
+├── jarvis_wakeword.py       # Hilo DetectorPalabraActivacion («Hey Jarvis», openWakeWord) + SegmentadorVoz (fin de la orden por energía); la orden termina tras 1,3 s de silencio (máx. 25 s) y el ruido de fondo es el percentil 20 de los últimos 5 s (`estimar_ruido`: con la mediana, el propio «Hey Jarvis» subía el umbral y las órdenes largas se cortaban); una vez que se habló, el silencio también es relativo a la voz (`umbral_fin` = máx(umbral, 0,2 × mediana de la voz) [2026-11-11]: con sonido de fondo constante por encima del umbral fijo —un vídeo o juego que se cuela en el micrófono— la orden no terminaba y se grababan 25 s); cada orden deja en el log su duración y umbral, y las de 8 s o más los percentiles de energía, sin contenido
 ├── audio_capture.py         # GrabadorAudio (micrófono → WAV temporal), grabar_audio CLI
 ├── init_db.sql              # Esquema SQLite + datos iniciales (idempotente)
 ├── docker-compose.yml       # stt, llm, tts, prometheus, grafana

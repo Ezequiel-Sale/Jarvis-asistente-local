@@ -61,6 +61,24 @@ class SegmenterTests(unittest.TestCase):
                 break
         self.assertGreater(fin, 25 + 12 + 37)  # no cortó en la pausa
 
+    def test_steady_background_after_speech_counts_as_silence(self) -> None:
+        """Un vídeo que se cuela en el micrófono (400) por encima del umbral fijo (300)."""
+        seg = ww.SegmentadorVoz(50)
+        energias = [400] * 2 + [3000] * 20 + [400] * 40
+        fin = -1
+        for indice, energia in enumerate(energias, start=1):
+            if seg.agregar(energia, 0.1):
+                fin = indice
+                break
+        self.assertEqual(fin, 2 + 20 + 13)  # 1,3 s después de dejar de hablar, no a los 25 s
+        self.assertAlmostEqual(seg.umbral_fin, 600)
+
+    def test_soft_words_still_count_as_voice(self) -> None:
+        seg = ww.SegmentadorVoz(50, silencio_final=0.5)
+        # Voz fuerte y luego una palabra suave (800 > 0,2 × 3000): no corta.
+        fin = self._alimentar(seg, [3000] * 10 + [800] * 8 + [10] * 10)
+        self.assertEqual(fin, 10 + 8 + 5)
+
     def test_long_command_fits(self) -> None:
         self.assertGreaterEqual(ww.SegmentadorVoz(50).maximo, 20)
 

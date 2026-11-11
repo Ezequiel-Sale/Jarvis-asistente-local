@@ -50,6 +50,12 @@ class SegmentadorVoz:
     - Espera hasta ``espera_inicio`` s a que el usuario empiece a hablar.
     - Termina tras ``silencio_final`` s seguidos de silencio después de hablar.
     - Nunca graba más de ``maximo`` s.
+
+    Una vez que el usuario habló, «silencio» es también lo que queda muy por debajo
+    de su voz (``relativo`` × la mediana de la voz): el umbral fijo sale del ruido de
+    antes de «Hey Jarvis», y si después hay sonido de fondo constante (un vídeo o un
+    juego que se cuela en el micrófono, un ventilador) por encima de ese umbral, la
+    orden no terminaba nunca y se grababan 25 s.
     """
 
     ruido: float
@@ -63,19 +69,32 @@ class SegmentadorVoz:
     # El pitido de aviso suena justo al empezar: si el micrófono lo capta no
     # debe contar como que el usuario ya habló.
     ignorar_inicio: float = 0.3
+    relativo: float = 0.2  # ~14 dB por debajo de la voz cuenta como silencio
 
     def __post_init__(self) -> None:
         self.umbral = max(self.ruido * self.factor, self.minimo_umbral)
         self.duracion = 0.0
         self.hablo = False
         self._silencio = 0.0
+        self._voz: list[float] = []
+        self.energias: list[float] = []
+
+    @property
+    def umbral_fin(self) -> float:
+        """Energía mínima para que un bloque cuente como voz una vez que se habló."""
+        if not self._voz:
+            return self.umbral
+        ordenadas = sorted(self._voz)
+        return max(self.umbral, ordenadas[len(ordenadas) // 2] * self.relativo)
 
     def agregar(self, energia: float, segundos: float = SEGUNDOS_POR_BLOQUE) -> bool:
         """Registra un bloque; devuelve True cuando la grabación debe terminar."""
         self.duracion += segundos
-        if energia >= self.umbral and self.duracion > self.ignorar_inicio + _EPS:
+        self.energias.append(energia)
+        if energia >= self.umbral_fin and self.duracion > self.ignorar_inicio + _EPS:
             self.hablo = True
             self._silencio = 0.0
+            self._voz.append(energia)
         else:
             self._silencio += segundos
         # Margen para errores de redondeo al sumar duraciones de bloques.
@@ -310,6 +329,14 @@ class DetectorPalabraActivacion(threading.Thread):
             ruido,
             segmentador.umbral,
         )
+        if segmentador.duracion >= 8:
+            # Solo números (nunca el audio): para ver qué mantuvo abierta la grabación.
+            ordenadas = sorted(segmentador.energias)
+            percentil = lambda p: ordenadas[min(len(ordenadas) - 1, int(len(ordenadas) * p))]  # noqa: E731
+            logging.info(
+                "Orden larga: energía p20 %.0f, p50 %.0f, p90 %.0f; umbral final %.0f.",
+                percentil(0.2), percentil(0.5), percentil(0.9), segmentador.umbral_fin,
+            )
         if not segmentador.hablo:
             return None
         return guardar_wav(bloques)
