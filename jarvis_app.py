@@ -257,7 +257,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             control_permitido=lambda: self._mobile_control_enabled,
             carpetas=jarvis_archivos.carpeta,
             raices=jarvis_archivos.raices,
-            abrir_link=lambda url: str(self.tool_registry.execute("navigate_browser", {"url": url}, origin="celular")),
+            abrir_link=self._open_link_from_mobile,
             portapapeles=(jarvis_archivos.leer_portapapeles, jarvis_archivos.escribir_portapapeles),
         )
         self.fps_meter = jarvis_fps.MedidorFPS()
@@ -3422,6 +3422,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         if not self._mobile_control_enabled:
             self.mobile.activar_control(False)
         self._refresh_mobile_settings()
+
+    def _open_link_from_mobile(self, url: str) -> str:
+        """Link compartido desde el celular. ``navigate_browser`` (riesgo medio) pide
+        confirmación; compartir el link a propósito es esa confirmación, igual que
+        escribir «abre youtube.com». Sin ``confirmed`` el registro lo rechazaba."""
+        return str(self.tool_registry.execute("navigate_browser", {"url": url}, confirmed=True, origin="celular"))
 
     def _tool_send_file_to_phone(self, path: str) -> str:
         if not self.mobile.activo():

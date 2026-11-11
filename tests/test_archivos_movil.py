@@ -176,6 +176,18 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(publicados, [("file", {"root": "documentos", "path": "Sub/foto.png", "name": "foto.png",
                                                 "size": 3})])
 
+    def test_shared_link_runs_confirmed(self) -> None:
+        """navigate_browser pide confirmación: sin confirmed=True no se abría nada."""
+        from unittest.mock import Mock
+
+        from jarvis_app import JarvisApp
+
+        host = SimpleNamespace(tool_registry=Mock())
+        host.tool_registry.execute.return_value = "Navegué a https://youtu.be/x en Brave."
+        self.assertIn("Navegué", JarvisApp._open_link_from_mobile(host, "https://youtu.be/x"))
+        host.tool_registry.execute.assert_called_once_with(
+            "navigate_browser", {"url": "https://youtu.be/x"}, confirmed=True, origin="celular")
+
     def test_send_clipboard(self) -> None:
         from jarvis_app import JarvisApp
 
