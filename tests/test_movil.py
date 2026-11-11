@@ -23,7 +23,7 @@ def _servidor(ocupado=False):
 def _pedir(servidor, metodo, ruta, cuerpo=None, token=None, ip=TS):
     datos = cuerpo if isinstance(cuerpo, bytes) else json.dumps(cuerpo or {}).encode()
     cabeceras = {"Authorization": f"Bearer {token}"} if token else {}
-    estado, tipo, respuesta = servidor.manejar(metodo, ruta, cabeceras, datos, ip)
+    estado, tipo, respuesta = servidor.manejar(metodo, ruta, cabeceras, datos, ip)[:3]
     return estado, (json.loads(respuesta) if tipo == "application/json" else respuesta)
 
 
@@ -145,6 +145,15 @@ class VideoTests(unittest.TestCase):
         self._abrir("?n=2")
         self.assertTrue(primero.is_set())
         self.assertFalse(self.detener.is_set())
+
+    def test_new_stream_waits_until_previous_released_capture(self) -> None:
+        import io
+        import time as _t
+
+        self._abrir("?n=1")[2](io.BytesIO())  # el primero termina y suelta la captura
+        inicio = _t.monotonic()
+        self.assertEqual(self._abrir("?n=1")[0], 200)
+        self.assertLess(_t.monotonic() - inicio, 1)
 
     def test_output_size_is_even_and_never_upscaled(self) -> None:
         import jarvis_video_movil as jv
@@ -271,6 +280,109 @@ class MediaAndStatusTests(unittest.TestCase):
     def test_status_with_and_without_fps(self) -> None:
         self.assertIsNone(_pedir(self.servidor, "GET", "/api/status", token=self.token)[1]["fps"])
         self.assertEqual(_pedir(self.servidor, "GET", "/api/status?fps=1", token=self.token)[1]["fps"], {"fps": 144})
+
+
+class ControlAndVisionTests(unittest.TestCase):
+    """Fase 4: puntero, control del mouse y teclado (con permiso) y «¿Qué es esto?»."""
+
+    def setUp(self) -> None:
+        self.permitido = False
+        self.entradas: list = []
+        self.eventos: queue.Queue = queue.Queue()
+        guardado: dict[str, str] = {}
+        self.servidor = m.ServidorMovil(
+            self.eventos, m.Vinculacion(guardado.get, guardado.__setitem__),
+            captura=lambda *_: b"jpeg", cursor=lambda monitor: (0.5, 0.25) if monitor == 1 else None,
+            entrada=lambda eventos: self.entradas.append(eventos) or len(eventos),
+            control_permitido=lambda: self.permitido,
+        )
+        self.token = _vincular(self.servidor)
+        self.eventos.get_nowait()  # mobile_paired
+
+    def _pedir(self, metodo, ruta, cuerpo=None):
+        return _pedir(self.servidor, metodo, ruta, cuerpo, token=self.token)
+
+    def test_cursor_header_on_frames(self) -> None:
+        cabeceras = {"Authorization": f"Bearer {self.token}"}
+        respuesta = self.servidor.manejar("GET", "/api/screen?n=1", cabeceras, b"", TS)
+        self.assertEqual(respuesta[3], {"X-Cursor": "0.5,0.25"})
+        respuesta = self.servidor.manejar("GET", "/api/screen?n=2", cabeceras, b"", TS)
+        self.assertEqual(respuesta[3], {"X-Cursor": "none"})
+
+    def test_control_needs_setting_and_approval(self) -> None:
+        mover = {"events": [{"t": "move", "dx": 1, "dy": 1}]}
+        self.assertEqual(self._pedir("POST", "/api/control", {"on": True})[0], 403)
+        self.assertEqual(self._pedir("POST", "/api/input", mover)[0], 403)
+        self.permitido = True
+        self.assertEqual(self._pedir("POST", "/api/control", {"on": True})[1]["pending"], True)
+        self.assertEqual(self.eventos.get_nowait(), ("mobile_control_request",))
+        self.assertEqual(self._pedir("POST", "/api/input", mover)[0], 403)  # todavía sin aprobar
+        self.servidor.activar_control(True)  # lo hace la herramienta tras la confirmación
+        self.assertEqual(self._pedir("POST", "/api/input", mover), (200, {"ok": True, "inputs": 1}))
+        self.assertEqual(self.entradas, [mover["events"]])
+        self.permitido = False  # apagar el ajuste corta el control al instante
+        self.assertFalse(self.servidor.control_activo())
+        self.permitido = True
+        self._pedir("POST", "/api/control", {"on": False})
+        self.assertFalse(self.servidor.control_activo())
+        estados = [e["active"] for e in self.servidor.registro.desde(-1) if e["type"] == "control"]
+        self.assertEqual(estados, [True, False])
+
+    def test_control_expires_without_use(self) -> None:
+        self.permitido = True
+        self.servidor.activar_control(True)
+        ahora = self.servidor._ultimo_control
+        self.assertFalse(self.servidor.control_inactivo(ahora + 60))
+        self.assertTrue(self.servidor.control_inactivo(ahora + 121))
+
+    def test_vision_zone_is_validated_and_queued(self) -> None:
+        zona = {"n": 1, "x": 0.9, "y": 0.1, "w": 0.3, "h": 0.2, "question": "  ¿Qué   dice esto? "}
+        self.assertEqual(self._pedir("POST", "/api/vision", zona), (200, {"ok": True}))
+        tipo, monitor, (x, y, w, h), pregunta = self.eventos.get_nowait()
+        self.assertEqual((tipo, monitor, pregunta), ("mobile_vision", 1, "¿Qué dice esto?"))
+        self.assertAlmostEqual(w, 0.1)  # recortada al borde
+        for mala in ({"n": 1, "x": 1.2, "y": 0, "w": 0.1, "h": 0.1}, {"n": 1, "x": 0, "y": 0, "w": 0, "h": 0.1},
+                     {"n": 1, "x": "a", "y": 0, "w": 0.1, "h": 0.1}):
+            self.assertEqual(self._pedir("POST", "/api/vision", mala)[0], 400)
+
+
+class VideoExtrasTests(unittest.TestCase):
+    def test_cursor_and_audio_packets_in_stream(self) -> None:
+        import io
+        import struct
+
+        def video(*_args):
+            yield b"cuadro1", True
+            yield b"cuadro2", False
+
+        def audio(detener):
+            yield (48000).to_bytes(4, "big") + (2).to_bytes(2, "big")
+            yield b"\x01\x00" * 4
+            detener.wait(1)
+
+        posiciones = iter([(0.1, 0.2), (0.1, 0.2), None])
+        guardado: dict[str, str] = {}
+        servidor = m.ServidorMovil(queue.Queue(), m.Vinculacion(guardado.get, guardado.__setitem__),
+                                   video=video, audio=audio, cursor=lambda _n: next(posiciones))
+        servidor._http = object()
+        token = _vincular(servidor)
+        _estado, _tipo, escribir = servidor.manejar("GET", "/api/video?n=1&audio=1",
+                                                    {"Authorization": f"Bearer {token}"}, b"", TS)
+        import time as _t
+        _t.sleep(0.3)  # que el hilo del audio llene la cola antes de escribir
+        salida = io.BytesIO()
+        escribir(salida)
+        datos, i, paquetes = salida.getvalue(), 0, []
+        while i < len(datos):
+            largo, banderas = struct.unpack(">IB", datos[i:i + 5])
+            paquetes.append((banderas, datos[i + 5:i + 5 + largo]))
+            i += 5 + largo
+        self.assertEqual(paquetes[0], (1, b"cuadro1"))
+        self.assertEqual(paquetes[1], (2, struct.pack(">ff", 0.1, 0.2)))
+        self.assertIn((8, (48000).to_bytes(4, "big") + (2).to_bytes(2, "big")), paquetes)
+        self.assertIn((4, b"\x01\x00" * 4), paquetes)
+        cursores = [p for p in paquetes if p[0] == 2]
+        self.assertEqual(cursores, [(2, struct.pack(">ff", 0.1, 0.2))])  # el repetido no se manda
 
 
 class ScreenCaptureTests(unittest.TestCase):

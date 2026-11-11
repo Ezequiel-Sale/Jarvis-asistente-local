@@ -2,7 +2,8 @@
 #
 #   powershell -ExecutionPolicy Bypass -File movil\compilar.ps1
 #
-# Necesita JAVA_HOME apuntando a un JDK 17. Deja movil\Jarvis.apk y movil\Jarvis.apk.json;
+# Necesita JAVA_HOME apuntando a un JDK 17. Sin daemon de Gradle: no queda Java ocupando RAM
+# ni colgando la consola que lo lanzó. Deja movil\Jarvis.apk y movil\Jarvis.apk.json;
 # Jarvis los ofrece al celular (/api/app) desde la carpeta "movil" junto a Jarvis.exe.
 # La firma es la clave de depuración de esta PC (%USERPROFILE%\.android\debug.keystore):
 # si se pierde, el celular no acepta la actualización y hay que desinstalar la app una vez.
@@ -19,7 +20,7 @@ $ahora = [DateTime]::UtcNow
 $codigo = [int][Math]::Floor(($ahora - [DateTime]::new(2026, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)).TotalMinutes)
 $nombre = "1." + $ahora.ToLocalTime().ToString("yyyyMMdd.HHmm")
 
-cmd /c ".\gradlew.bat assembleDebug --console=plain -q -PjarvisVersionCode=$codigo -PjarvisVersionName=$nombre 2>&1"
+cmd /c ".\gradlew.bat assembleDebug --no-daemon --console=plain -q -PjarvisVersionCode=$codigo -PjarvisVersionName=$nombre 2>&1"
 if ($LASTEXITCODE -ne 0) { throw "Falló la compilación de la app (código $LASTEXITCODE)." }
 
 Copy-Item "app\build\outputs\apk\debug\app-debug.apk" "Jarvis.apk" -Force

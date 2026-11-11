@@ -32,6 +32,8 @@ import jarvis_mobile
 import jarvis_video_movil
 import jarvis_system_info
 import jarvis_fps
+import jarvis_input
+import jarvis_audio_movil
 import jarvis_media
 import psutil
 import jarvis_monitor_view
@@ -248,6 +250,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             portada=jarvis_media.portada_actual,
             accion=self._action_from_mobile,
             estado_equipo=self._status_for_mobile,
+            cursor=jarvis_vision.cursor_para_movil,
+            audio=jarvis_audio_movil.capturar,
+            entrada=jarvis_input.aplicar,
+            control_permitido=lambda: self._mobile_control_enabled,
         )
         self.fps_meter = jarvis_fps.MedidorFPS()
         try:
@@ -258,6 +264,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._mobile_screen_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_PANTALLA) != "0"
         except Exception:
             self._mobile_screen_enabled = True
+        try:  # controlar mouse y teclado desde el celular: apagado salvo que se active en Ajustes
+            self._mobile_control_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_CONTROL) == "1"
+        except Exception:
+            self._mobile_control_enabled = False
+        self._control_card = None
         self._screen_badge: tk.Toplevel | None = None
         self._ensure_mobile_server()
         try:
@@ -271,6 +282,17 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self,
             recorder=self._record_action,
             verificadores=crear_verificadores(self),
+        )
+        self.tool_registry.register(
+            "mobile_remote_control",
+            "Activa o corta el control del mouse y el teclado de la PC desde la app del celular.",
+            {"type": "object", "properties": {"enable": {"type": "boolean"}}, "required": ["enable"]},
+            self._tool_mobile_remote_control,
+            risk=ToolRisk.HIGH,
+            requires_confirmation=True,
+            label="Control remoto desde el celular",
+            timeout_seconds=10,
+            exposed=False,  # solo tras la tarjeta de confirmación; el modelo no la ve
         )
         self.integraciones = cargar_integraciones()
         self.plugins = GestorPlugins()
@@ -2157,6 +2179,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._cancel_current_operation()
                     elif event[0] == "mobile_screen":
                         self._show_screen_badge()
+                    elif event[0] == "mobile_control_request":
+                        self._on_mobile_control_request()
+                    elif event[0] == "mobile_control_changed":
+                        self._refresh_screen_badge()
+                    elif event[0] == "mobile_vision":
+                        self._start_mobile_vision(event[1], event[2], event[3])
                     elif event[0] == "mobile_paired":
                         self.mobile_code.configure(text="✓ Celular vinculado")
                         self._refresh_mobile_settings()
@@ -3260,6 +3288,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 "Vinculados: " + ", ".join(vinculados) if vinculados else "Ningún celular vinculado todavía."
             )
         self.mobile_info.configure(text=texto)
+        control = getattr(self, "mobile_control_button", None)
+        if control is not None:
+            control.configure(text="🖱  CONTROL DESDE EL CELULAR: SÍ" if self._mobile_control_enabled
+                              else "🖱  CONTROL DESDE EL CELULAR: NO",
+                              fg=ERROR if self._mobile_control_enabled else MUTED)
         pantalla = getattr(self, "mobile_screen_button", None)
         if pantalla is not None:
             pantalla.configure(text="▣  VER PANTALLA: SÍ" if self._mobile_screen_enabled else "▣  VER PANTALLA: NO",
@@ -3294,25 +3327,151 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             aviso.overrideredirect(True)
             aviso.attributes("-topmost", True)
             aviso.configure(bg=CYAN)
-            etiqueta = tk.Label(aviso, text="📱  El celular está viendo la pantalla  ·  clic para cortar",
-                                bg=PANEL, fg=CYAN, font=("Segoe UI", 10, "bold"), padx=14, pady=6,
-                                cursor="hand2")
+            etiqueta = tk.Label(aviso, text="", bg=PANEL, fg=CYAN, font=("Segoe UI", 10, "bold"),
+                                padx=14, pady=6, cursor="hand2")
             etiqueta.pack(padx=1, pady=1)
-            etiqueta.bind("<Button-1>", lambda _e: self._toggle_mobile_screen())
+            etiqueta.bind("<Button-1>", lambda _e: self._on_screen_badge_click())
+            self._screen_badge_label = etiqueta
+            self._refresh_screen_badge(aviso)
             aviso.update_idletasks()
             x = (aviso.winfo_screenwidth() - aviso.winfo_reqwidth()) // 2
             aviso.geometry(f"+{max(0, x)}+8")
             self._screen_badge = aviso
             self.root.after(self.SCREEN_BADGE_MS, self._check_screen_badge)
 
+    def _refresh_screen_badge(self, aviso=None) -> None:
+        aviso = aviso or self._screen_badge
+        etiqueta = getattr(self, "_screen_badge_label", None)
+        if aviso is None or etiqueta is None or not etiqueta.winfo_exists():
+            if self.mobile.control_activo():
+                self._show_screen_badge()
+            return
+        if self.mobile.control_activo():
+            etiqueta.configure(text="🖱  El celular está CONTROLANDO la PC  ·  clic para cortar", fg=ERROR)
+            aviso.configure(bg=ERROR)
+        else:
+            etiqueta.configure(text="📱  El celular está viendo la pantalla  ·  clic para cortar", fg=CYAN)
+            aviso.configure(bg=CYAN)
+        aviso.update_idletasks()
+        x = (aviso.winfo_screenwidth() - aviso.winfo_reqwidth()) // 2
+        aviso.geometry(f"+{max(0, x)}+8")
+
+    def _on_screen_badge_click(self) -> None:
+        """Con control activo, el clic corta solo el control; si no, deja de compartir la pantalla."""
+        if self.mobile.control_activo():
+            self.mobile.activar_control(False)
+            self._refresh_screen_badge()
+        else:
+            self._toggle_mobile_screen()
+
     def _check_screen_badge(self) -> None:
         if self._screen_badge is None:
             return
-        if self.mobile.mirando() and self._mobile_screen_enabled:
+        if self.mobile.control_activo() and self.mobile.control_inactivo():
+            logging.info("Control desde el celular cortado: 2 minutos sin usarlo ni mirar la pantalla.")
+            self.mobile.activar_control(False)
+        if (self.mobile.mirando() or self.mobile.control_activo()) and self._mobile_screen_enabled:
             self.root.after(self.SCREEN_BADGE_MS, self._check_screen_badge)
         else:
             logging.info("El celular dejó de ver la pantalla.")
             self._hide_screen_badge()
+
+    # --- Control del mouse y el teclado desde el celular -------------------------------
+
+    def _toggle_mobile_control(self) -> None:
+        self._mobile_control_enabled = not self._mobile_control_enabled
+        try:
+            core.guardar_preferencia(jarvis_mobile.PREFERENCIA_CONTROL, "1" if self._mobile_control_enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar el ajuste del control desde el celular.")
+        if not self._mobile_control_enabled:
+            self.mobile.activar_control(False)
+        self._refresh_mobile_settings()
+
+    def _tool_mobile_remote_control(self, enable: bool) -> str:
+        if enable and not self._mobile_control_enabled:
+            raise ToolError("El control desde el celular está desactivado en Ajustes.")
+        self.mobile.activar_control(bool(enable))
+        return "Control desde el celular activado." if enable else "Control desde el celular cortado."
+
+    def _on_mobile_control_request(self) -> None:
+        """El celular pide el control: tarjeta roja (riesgo alto); en el celular pide huella."""
+        if not self._mobile_control_enabled or self.mobile.control_activo():
+            return
+        if self._control_card is not None and self._control_card.winfo_exists():
+            return
+        estado = {"resuelto": False}
+
+        def responder(permitir: bool) -> None:
+            if estado["resuelto"]:
+                return
+            estado["resuelto"] = True
+            if tarjeta.winfo_exists():
+                tarjeta.jarvis_resolver(permitir, "✓  CONTROL PERMITIDO" if permitir else "✕  NO PERMITIDO")
+            self._control_card = None
+            if not permitir:
+                self.mobile.registro.publicar("notice", text="No se permitió controlar la PC.")
+                return
+
+            def activar() -> None:
+                try:
+                    self.tool_registry.execute("mobile_remote_control", {"enable": True}, confirmed=True,
+                                               origin="celular")
+                except Exception as error:
+                    logging.warning("No se pudo activar el control desde el celular: %s", error)
+                    self.mobile.registro.publicar("notice", text=f"No pude activar el control: {error}")
+
+            threading.Thread(target=activar, name="JarvisControlMovil", daemon=True).start()
+
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo="¿EL CELULAR PUEDE CONTROLAR LA PC?", color=ERROR, aprobar="PERMITIR", rechazar="NO",
+            voz=False, resumen="¿Permito que el celular controle el mouse y el teclado de la PC?",
+            pista="ENTER permite · ESC rechaza.",
+            al_aprobar=lambda: responder(True), al_rechazar=lambda: responder(False),
+        )
+        self._control_card = tarjeta
+        tk.Label(cuerpo, text="Podrá mover el mouse, hacer clic y escribir. Se corta al cerrar la vista de "
+                 "pantalla del celular, con un clic en el aviso de arriba o tras 2 minutos sin usarlo.",
+                 bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10), wraplength=680, justify="left").pack(anchor="w")
+
+    # --- «¿Qué es esto?» desde el celular ------------------------------------------------
+
+    def _start_mobile_vision(self, numero: int, zona: tuple, pregunta: str) -> None:
+        """La zona marcada en el celular hace de vista previa: se captura y se analiza."""
+        if self.busy or self._pending_plan_reply is not None:
+            self.mobile.registro.publicar("notice", text="Estoy ocupado; espera a que termine.")
+            return
+        self._add_message("user", f"🔍 {pregunta} (zona marcada en el celular)")
+        self._start_busy("ANALIZANDO LA ZONA…")
+        datos = {"numero": numero, "zona": zona, "pregunta": pregunta, "cancel_token": self.cancel_token,
+                 "conversation_id": self.conversation_id, "command": f"{pregunta} (zona de la pantalla)"}
+        threading.Thread(target=self._mobile_vision_worker, args=(datos,), name="JarvisVisionMovil",
+                         daemon=True).start()
+
+    def _mobile_vision_worker(self, datos: dict) -> None:
+        inicio = time.perf_counter()
+        monitor = None
+        try:
+            imagen = jarvis_vision.capturar_zona(datos["numero"], datos["zona"])
+            monitor = jarvis_vision.Monitor(datos["numero"], 0, 0, imagen.width, imagen.height, False)
+            jpeg = jarvis_vision.preparar_imagen(imagen)
+            del imagen
+            answer = jarvis_vision.analizar_imagen(jpeg, datos["pregunta"], datos["cancel_token"])
+        except OperacionCancelada:
+            self._record_vision_action(EstadoAccion.CANCELADA, inicio, monitor, "Cancelado por el usuario.")
+            self.events.put(("cancelled", "Cancelé el análisis de la zona."))
+            return
+        except Exception as error:
+            logging.exception("Falló el análisis de la zona marcada en el celular.")
+            self._record_vision_action(EstadoAccion.ERROR, inicio, monitor, str(error))
+            self.events.put(("error", f"No pude analizar la zona: {error}"))
+            return
+        self._record_vision_action(EstadoAccion.EXITO, inicio, monitor)
+        try:
+            core.guardar_turno(datos["conversation_id"], datos["command"], answer)
+        except Exception:
+            logging.exception("No se pudo guardar el análisis de la zona en el historial.")
+        self.events.put(("answer", answer, None, time.perf_counter() - inicio))
 
     def _hide_screen_badge(self) -> None:
         aviso, self._screen_badge = self._screen_badge, None
@@ -4041,7 +4200,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 origen="directo",
                 estado=estado,
                 duracion=time.perf_counter() - inicio,
-                argumentos={"monitor": monitor.numero},
+                argumentos={"monitor": getattr(monitor, "numero", None)},
                 error=error,
             )
         )

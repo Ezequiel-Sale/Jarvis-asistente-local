@@ -148,6 +148,73 @@ def pantallas_para_movil() -> list[dict]:
             for m in monitores]
 
 
+def _cursor_fisico() -> tuple[int, int] | None:
+    """Posición del puntero en píxeles físicos, o None si está oculto (p. ej. en un juego)."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class CURSORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD),
+                    ("hCursor", wintypes.HANDLE), ("ptScreenPos", wintypes.POINT)]
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    anterior = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor v2
+    try:
+        info = CURSORINFO()
+        info.cbSize = ctypes.sizeof(CURSORINFO)
+        if not user32.GetCursorInfo(ctypes.byref(info)) or not info.flags & 1:  # CURSOR_SHOWING
+            return None
+        return info.ptScreenPos.x, info.ptScreenPos.y
+    finally:
+        if anterior:
+            user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(anterior))
+
+
+def posicion_relativa(punto: tuple[int, int] | None, monitores: list[Monitor],
+                      numero: int) -> tuple[float, float] | None:
+    """Punto como fracción (0–1) del monitor ``numero`` (0 = todos juntos), o None si cae fuera."""
+    if punto is None or not monitores:
+        return None
+    if numero == 0:
+        x0, y0 = min(m.x for m in monitores), min(m.y for m in monitores)
+        ancho = max(m.x + m.ancho for m in monitores) - x0
+        alto = max(m.y + m.alto for m in monitores) - y0
+    else:
+        m = elegir_monitor(monitores, numero)
+        x0, y0, ancho, alto = m.x, m.y, m.ancho, m.alto
+    fx, fy = (punto[0] - x0) / ancho, (punto[1] - y0) / alto
+    if not (0 <= fx < 1 and 0 <= fy < 1):
+        return None
+    return round(fx, 4), round(fy, 4)
+
+
+def capturar_zona(numero: int, zona: tuple[float, float, float, float]):
+    """Imagen PIL de una zona (fracciones x, y, ancho, alto) del monitor, a resolución completa."""
+    monitores = listar_monitores()
+    if numero == 0:
+        x0, y0 = min(m.x for m in monitores), min(m.y for m in monitores)
+        ancho = max(m.x + m.ancho for m in monitores) - x0
+        alto = max(m.y + m.alto for m in monitores) - y0
+    else:
+        m = elegir_monitor(monitores, numero)
+        x0, y0, ancho, alto = m.x, m.y, m.ancho, m.alto
+    fx, fy, fw, fh = zona
+    x, y = x0 + round(fx * ancho), y0 + round(fy * alto)
+    return _captura_rapida(x, y, max(8, round(fw * ancho)), max(8, round(fh * alto)))
+
+
+def cursor_para_movil(numero: int) -> tuple[float, float] | None:
+    """Puntero sobre el monitor que mira el celular (fracción 0–1) o None."""
+    try:
+        return posicion_relativa(_cursor_fisico(), listar_monitores(), numero)
+    except (OSError, ValueError):
+        return None
+
+
 def _captura_rapida(x: int, y: int, ancho: int, alto: int):
     """Captura con mss (sin CAPTUREBLT: ~35 ms frente a ~55 ms de ImageGrab en 2560×1440).
 

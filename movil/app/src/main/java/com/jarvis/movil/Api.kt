@@ -78,6 +78,13 @@ class Api(private val base: String, private val token: String?) {
 
     fun getBytes(path: String): ByteArray = read(open(path, "GET", 20000))
 
+    /** Cuadro JPEG de /api/screen y la cabecera X-Cursor ("x,y" o "none"). */
+    fun getFrame(path: String): Pair<ByteArray, String?> {
+        val connection = open(path, "GET", 20000)
+        val bytes = read(connection)
+        return bytes to connection.getHeaderField("X-Cursor")
+    }
+
     /** Flujo continuo (vídeo): conexión abierta y ya comprobada; quien la usa la cierra. */
     fun openStream(path: String): HttpURLConnection {
         val connection = open(path, "GET", 5000)

@@ -27,13 +27,24 @@ class Zoomer(private val view: View, private val apply: (Matrix) -> Unit) {
     var contentHeight = 0
         private set
 
+    /** Avisa cada vez que cambia el zoom o el contenido (la capa del puntero se redibuja). */
+    var onChange: (() -> Unit)? = null
+
     private val transform = Matrix()
     private val values = FloatArray(9)
+
+    private fun changed() {
+        apply(transform)
+        onChange?.invoke()
+    }
+
+    /** Matriz contenido → vista (copia). */
+    fun matrixCopy(): Matrix = Matrix(transform)
 
     /** Nuevo tamaño de contenido: si cambió, se vuelve a encajar. */
     fun setContentSize(width: Int, height: Int) {
         if (width == contentWidth && height == contentHeight) {
-            apply(transform)
+            changed()
             return
         }
         contentWidth = width
@@ -56,7 +67,7 @@ class Zoomer(private val view: View, private val apply: (Matrix) -> Unit) {
         transform.reset()
         transform.postScale(scale, scale)
         transform.postTranslate((view.width - contentWidth * scale) / 2f, (view.height - contentHeight * scale) / 2f)
-        apply(transform)
+        changed()
     }
 
     /** Evita que el contenido se salga: centrado si cabe, bordes pegados si no. */
@@ -78,7 +89,7 @@ class Zoomer(private val view: View, private val apply: (Matrix) -> Unit) {
             else -> 0f
         }
         transform.postTranslate(dx, dy)
-        apply(transform)
+        changed()
     }
 
     private fun zoomBy(factor: Float, x: Float, y: Float) {

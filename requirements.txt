@@ -6,6 +6,7 @@ mss==10.1.0
 av==19.0.2
 dxcam==0.3.0
 PyAudio==0.2.14
+PyAudioWPatch==0.2.12.9
 prometheus-client==0.26.0
 pystray==0.19.5
 requests==2.34.2

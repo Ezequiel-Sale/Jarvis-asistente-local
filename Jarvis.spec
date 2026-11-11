@@ -14,7 +14,7 @@ a = Analysis(
            ('vendor/PresentMon', 'vendor/PresentMon')]
     + collect_data_files('openwakeword') + collect_data_files('pythonnet')
     + collect_data_files('clr_loader'),
-    hiddenimports=['mss.windows', 'av', 'dxcam', 'pystray._win32', 'pystray._util.win32',
+    hiddenimports=['mss.windows', 'av', 'dxcam', 'pyaudiowpatch', 'pystray._win32', 'pystray._util.win32',
                    'winrt.windows.media.control', 'winrt.windows.storage.streams', 'winrt.windows.foundation',
                    # Interfaces COM de UI Automation ya generadas (clic en pantalla).
                    'uiautomation', *collect_submodules('comtypes.gen'),

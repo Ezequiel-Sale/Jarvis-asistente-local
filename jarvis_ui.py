@@ -756,6 +756,10 @@ class JarvisUIMixin:
                                                         fg=MUTED)
             self.mobile_screen_button.configure(width=30)
             self.mobile_screen_button.pack(anchor="e", pady=(6, 0))
+            self.mobile_control_button = self._ui_button(botones, "🖱  CONTROL DESDE EL CELULAR …",
+                                                         self._toggle_mobile_control, fg=MUTED)
+            self.mobile_control_button.configure(width=30)
+            self.mobile_control_button.pack(anchor="e", pady=(6, 0))
             self.mobile_info = tk.Label(marco, text="", bg=PANEL, fg=MUTED, justify="left", anchor="w",
                                         font=("Consolas", 9))
             self.mobile_info.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))

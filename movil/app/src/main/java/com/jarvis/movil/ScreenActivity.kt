@@ -42,6 +42,10 @@ import kotlin.concurrent.thread
  * (vídeo H.264 de /api/video, decodificado por hardware), FLUIDO (imágenes, el
  * siguiente cuadro apenas llega el anterior), HD (~4 por segundo) o AHORRO (~2).
  * «TODOS» y los celulares o PCs donde el vídeo falla usan FLUIDO.
+ *
+ * Arriba: 🔍 «¿Qué es esto?» (marcar una zona y preguntar), 🖱 touchpad (pide el
+ * control a la PC: riesgo alto, se aprueba con huella) y 🔊 audio de la PC (solo con
+ * vídeo). El puntero de la PC se dibuja encima (OverlayView).
  */
 class ScreenActivity : Activity() {
 
@@ -63,6 +67,16 @@ class ScreenActivity : Activity() {
     private lateinit var reply: TextView
     private lateinit var input: EditText
     private lateinit var mic: Button
+    private lateinit var overlay: OverlayView
+    private lateinit var selectChip: TextView
+    private lateinit var padChip: TextView
+    private lateinit var audioChip: TextView
+    private lateinit var keys: LinearLayout
+    private var sender: TouchpadSender? = null
+    private var touchpadOn = false
+
+    @Volatile
+    private var audioOn = false
 
     private val ui = Handler(Looper.getMainLooper())
     private var recorder: Recorder? = null
@@ -131,6 +145,11 @@ class ScreenActivity : Activity() {
         image = ZoomImageView(this)
         image.zoom.onTap = { toggleBars() }
         root.addView(image, FrameLayout.LayoutParams(-1, -1))
+        overlay = OverlayView(this).apply { zoom = image.zoom }
+        image.zoom.onChange = { overlay.invalidate() }
+        video.zoom.onChange = { overlay.invalidate() }
+        overlay.onSelected = { x, y, w, h -> askAboutZone(x, y, w, h) }
+        root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
 
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -144,6 +163,14 @@ class ScreenActivity : Activity() {
             isHorizontalScrollBarEnabled = false
             addView(monitors)
         }, LinearLayout.LayoutParams(0, -2, 1f))
+        selectChip = chip("🔍", R.color.text) { toggleSelect() }
+        topBar.addView(selectChip)
+        padChip = chip("🖱", R.color.text) { toggleTouchpad() }
+        topBar.addView(padChip)
+        audioOn = prefs.getBoolean("pantalla_audio", false)
+        audioChip = chip("", R.color.text) { toggleAudio() }
+        topBar.addView(audioChip)
+        refreshAudioChip()
         quality = chip("", R.color.violet) { toggleQuality() }
         topBar.addView(quality)
         root.addView(topBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
@@ -171,6 +198,19 @@ class ScreenActivity : Activity() {
             setOnClickListener { maxLines = if (maxLines == 4) 30 else 4 }
         }
         bottom.addView(reply)
+        keys = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+            setPadding(0, 0, 0, dp(6))
+        }
+        for ((label, action) in listOf("⌨" to "type", "⏎" to "enter", "⌫" to "backspace", "Esc" to "esc",
+            "Tab" to "tab", "Alt+Tab" to "alttab", "⊞" to "win")) {
+            keys.addView(chip(label, R.color.cyan) {
+                if (action == "type") typeOnPc() else sender?.key(action)
+            }.apply { setBackgroundColor(getColor(R.color.panel_light)) },
+                LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(3) })
+        }
+        bottom.addView(keys)
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -224,6 +264,121 @@ class ScreenActivity : Activity() {
         topBar.visibility = state
         bottom.visibility = state
         info.visibility = state
+    }
+
+    // --- Puntero, «¿Qué es esto?», touchpad y audio -------------------------------------
+
+    private fun parseCursor(header: String?): Pair<Float, Float>? {
+        val parts = header?.split(",") ?: return null
+        if (parts.size != 2) return null
+        val x = parts[0].toFloatOrNull() ?: return null
+        val y = parts[1].toFloatOrNull() ?: return null
+        return x to y
+    }
+
+    private fun toggleSelect() {
+        if (overlay.mode == OverlayView.Mode.SELECT) {
+            overlay.mode = if (touchpadOn) OverlayView.Mode.TOUCHPAD else OverlayView.Mode.NONE
+            selectChip.setBackgroundColor(Color.TRANSPARENT)
+            return
+        }
+        overlay.mode = OverlayView.Mode.SELECT
+        selectChip.setBackgroundColor(getColor(R.color.cyan_dark))
+        showReply("Marca con el dedo la zona sobre la que quieres preguntar.")
+    }
+
+    private fun askAboutZone(x: Float, y: Float, w: Float, h: Float) {
+        val field = EditText(this).apply {
+            setText("¿Qué es esto?")
+            selectAll()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Preguntar sobre la zona")
+            .setView(field)
+            .setPositiveButton("Preguntar") { _, _ ->
+                val client = api() ?: return@setPositiveButton
+                val body = JSONObject().put("n", monitor).put("x", x).put("y", y).put("w", w).put("h", h)
+                    .put("question", field.text.toString())
+                showReply("Analizando la zona… (puede tardar un poco)")
+                thread {
+                    try {
+                        client.postJson("/api/vision", body)
+                    } catch (e: Exception) {
+                        ui.post { toast(e.message ?: "No pude enviar la zona.") }
+                    }
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .setOnDismissListener { if (overlay.mode == OverlayView.Mode.SELECT) toggleSelect() }
+            .show()
+    }
+
+    /** Pide el control a la PC; se activa cuando llega el evento «control» (tras aprobarlo). */
+    private fun toggleTouchpad() {
+        val client = api() ?: return
+        val on = !touchpadOn
+        if (!on) setTouchpad(false)
+        thread {
+            try {
+                val reply = client.postJson("/api/control", JSONObject().put("on", on))
+                ui.post {
+                    when {
+                        reply.optBoolean("active") -> setTouchpad(true)
+                        reply.optBoolean("pending") ->
+                            showReply("Esperando que apruebes el control (en la PC o aquí con tu huella)…")
+                    }
+                }
+            } catch (e: Exception) {
+                ui.post { toast(e.message ?: "No pude pedir el control.") }
+            }
+        }
+    }
+
+    private fun setTouchpad(on: Boolean) {
+        if (on == touchpadOn) return
+        touchpadOn = on
+        if (on) {
+            val client = api() ?: return
+            sender = TouchpadSender(client) { message ->
+                ui.post { if (touchpadOn) info.text = message }
+            }
+            overlay.touchpad = sender  // sin esto los gestos no llegaban a ningún lado
+            overlay.mode = OverlayView.Mode.TOUCHPAD
+            showReply("Touchpad activo: un dedo mueve, toque = clic, dos dedos = clic derecho o desplazar, " +
+                "mantener = arrastrar.")
+        } else {
+            sender?.stop()
+            sender = null
+            overlay.touchpad = null
+            if (overlay.mode == OverlayView.Mode.TOUCHPAD) overlay.mode = OverlayView.Mode.NONE
+        }
+        padChip.setBackgroundColor(if (on) getColor(R.color.error) else Color.TRANSPARENT)
+        keys.visibility = if (on) View.VISIBLE else View.GONE
+    }
+
+    private fun typeOnPc() {
+        val field = EditText(this).apply { hint = "Texto para escribir en la PC" }
+        AlertDialog.Builder(this)
+            .setTitle("Escribir en la PC")
+            .setView(field)
+            .setPositiveButton("Escribir") { _, _ -> sender?.text(field.text.toString()) }
+            .setNeutralButton("Escribir y ⏎") { _, _ ->
+                sender?.text(field.text.toString())
+                sender?.key("enter")
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun toggleAudio() {
+        audioOn = !audioOn
+        prefs.edit().putBoolean("pantalla_audio", audioOn).apply()
+        refreshAudioChip()
+        if (audioOn && effective().fps == 0) toast("El audio de la PC llega solo en los modos de vídeo (60 o 30 FPS).")
+    }
+
+    private fun refreshAudioChip() {
+        audioChip.text = if (audioOn) "🔊" else "🔇"
     }
 
     private fun toggleQuality() {
@@ -308,6 +463,16 @@ class ScreenActivity : Activity() {
     override fun onStop() {
         super.onStop()
         Lock.onStop()
+        if (touchpadOn) {  // al salir de la vista, la PC deja de estar controlada
+            val client = api()
+            setTouchpad(false)
+            thread {
+                try {
+                    client?.postJson("/api/control", JSONObject().put("on", false))
+                } catch (e: Exception) {
+                }
+            }
+        }
         generation++
         recorder?.stop()
         recorder = null
@@ -390,18 +555,23 @@ class ScreenActivity : Activity() {
                 playVideo(client, mine, quality)
                 continue
             }
-            if (image.visibility != View.VISIBLE) ui.post { image.visibility = View.VISIBLE }
+            if (image.visibility != View.VISIBLE) ui.post {
+                image.visibility = View.VISIBLE
+                overlay.zoom = image.zoom
+            }
             val wide = if (monitor == 0) 1.6 else 1.0
             val width = (quality.width * wide).toInt()
             val seq = requested.incrementAndGet()
             try {
-                val bytes = client.getBytes("/api/screen?n=$monitor&w=$width&q=${quality.jpeg}")
+                val (bytes, cursorHeader) = client.getFrame("/api/screen?n=$monitor&w=$width&q=${quality.jpeg}")
+                val pointer = parseCursor(cursorHeader)
                 val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 val text = countFrame(bytes.size)
                 ui.post {
                     if (mine == generation && bitmap != null && seq > lastShown) {
                         lastShown = seq
                         image.setFrame(bitmap)
+                        overlay.cursor = pointer
                     }
                     if (mine == generation && text != null) info.text = text
                 }
@@ -429,19 +599,28 @@ class ScreenActivity : Activity() {
             return
         }
         val wantedMonitor = monitor
-        ui.post { if (mine == generation) image.visibility = View.GONE }
+        val wantedAudio = audioOn
+        ui.post {
+            if (mine == generation) {
+                image.visibility = View.GONE
+                overlay.zoom = video.zoom
+            }
+        }
         val player = VideoPlayer(
             client, surface,
-            running = { mine == generation && monitor == wantedMonitor && effective() === quality && videoSurface === surface },
+            running = { mine == generation && monitor == wantedMonitor && effective() === quality &&
+                videoSurface === surface && audioOn == wantedAudio },
             onSize = { w, h -> ui.post { video.zoom.setContentSize(w, h) } },
             onFrame = { bytes ->
                 val text = countFrame(bytes)
                 if (text != null) ui.post { if (mine == generation) info.text = text }
             },
+            onCursor = { pointer -> ui.post { overlay.cursor = pointer } },
         )
         val kbps = if (quality.fps >= 60) 10000 else 8000
         try {
-            player.play("/api/video?n=$wantedMonitor&fps=${quality.fps}&w=${quality.width}&kbps=$kbps",
+            val sound = if (wantedAudio) "&audio=1" else ""
+            player.play("/api/video?n=$wantedMonitor&fps=${quality.fps}&w=${quality.width}&kbps=$kbps$sound",
                 quality.width, quality.width * 9 / 16)
         } catch (e: ApiException) {
             when (e.code) {
@@ -488,6 +667,7 @@ class ScreenActivity : Activity() {
                         when (event.optString("type")) {
                             "live", "assistant", "notice" -> if (text.isNotEmpty()) showReply(text)
                             "question" -> if (event.optString("qid") == pending) ask(event)
+                            "control" -> setTouchpad(event.optBoolean("active"))
                             "resolved" -> if (event.optString("qid") == questionId) {
                                 question?.dismiss()
                                 question = null

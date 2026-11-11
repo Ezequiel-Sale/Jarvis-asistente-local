@@ -41,8 +41,18 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
 - ``GET  /api/app/apk`` → el APK, para que la app se actualice sola.
 - ``GET  /api/video?n=1&fps=60&w=1920&kbps=8000`` → vídeo H.264 en vivo de un
   monitor, como flujo continuo de paquetes: 4 bytes de largo (big endian), 1 byte
-  de banderas (1 = cuadro clave) y el paquete (Annex B). Uno a la vez: abrir otro
-  corta el anterior. Mismo permiso y mismo aviso que /api/screen.
+  de banderas y el contenido. Banderas: 1 = cuadro clave H.264 (Annex B); 2 = puntero
+  (">ff" con x, y en fracción del monitor, o vacío si no se ve); 8 = formato del
+  audio (frecuencia >I y canales >H) y 4 = audio PCM s16le, si se pidió ``audio=1``.
+  Uno a la vez: abrir otro corta el anterior. Mismo permiso y aviso que /api/screen.
+  /api/screen manda el puntero en la cabecera ``X-Cursor`` ("x,y" o "none").
+- ``GET/POST /api/control`` {on} → pedir o cortar el control del mouse y el teclado:
+  hace falta el ajuste de la PC y aprobar (en la PC o con huella en el celular) la
+  herramienta de riesgo alto ``mobile_remote_control``.
+- ``POST /api/input`` {events} → movimientos, clics, rueda y teclas (jarvis_input),
+  solo con el control activo.
+- ``POST /api/vision`` {n, x, y, w, h, question} → «¿Qué es esto?» sobre una zona del
+  monitor (fracciones 0–1); la respuesta llega como un mensaje más.
 """
 
 import hashlib
@@ -51,6 +61,7 @@ import ipaddress
 import json
 import logging
 import os
+import queue
 from pathlib import Path
 import secrets
 import socket
@@ -72,6 +83,7 @@ MAX_TEXTO = 2000
 MAX_AUDIO = 6 * 1024 * 1024  # ~3 min a 16 kHz mono
 MAX_ESPERA = 25
 PREFERENCIA_PANTALLA = "movil_pantalla"
+PREFERENCIA_CONTROL = "movil_control"  # "1": se puede pedir el control (desactivado por defecto)
 MIRANDO_SEGUNDOS = 4.0  # sin capturas en este tiempo = el celular dejó de mirar
 ANCHO_PANTALLA = (480, 2560, 1280)  # mínimo, máximo y por defecto
 CALIDAD_PANTALLA = (25, 85, 60)
@@ -240,6 +252,10 @@ class ServidorMovil:
         pantalla_permitida: Callable[[], bool] = lambda: True,
         video: Callable[..., object] | None = None,
         carpeta_app: Path | None = None,
+        cursor: Callable[[int], tuple[float, float] | None] | None = None,
+        audio: Callable[[threading.Event], object] | None = None,
+        entrada: Callable[[list], int] | None = None,
+        control_permitido: Callable[[], bool] = lambda: False,
         tts: Callable[[str], bytes] | None = None,
         musica: Callable[[], dict] | None = None,
         portada: Callable[[], bytes | None] | None = None,
@@ -264,6 +280,13 @@ class ServidorMovil:
         self._ultima_captura: float | None = None
         self.video = video  # (monitor, fps, ancho, kbps, detener) → paquetes (bytes, clave)
         self._video_detener: threading.Event | None = None
+        self._video_cerrado: threading.Event | None = None  # el anterior ya soltó la captura
+        self.cursor = cursor  # monitor → (x, y) en fracción, o None
+        self.audio = audio  # detener → bloques PCM (el primero, el formato)
+        self.entrada = entrada  # eventos del touchpad → SendInput
+        self.control_permitido = control_permitido
+        self._control = False
+        self._ultimo_control = 0.0
         self.carpeta_app = carpeta_app  # donde están Jarvis.apk y Jarvis.apk.json
         self._app_cache: tuple[tuple, dict] | None = None
         self.tts = tts  # texto → WAV de Piper (corre en el hilo HTTP)
@@ -351,6 +374,26 @@ class ServidorMovil:
             self._app_cache = (firma, info)
         return self._app_cache[1], apk
 
+    # --- Control del mouse y el teclado -----------------------------------------------
+
+    def control_activo(self) -> bool:
+        return self._control and bool(self.control_permitido())
+
+    def activar_control(self, activo: bool) -> None:
+        """Lo llama la herramienta ``mobile_remote_control`` (o el corte desde la PC)."""
+        if activo == self._control:
+            return
+        self._control = activo
+        self._ultimo_control = time.monotonic()
+        logging.info("Control de la PC desde el celular %s.", "activado" if activo else "cortado")
+        self.registro.publicar("control", active=activo)
+        self.eventos_app.put(("mobile_control_changed",))
+
+    def control_inactivo(self, ahora: float | None = None, limite: float = 120.0) -> bool:
+        """Sin usar el touchpad ni mirar la pantalla en ``limite`` s: se corta solo."""
+        ahora = time.monotonic() if ahora is None else ahora
+        return ahora - self._ultimo_control > limite and not self.mirando(ahora)
+
     def mirando(self, ahora: float | None = None) -> bool:
         """Si algún celular está viendo la pantalla ahora mismo."""
         if self._ultima_captura is None:
@@ -397,7 +440,9 @@ class ServidorMovil:
         finally:
             self._captura_lock.release()
         self._marcar_mirando()
-        return 200, "image/jpeg", imagen
+        posicion = self.cursor(monitor) if self.cursor else None
+        cabecera = "none" if posicion is None else f"{posicion[0]},{posicion[1]}"
+        return 200, "image/jpeg", imagen, {"X-Cursor": cabecera}
 
     def _video(self, consulta: dict):
         """Prepara el flujo de vídeo; devuelve la función que lo escribe en la conexión."""
@@ -409,30 +454,58 @@ class ServidorMovil:
             raise _Error(400, "Parámetros no válidos.") from error
         if monitor < 1:
             raise _Error(400, "El vídeo es de un monitor a la vez.")
+        con_audio = consulta.get("audio", ["0"])[0] == "1" and self.audio is not None
         fps = self._numero(consulta, "fps", (15, 60, 30))
         ancho = self._numero(consulta, "w", ANCHO_VIDEO)
         kbps = self._numero(consulta, "kbps", KBPS_VIDEO)
         detener = threading.Event()
+        cerrado = threading.Event()
         anterior, self._video_detener = self._video_detener, detener
+        anterior_cerrado, self._video_cerrado = self._video_cerrado, cerrado
         if anterior is not None:
             anterior.set()  # un solo vídeo a la vez
+        # dxcam comparte la captura de cada monitor: si el anterior la suelta después de
+        # que el nuevo la tomó, el nuevo se queda congelado. Se espera a que la suelte.
+        if anterior_cerrado is not None and not anterior_cerrado.wait(3):
+            logging.warning("El vídeo anterior del celular tardó en cerrarse.")
         try:
             paquetes = iter(self.video(monitor, fps, ancho, kbps, detener))
             primero = next(paquetes)  # los errores de arranque salen como respuesta HTTP
         except ValueError as error:
+            cerrado.set()
             raise _Error(404, str(error)) from error
         except StopIteration as error:
+            cerrado.set()
             raise _Error(503, "El vídeo terminó antes de empezar.") from error
         except OSError as error:
+            cerrado.set()
             raise _Error(501, f"No pude iniciar el vídeo: {error}") from error
+        except BaseException:
+            cerrado.set()
+            raise
 
         def escribir(salida) -> None:
             enviados = 0
+            sonido: queue.Queue[bytes] = queue.Queue(maxsize=100)
+            if con_audio:
+                threading.Thread(target=self._leer_audio, args=(detener, sonido), name="JarvisAudioMovil",
+                                 daemon=True).start()
+            ultimo_cursor: object = ()
             try:
                 for datos, clave in _encadenar(primero, paquetes):
                     if detener.is_set() or not self.pantalla_permitida() or not self.activo():
                         break
                     salida.write(struct.pack(">IB", len(datos), 1 if clave else 0) + datos)
+                    if self.cursor is not None:
+                        posicion = self.cursor(monitor)
+                        if posicion != ultimo_cursor:  # solo si se movió
+                            ultimo_cursor = posicion
+                            carga = b"" if posicion is None else struct.pack(">ff", *posicion)
+                            salida.write(struct.pack(">IB", len(carga), 2) + carga)
+                    while not sonido.empty():
+                        bloque = sonido.get_nowait()
+                        banderas = 8 if len(bloque) == 6 and bloque[:1] == b"\x00" else 4
+                        salida.write(struct.pack(">IB", len(bloque), banderas) + bloque)
                     enviados += 1
                     if enviados % 15 == 1:
                         self._marcar_mirando()
@@ -441,12 +514,24 @@ class ServidorMovil:
             finally:
                 detener.set()
                 cerrar = getattr(paquetes, "close", None)
-                if cerrar is not None:
-                    cerrar()
+                try:
+                    if cerrar is not None:
+                        cerrar()  # suelta la captura de dxcam
+                finally:
+                    cerrado.set()
                 logging.info("Vídeo al celular terminado (%s cuadros).", enviados)
 
         return escribir
 
+    def _leer_audio(self, detener: threading.Event, cola: queue.Queue) -> None:
+        try:
+            for bloque in self.audio(detener):
+                try:
+                    cola.put_nowait(bloque)
+                except queue.Full:
+                    pass  # el video va atrasado: se salta un trozo de audio
+        except Exception as error:
+            logging.warning("No se pudo capturar el audio para el celular: %s", error)
     # --- HTTP ----------------------------------------------------------------------
 
     def activo(self) -> bool:
@@ -538,6 +623,48 @@ class ServidorMovil:
             return self._json({"allowed": permitido, "screens": lista})
         if metodo == "GET" and ruta == "/api/screen":
             return self._pantalla(consulta)
+        if ruta == "/api/control" and metodo in ("GET", "POST"):
+            if metodo == "POST":
+                quiere = bool(self._cuerpo_json(cuerpo).get("on"))
+                if not quiere:
+                    self.activar_control(False)
+                elif not self.control_permitido():
+                    raise _Error(403, "El control desde el celular está desactivado en los Ajustes de Jarvis.")
+                elif not self.control_activo():
+                    if self.ocupado() and self._pendiente is not None:
+                        raise _Error(409, "Jarvis está esperando otra confirmación.")
+                    self.eventos_app.put(("mobile_control_request",))
+                    return self._json({"allowed": True, "active": False, "pending": True})
+            return self._json({"allowed": bool(self.control_permitido()), "active": self.control_activo()})
+        if metodo == "POST" and ruta == "/api/input":
+            if not self.control_activo() or self.entrada is None:
+                raise _Error(403, "El control de la PC no está activado.")
+            try:
+                enviadas = self.entrada(self._cuerpo_json(cuerpo).get("events"))
+            except ValueError as error:
+                raise _Error(400, str(error)) from error
+            except OSError as error:
+                raise _Error(409, str(error)) from error
+            self._ultimo_control = time.monotonic()
+            return self._json({"ok": True, "inputs": enviadas})
+        if metodo == "POST" and ruta == "/api/vision":
+            if not self.pantalla_permitida():
+                raise _Error(403, "Ver la pantalla está desactivado en los Ajustes de Jarvis.")
+            datos = self._cuerpo_json(cuerpo)
+            try:
+                monitor = int(datos.get("n", 1))
+                zona = tuple(float(datos[clave]) for clave in ("x", "y", "w", "h"))
+            except (KeyError, TypeError, ValueError) as error:
+                raise _Error(400, "Zona no válida.") from error
+            x, y, w, h = zona
+            if monitor < 0 or not (0 <= x < 1 and 0 <= y < 1 and 0.005 <= w <= 1 and 0.005 <= h <= 1):
+                raise _Error(400, "Zona no válida.")
+            pregunta = " ".join(str(datos.get("question", "")).split())[:MAX_TEXTO] or "¿Qué es esto?"
+            if self.ocupado():
+                raise _Error(409, "Jarvis está ocupado; espera a que termine.")
+            logging.info("«¿Qué es esto?» desde el celular sobre el monitor %s.", monitor)
+            self.eventos_app.put(("mobile_vision", monitor, (x, y, min(w, 1 - x), min(h, 1 - y)), pregunta))
+            return self._json({"ok": True})
         if metodo == "GET" and ruta == "/api/media":
             if self.musica is None:
                 raise _Error(501, "El control multimedia no está disponible.")
@@ -641,10 +768,13 @@ class _Manejador(BaseHTTPRequestHandler):
             largo = -1
         if largo < 0 or largo > MAX_AUDIO:
             estado, tipo, cuerpo = 413, "application/json", b'{"error": "Demasiado grande."}'
+            extra = {}
             self.close_connection = True
         else:
             datos = self.rfile.read(largo) if largo else b""
-            estado, tipo, cuerpo = movil.manejar(metodo, self.path, self.headers, datos, self.client_address[0])
+            respuesta = movil.manejar(metodo, self.path, self.headers, datos, self.client_address[0])
+            estado, tipo, cuerpo = respuesta[:3]
+            extra = respuesta[3] if len(respuesta) > 3 else {}
         if callable(cuerpo):  # flujo continuo (vídeo): sin largo, hasta cerrar
             self.close_connection = True
             self.send_response(estado)
@@ -659,6 +789,8 @@ class _Manejador(BaseHTTPRequestHandler):
             cuerpo(self.wfile)
             return
         self.send_response(estado)
+        for nombre, valor in extra.items():
+            self.send_header(nombre, valor)
         self.send_header("Content-Type", tipo + ("; charset=utf-8" if tipo == "application/json" else ""))
         self.send_header("Content-Length", str(len(cuerpo)))
         self.send_header("Cache-Control", "no-store")
