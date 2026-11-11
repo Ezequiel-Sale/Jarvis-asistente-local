@@ -85,6 +85,103 @@ class ScreenTests(unittest.TestCase):
         self.assertFalse(self.servidor.mirando())
 
 
+class VideoTests(unittest.TestCase):
+    """/api/video: flujo con marco de 5 bytes, errores de arranque y un vídeo a la vez."""
+
+    def setUp(self) -> None:
+        self.permitido = True
+        self.pedidos: list[tuple] = []
+
+        def video(monitor, fps, ancho, kbps, detener):
+            self.pedidos.append((monitor, fps, ancho, kbps))
+            self.detener = detener
+            if monitor == 9:
+                raise ValueError("No existe el monitor 9.")
+            if monitor == 8:
+                raise OSError("No hay codificador H.264 disponible.")
+            yield b"\x00\x00\x00\x01clave", True
+            yield b"\x00\x00\x00\x01p", False
+
+        self.eventos: queue.Queue = queue.Queue()
+        guardado: dict[str, str] = {}
+        self.servidor = m.ServidorMovil(self.eventos, m.Vinculacion(guardado.get, guardado.__setitem__),
+                                        video=video, pantalla_permitida=lambda: self.permitido)
+        self.servidor._http = object()  # como si escuchara
+        self.token = _vincular(self.servidor)
+
+    def _abrir(self, consulta):
+        cabeceras = {"Authorization": f"Bearer {self.token}"}
+        return self.servidor.manejar("GET", "/api/video" + consulta, cabeceras, b"", TS)
+
+    def test_stream_is_framed_and_marks_watching(self) -> None:
+        import io
+        import struct
+
+        estado, _tipo, escribir = self._abrir("?n=1&fps=999&w=10&kbps=1")
+        self.assertEqual(estado, 200)
+        self.assertEqual(self.pedidos, [(1, 60, 640, 1000)])
+        salida = io.BytesIO()
+        escribir(salida)
+        datos = salida.getvalue()
+        largo, banderas = struct.unpack(">IB", datos[:5])
+        self.assertEqual((datos[5:5 + largo], banderas), (b"\x00\x00\x00\x01clave", 1))
+        self.assertEqual(datos[5 + largo + 4], 0)
+        self.assertTrue(self.servidor.mirando())
+        self.assertTrue(self.detener.is_set())
+
+    def test_start_errors_and_permission(self) -> None:
+        self.assertEqual(self.servidor.manejar("GET", "/api/video?n=1", {}, b"", TS)[0], 401)
+        self.assertEqual(self._abrir("?n=0")[0], 400)
+        self.assertEqual(self._abrir("?n=9")[0], 404)
+        estado, _tipo, cuerpo = self._abrir("?n=8")
+        self.assertEqual(estado, 501)
+        self.assertIn("codificador", json.loads(cuerpo)["error"])
+        self.permitido = False
+        self.assertEqual(self._abrir("?n=1")[0], 403)
+
+    def test_new_stream_stops_previous(self) -> None:
+        self._abrir("?n=1")
+        primero = self.detener
+        self._abrir("?n=2")
+        self.assertTrue(primero.is_set())
+        self.assertFalse(self.detener.is_set())
+
+    def test_output_size_is_even_and_never_upscaled(self) -> None:
+        import jarvis_video_movil as jv
+
+        self.assertEqual(jv.tamano_salida(2560, 1440, 1920), (1920, 1080))
+        self.assertEqual(jv.tamano_salida(1920, 1080, 2560), (1920, 1080))
+        self.assertEqual(jv.tamano_salida(1366, 768, 1000), (1000, 562))
+
+
+class ScreenCaptureTests(unittest.TestCase):
+    """captura_para_movil: recorte de cada monitor, «todos» y reducción (sin capturar de verdad)."""
+
+    def test_crops_monitor_or_all_and_scales(self) -> None:
+        import io
+        from unittest.mock import patch
+
+        from PIL import Image
+
+        import jarvis_vision as v
+
+        monitores = [v.Monitor(1, 0, 0, 2560, 1440, True), v.Monitor(2, -1920, 0, 1920, 1080, False)]
+        pedidas: list[tuple[int, int, int, int]] = []
+
+        def captura(x, y, ancho, alto):
+            pedidas.append((x, y, ancho, alto))
+            return Image.new("RGB", (ancho, alto))
+
+        with patch.object(v, "listar_monitores", return_value=monitores),                 patch.object(v, "_captura_rapida", side_effect=captura):
+            uno = Image.open(io.BytesIO(v.captura_para_movil(1, 1600, 55)))
+            todos = Image.open(io.BytesIO(v.captura_para_movil(0, 2560, 55)))
+            with self.assertRaises(ValueError):
+                v.captura_para_movil(7, 1600, 55)
+        self.assertEqual(pedidas, [(0, 0, 2560, 1440), (-1920, 0, 4480, 1440)])
+        self.assertEqual((uno.format, uno.size), ("JPEG", (1600, 900)))
+        self.assertEqual(todos.size, (2560, 823))
+
+
 class NetworkTests(unittest.TestCase):
     def test_only_tailscale_addresses(self) -> None:
         self.assertTrue(m.es_tailscale("100.104.121.13"))

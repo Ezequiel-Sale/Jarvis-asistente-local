@@ -13,7 +13,7 @@ a = Analysis(
            ('vendor/LibreHardwareMonitor', 'vendor/LibreHardwareMonitor')]
     + collect_data_files('openwakeword') + collect_data_files('pythonnet')
     + collect_data_files('clr_loader'),
-    hiddenimports=['pystray._win32', 'pystray._util.win32',
+    hiddenimports=['mss.windows', 'av', 'dxcam', 'pystray._win32', 'pystray._util.win32',
                    'winrt.windows.media.control', 'winrt.windows.foundation',
                    # Interfaces COM de UI Automation ya generadas (clic en pantalla).
                    'uiautomation', *collect_submodules('comtypes.gen'),

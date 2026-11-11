@@ -29,6 +29,7 @@ import jarvis_wakeword
 import jarvis_vision
 import jarvis_memory
 import jarvis_mobile
+import jarvis_video_movil
 import jarvis_monitor_view
 import jarvis_audio_devices
 import jarvis_cleanup
@@ -235,6 +236,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             ocupado=lambda: bool(self.busy),
             pantallas=jarvis_vision.pantallas_para_movil,
             captura=jarvis_vision.captura_para_movil,
+            video=jarvis_video_movil.transmitir,
             pantalla_permitida=lambda: self._mobile_screen_enabled,
         )
         try:

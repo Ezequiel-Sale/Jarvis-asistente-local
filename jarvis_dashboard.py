@@ -6,7 +6,6 @@ Solo se llama desde un hilo secundario; la interfaz recibe el resultado por even
 """
 
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -16,6 +15,7 @@ import requests
 
 import jarvis_core as core
 import jarvis_hardware
+import jarvis_system_info
 
 CACHE_CLIMA = 30 * 60
 CACHE_BATERIA = 2 * 60
@@ -33,8 +33,7 @@ class DatosPanel:
     salud: jarvis_hardware.Temperaturas = field(default_factory=jarvis_hardware.Temperaturas)
     ram_pct: float = 0.0
     ram_texto: str = ""
-    disco_pct: float = 0.0
-    disco_texto: str = ""
+    discos: list = field(default_factory=list)  # jarvis_system_info.Disco
     modelos_cargados: list[str] = field(default_factory=list)
     ollama_ok: bool = False
 
@@ -132,9 +131,7 @@ def recolectar(ultima_salud: jarvis_hardware.Temperaturas | None = None) -> Dato
         memoria = psutil.virtual_memory()
         datos.ram_pct = memoria.percent
         datos.ram_texto = f"{(memoria.total - memoria.available) / 1024**3:.0f}/{memoria.total / 1024**3:.0f} GB"
-        disco = psutil.disk_usage(os.environ.get("SystemDrive", "C:") + "\\")
-        datos.disco_pct = disco.percent
-        datos.disco_texto = f"{disco.free / 1024**3:.0f} GB libres"
+        datos.discos = jarvis_system_info.listar_discos()
 
     def ollama() -> None:
         respuesta = requests.get(core.LLM_URL.rsplit("/", 1)[0] + "/ps", timeout=3)

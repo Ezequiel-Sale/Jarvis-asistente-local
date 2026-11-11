@@ -98,6 +98,11 @@ def configurar_numeracion(funcion: "Callable[[], dict[int, int]] | None") -> Non
     _numeracion = funcion
 
 
+def numero_fijo(display: int) -> int:
+    """Número fijo del monitor que Windows llama DISPLAY<display>."""
+    return renumerar([Monitor(display, 0, 0, 1, 1, False)])[0].numero
+
+
 def renumerar(monitores: list[Monitor]) -> list[Monitor]:
     """Aplica la numeración fija; si falla o hay choques, deja los de Windows."""
     if _numeracion is None:
@@ -138,23 +143,50 @@ def capturar_monitor(monitor: Monitor):
 
 def pantallas_para_movil() -> list[dict]:
     """Monitores para el selector de la app del celular (con la numeración fija)."""
-    monitores = sorted(renumerar(listar_monitores()), key=lambda m: m.numero)
+    monitores = listar_monitores()  # ya con la numeración fija y ordenados
     return [{"number": m.numero, "width": m.ancho, "height": m.alto, "primary": m.principal}
             for m in monitores]
 
 
-def captura_para_movil(numero: int, ancho: int, calidad: int) -> bytes:
-    """JPEG reducido de un monitor (0 = todos juntos) para verlo en vivo desde el celular."""
+def _captura_rapida(x: int, y: int, ancho: int, alto: int):
+    """Captura con mss (sin CAPTUREBLT: ~35 ms frente a ~55 ms de ImageGrab en 2560×1440).
+
+    Si mss falla, se usa ImageGrab, que es más lento pero siempre está.
+    """
     from PIL import Image, ImageGrab
 
+    try:
+        import mss
+
+        with mss.mss() as pantalla:
+            cuadro = pantalla.grab({"left": x, "top": y, "width": ancho, "height": alto})
+        return Image.frombytes("RGB", cuadro.size, cuadro.bgra, "raw", "BGRX")
+    except Exception:
+        logging.debug("mss no pudo capturar; uso ImageGrab.", exc_info=True)
+        return ImageGrab.grab(bbox=(x, y, x + ancho, y + alto), all_screens=True).convert("RGB")
+
+
+def captura_para_movil(numero: int, ancho: int, calidad: int) -> bytes:
+    """JPEG reducido de un monitor (0 = todos juntos) para verlo en vivo desde el celular."""
+    from PIL import Image
+
+    monitores = listar_monitores()
     if numero == 0:
-        imagen = ImageGrab.grab(all_screens=True)
+        if not monitores:
+            raise OSError("No encontré ningún monitor.")
+        x, y = min(m.x for m in monitores), min(m.y for m in monitores)
+        derecha = max(m.x + m.ancho for m in monitores)
+        abajo = max(m.y + m.alto for m in monitores)
+        imagen = _captura_rapida(x, y, derecha - x, abajo - y)
     else:
-        imagen = capturar_monitor(elegir_monitor(renumerar(listar_monitores()), numero))
-    imagen = imagen.convert("RGB")
+        m = elegir_monitor(monitores, numero)
+        imagen = _captura_rapida(m.x, m.y, m.ancho, m.alto)
     if imagen.width > ancho:
-        imagen = imagen.resize((ancho, max(1, round(imagen.height * ancho / imagen.width))),
-                               Image.Resampling.BILINEAR)
+        alto = max(1, round(imagen.height * ancho / imagen.width))
+        factor = imagen.width // ancho
+        if factor >= 2:  # reducir primero por un entero es más rápido que solo interpolar
+            imagen = imagen.reduce(factor)
+        imagen = imagen.resize((ancho, alto), Image.Resampling.BILINEAR)
     buffer = io.BytesIO()
     imagen.save(buffer, format="JPEG", quality=calidad)
     return buffer.getvalue()

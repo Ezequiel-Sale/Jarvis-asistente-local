@@ -26,6 +26,10 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
 - ``GET  /api/screen?n=0&w=1280&q=60`` → JPEG de la pantalla en vivo (n=0: todas
   juntas). Solo para ver: no se puede controlar la PC. Se desactiva en Ajustes, y
   mientras un celular mira, la PC muestra un aviso.
+- ``GET  /api/video?n=1&fps=60&w=1920&kbps=8000`` → vídeo H.264 en vivo de un
+  monitor, como flujo continuo de paquetes: 4 bytes de largo (big endian), 1 byte
+  de banderas (1 = cuadro clave) y el paquete (Annex B). Uno a la vez: abrir otro
+  corta el anterior. Mismo permiso y mismo aviso que /api/screen.
 """
 
 import hashlib
@@ -35,6 +39,8 @@ import json
 import logging
 import os
 import secrets
+import socket
+import struct
 import tempfile
 import threading
 import time
@@ -55,6 +61,8 @@ PREFERENCIA_PANTALLA = "movil_pantalla"
 MIRANDO_SEGUNDOS = 4.0  # sin capturas en este tiempo = el celular dejó de mirar
 ANCHO_PANTALLA = (480, 2560, 1280)  # mínimo, máximo y por defecto
 CALIDAD_PANTALLA = (25, 85, 60)
+ANCHO_VIDEO = (640, 2560, 1920)
+KBPS_VIDEO = (1000, 30000, 8000)
 RED_TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
 
 
@@ -215,6 +223,7 @@ class ServidorMovil:
         pantallas: Callable[[], list[dict]] | None = None,
         captura: Callable[[int, int, int], bytes] | None = None,
         pantalla_permitida: Callable[[], bool] = lambda: True,
+        video: Callable[..., object] | None = None,
     ) -> None:
         self.eventos_app = eventos_app  # cola de la app: todo lo que toca Tk pasa por ahí
         self.vinculacion = vinculacion
@@ -232,6 +241,8 @@ class ServidorMovil:
         self.pantalla_permitida = pantalla_permitida
         self._captura_lock = threading.Lock()
         self._ultima_captura: float | None = None
+        self.video = video  # (monitor, fps, ancho, kbps, detener) → paquetes (bytes, clave)
+        self._video_detener: threading.Event | None = None
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
@@ -289,17 +300,28 @@ class ServidorMovil:
         ahora = time.monotonic() if ahora is None else ahora
         return ahora - self._ultima_captura < MIRANDO_SEGUNDOS
 
+    @staticmethod
+    def _numero(consulta: dict, nombre: str, limites: tuple[int, int, int]) -> int:
+        minimo, maximo, defecto = limites
+        try:
+            valor = int(consulta.get(nombre, [str(defecto)])[0])
+        except ValueError as error:
+            raise _Error(400, "Parámetros no válidos.") from error
+        return max(minimo, min(maximo, valor))
+
+    def _marcar_mirando(self) -> None:
+        empezo = not self.mirando()
+        self._ultima_captura = time.monotonic()
+        if empezo:
+            logging.info("Un celular empezó a ver la pantalla.")
+            self.eventos_app.put(("mobile_screen",))
+
     def _pantalla(self, consulta: dict) -> tuple[int, str, bytes]:
         if self.captura is None or not self.pantalla_permitida():
             raise _Error(403, "Ver la pantalla está desactivado en los Ajustes de Jarvis.")
 
         def numero(nombre: str, limites: tuple[int, int, int]) -> int:
-            minimo, maximo, defecto = limites
-            try:
-                valor = int(consulta.get(nombre, [str(defecto)])[0])
-            except ValueError as error:
-                raise _Error(400, "Parámetros no válidos.") from error
-            return max(minimo, min(maximo, valor))
+            return self._numero(consulta, nombre, limites)
 
         try:
             monitor = max(0, int(consulta.get("n", ["0"])[0]))
@@ -316,12 +338,56 @@ class ServidorMovil:
             raise _Error(503, f"No pude capturar la pantalla: {error}") from error
         finally:
             self._captura_lock.release()
-        empezo = not self.mirando()
-        self._ultima_captura = time.monotonic()
-        if empezo:
-            logging.info("Un celular empezó a ver la pantalla.")
-            self.eventos_app.put(("mobile_screen",))
+        self._marcar_mirando()
         return 200, "image/jpeg", imagen
+
+    def _video(self, consulta: dict):
+        """Prepara el flujo de vídeo; devuelve la función que lo escribe en la conexión."""
+        if self.video is None or not self.pantalla_permitida():
+            raise _Error(403, "Ver la pantalla está desactivado en los Ajustes de Jarvis.")
+        try:
+            monitor = int(consulta.get("n", ["1"])[0])
+        except ValueError as error:
+            raise _Error(400, "Parámetros no válidos.") from error
+        if monitor < 1:
+            raise _Error(400, "El vídeo es de un monitor a la vez.")
+        fps = self._numero(consulta, "fps", (15, 60, 30))
+        ancho = self._numero(consulta, "w", ANCHO_VIDEO)
+        kbps = self._numero(consulta, "kbps", KBPS_VIDEO)
+        detener = threading.Event()
+        anterior, self._video_detener = self._video_detener, detener
+        if anterior is not None:
+            anterior.set()  # un solo vídeo a la vez
+        try:
+            paquetes = iter(self.video(monitor, fps, ancho, kbps, detener))
+            primero = next(paquetes)  # los errores de arranque salen como respuesta HTTP
+        except ValueError as error:
+            raise _Error(404, str(error)) from error
+        except StopIteration as error:
+            raise _Error(503, "El vídeo terminó antes de empezar.") from error
+        except OSError as error:
+            raise _Error(501, f"No pude iniciar el vídeo: {error}") from error
+
+        def escribir(salida) -> None:
+            enviados = 0
+            try:
+                for datos, clave in _encadenar(primero, paquetes):
+                    if detener.is_set() or not self.pantalla_permitida() or not self.activo():
+                        break
+                    salida.write(struct.pack(">IB", len(datos), 1 if clave else 0) + datos)
+                    enviados += 1
+                    if enviados % 15 == 1:
+                        self._marcar_mirando()
+            except OSError:
+                pass  # el celular cerró la vista
+            finally:
+                detener.set()
+                cerrar = getattr(paquetes, "close", None)
+                if cerrar is not None:
+                    cerrar()
+                logging.info("Vídeo al celular terminado (%s cuadros).", enviados)
+
+        return escribir
 
     # --- HTTP ----------------------------------------------------------------------
 
@@ -414,6 +480,8 @@ class ServidorMovil:
             return self._json({"allowed": permitido, "screens": lista})
         if metodo == "GET" and ruta == "/api/screen":
             return self._pantalla(consulta)
+        if metodo == "GET" and ruta == "/api/video":
+            return 200, "application/octet-stream", self._video(consulta)
         if metodo == "POST" and ruta == "/api/message":
             texto = " ".join(str(self._cuerpo_json(cuerpo).get("text", "")).split())
             if not texto:
@@ -449,6 +517,11 @@ class ServidorMovil:
         raise _Error(404, "Ruta desconocida.")
 
 
+def _encadenar(primero, resto):
+    yield primero
+    yield from resto
+
+
 class _Manejador(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "Jarvis"
@@ -469,6 +542,19 @@ class _Manejador(BaseHTTPRequestHandler):
         else:
             datos = self.rfile.read(largo) if largo else b""
             estado, tipo, cuerpo = movil.manejar(metodo, self.path, self.headers, datos, self.client_address[0])
+        if callable(cuerpo):  # flujo continuo (vídeo): sin largo, hasta cerrar
+            self.close_connection = True
+            self.send_response(estado)
+            self.send_header("Content-Type", tipo)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+            cuerpo(self.wfile)
+            return
         self.send_response(estado)
         self.send_header("Content-Type", tipo + ("; charset=utf-8" if tipo == "application/json" else ""))
         self.send_header("Content-Length", str(len(cuerpo)))

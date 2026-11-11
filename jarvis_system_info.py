@@ -72,6 +72,22 @@ class UsoProceso:
 
 
 @dataclass(frozen=True, slots=True)
+class Disco:
+    unidad: str  # «C:»
+    nombre: str  # etiqueta del volumen («Juegos»); puede estar vacía
+    libre: int
+    total: int
+
+    @property
+    def usado_pct(self) -> float:
+        return (self.total - self.libre) / self.total * 100 if self.total else 0.0
+
+    @property
+    def titulo(self) -> str:
+        return f"{self.unidad} ({self.nombre})" if self.nombre else self.unidad
+
+
+@dataclass(frozen=True, slots=True)
 class EstadoEquipo:
     cpu_porcentaje: float
     nucleos: int
@@ -83,6 +99,43 @@ class EstadoEquipo:
     encendido_desde: float
     bateria_porcentaje: float | None = None
     bateria_cargando: bool | None = None
+    discos: tuple[Disco, ...] = ()
+
+
+MIN_DISCO = 1024**3
+
+
+def _etiqueta_volumen(raiz: str) -> str:
+    if os.name != "nt":
+        return ""
+    import ctypes
+
+    buffer = ctypes.create_unicode_buffer(261)
+    try:
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(raiz, buffer, 261, None, None, None, None, 0)
+    except OSError:
+        return ""
+    return buffer.value.strip() if ok else ""
+
+
+def listar_discos(particiones=None, uso=None, etiqueta=_etiqueta_volumen) -> list[Disco]:
+    """Discos instalados (fijos y extraíbles con medio), sin lectores de CD ni unidades vacías."""
+    particiones = particiones or psutil.disk_partitions
+    uso = uso or psutil.disk_usage
+    discos: dict[str, Disco] = {}
+    for particion in particiones(all=False):
+        opciones = particion.opts.split(",")
+        if "cdrom" in opciones or not particion.fstype:
+            continue
+        try:
+            espacio = uso(particion.mountpoint)
+        except OSError:  # sin medio o sin permiso
+            continue
+        if espacio.total < MIN_DISCO:  # particiones de arranque o recuperación con letra
+            continue
+        unidad = particion.mountpoint.rstrip("\\/") or particion.mountpoint
+        discos.setdefault(unidad, Disco(unidad, etiqueta(particion.mountpoint), espacio.free, espacio.total))
+    return sorted(discos.values(), key=lambda d: d.unidad)
 
 
 def nombre_aplicacion(ejecutable: str, titulo: str = "", pid: int | None = None) -> str:
@@ -214,6 +267,7 @@ def obtener_estado_equipo() -> EstadoEquipo:
         encendido_desde=psutil.boot_time(),
         bateria_porcentaje=bateria.percent if bateria else None,
         bateria_cargando=bateria.power_plugged if bateria else None,
+        discos=tuple(listar_discos()),
     )
 
 
@@ -313,13 +367,23 @@ def formatear_procesos(
     return "\n".join(lineas)
 
 
+def _texto_discos(estado: EstadoEquipo) -> str:
+    if len(estado.discos) <= 1:
+        return f"Disco {estado.disco_unidad} {_gb(estado.disco_libre)} libres de {_gb(estado.disco_total)}."
+    lineas = ["Discos:"]
+    for disco in estado.discos:
+        lineas.append(f"- {disco.titulo} {_gb(disco.libre)} libres de {_gb(disco.total)} "
+                      f"({_porcentaje(disco.usado_pct)} usado)")
+    return "\n".join(lineas)
+
+
 def formatear_estado(estado: EstadoEquipo, ahora: float | None = None) -> str:
     ahora = time.time() if ahora is None else ahora
     ram_pct = estado.ram_usada / estado.ram_total * 100 if estado.ram_total else 0
     partes = [
         f"CPU al {_porcentaje(estado.cpu_porcentaje)} ({estado.nucleos} núcleos).",
         f"RAM: {_gb(estado.ram_usada)} de {_gb(estado.ram_total)} en uso ({_porcentaje(ram_pct)}).",
-        f"Disco {estado.disco_unidad} {_gb(estado.disco_libre)} libres de {_gb(estado.disco_total)}.",
+        _texto_discos(estado),
         f"Encendido desde hace {_duracion(ahora - estado.encendido_desde)} "
         f"({datetime.fromtimestamp(estado.encendido_desde).strftime('%d/%m %H:%M')}).",
     ]

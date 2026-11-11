@@ -590,17 +590,12 @@ class JarvisUIMixin:
             salud.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
             self._home_bars = {}
             for clave, nombre in (("gpu", "GPU"), ("gpu_hot", "GPU punto caliente"), ("gpu_load", "Carga GPU"),
-                                  ("cpu", "CPU"), ("cpu_load", "Carga CPU"), ("ram", "Memoria RAM"),
-                                  ("disco", "Disco del sistema")):
-                fila = tk.Frame(salud.jarvis_cuerpo, bg=PANEL)
-                fila.pack(fill="x", pady=3)
-                tk.Label(fila, text=nombre, bg=PANEL, fg=TEXT, font=("Segoe UI", 9), width=17,
-                         anchor="w").pack(side="left")
-                barra = tk.Canvas(fila, width=130, height=8, bg=PANEL_LIGHT, highlightthickness=0, bd=0)
-                barra.pack(side="left", padx=(4, 10))
-                valor = tk.Label(fila, text="…", bg=PANEL, fg=MUTED, font=("Consolas", 9), anchor="w")
-                valor.pack(side="left")
-                self._home_bars[clave] = (barra, valor)
+                                  ("cpu", "CPU"), ("cpu_load", "Carga CPU"), ("ram", "Memoria RAM")):
+                self._home_bars[clave] = self._home_bar_row(salud.jarvis_cuerpo, nombre)
+            # Una barra por disco instalado; se rehacen si cambian (p. ej. al conectar uno).
+            self._home_disks = tk.Frame(salud.jarvis_cuerpo, bg=PANEL)
+            self._home_disks.pack(fill="x")
+            self._home_disk_keys: list[str] | None = None
             self.home_health_note = tk.Label(salud.jarvis_cuerpo, text="", bg=PANEL, fg=MUTED,
                                              font=("Segoe UI", 8), justify="left", wraplength=380)
             self.home_health_note.pack(anchor="w", pady=(6, 0))
@@ -644,6 +639,34 @@ class JarvisUIMixin:
             self.home_greet.configure(text=self._saludo(ahora.hour))
             reloj.after(1000, self._tick_home_clock)
 
+        def _home_bar_row(self, padre: tk.Frame, nombre: str) -> tuple:
+            fila = tk.Frame(padre, bg=PANEL)
+            fila.pack(fill="x", pady=3)
+            tk.Label(fila, text=nombre, bg=PANEL, fg=TEXT, font=("Segoe UI", 9), width=17,
+                     anchor="w").pack(side="left")
+            barra = tk.Canvas(fila, width=130, height=8, bg=PANEL_LIGHT, highlightthickness=0, bd=0)
+            barra.pack(side="left", padx=(4, 10))
+            valor = tk.Label(fila, text="…", bg=PANEL, fg=MUTED, font=("Consolas", 9), anchor="w")
+            valor.pack(side="left")
+            return barra, valor
+
+        def _render_home_disks(self, discos) -> None:
+            claves = [d.unidad for d in discos]
+            if claves != self._home_disk_keys:
+                for fila in self._home_disks.winfo_children():
+                    fila.destroy()
+                for clave in [c for c in self._home_bars if c.startswith("disco:")]:
+                    del self._home_bars[clave]
+                for disco in discos:
+                    self._home_bars["disco:" + disco.unidad] = self._home_bar_row(self._home_disks,
+                                                                                  "Disco " + disco.titulo)
+                self._home_disk_keys = claves
+            for disco in discos:
+                pct = disco.usado_pct
+                self._set_home_bar("disco:" + disco.unidad, pct / 100,
+                                   f"{pct:.0f} % · {disco.libre / 1024**3:.0f} GB libres de "
+                                   f"{disco.total / 1024**3:.0f}", alerta=pct >= 90)
+
         def _set_home_bar(self, clave: str, fraccion: float | None, texto: str, alerta: bool = False) -> None:
             barra, valor = self._home_bars[clave]
             barra.delete("all")
@@ -677,7 +700,7 @@ class JarvisUIMixin:
                     self._set_home_bar(clave, valor / 100, f"{valor:.0f} %")
             self._set_home_bar("ram", datos.ram_pct / 100, f"{datos.ram_pct:.0f} % · {datos.ram_texto}",
                                alerta=datos.ram_pct >= 90)
-            self._set_home_bar("disco", datos.disco_pct / 100, datos.disco_texto, alerta=datos.disco_pct >= 90)
+            self._render_home_disks(datos.discos)
             nota = []
             if s.cpu is None and s.cpu_nombre:
                 nota.append("La temperatura de la CPU necesita el driver PawnIO (pawnio.eu).")

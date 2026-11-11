@@ -81,6 +81,64 @@ class FormattingTests(unittest.TestCase):
         self.assertIn("Encendido desde hace 1 d 2 h", texto)
         self.assertIn("Batería: 80 % (cargando).", texto)
 
+    def test_all_installed_disks(self) -> None:
+        from collections import namedtuple
+
+        Particion = namedtuple("Particion", "device mountpoint fstype opts")
+        Uso = namedtuple("Uso", "total used free percent")
+        particiones = [
+            Particion("D:\\", "D:\\", "NTFS", "rw,fixed"),
+            Particion("C:\\", "C:\\", "NTFS", "rw,fixed"),
+            Particion("F:\\", "F:\\", "NTFS", "rw,fixed"),  # 100 MB de recuperación
+            Particion("G:\\", "G:\\", "", "cdrom"),
+            Particion("H:\\", "H:\\", "FAT32", "rw,removable"),  # lector sin tarjeta
+        ]
+        espacios = {"C:\\": Uso(927 * GB, 0, 56 * GB, 0), "D:\\": Uso(466 * GB, 0, 163 * GB, 0),
+                    "F:\\": Uso(100 * 1024**2, 0, 10 * 1024**2, 0)}
+
+        def uso(raiz):
+            if raiz not in espacios:
+                raise OSError("El dispositivo no está listo.")
+            return espacios[raiz]
+
+        discos = info.listar_discos(lambda all: particiones, uso, etiqueta=lambda r: "Juegos" if r == "D:\\" else "")
+        self.assertEqual([d.titulo for d in discos], ["C:", "D: (Juegos)"])
+        self.assertAlmostEqual(discos[0].usado_pct, 94, delta=0.5)
+        estado = info.EstadoEquipo(12, 16, 8 * GB, 32 * GB, "C:", 56 * GB, 927 * GB, 0.0, discos=tuple(discos))
+        texto = info.formatear_estado(estado, ahora=60.0)
+        self.assertIn("Discos:\n- C: 56,0 GB libres de 927 GB (94 % usado)\n"
+                      "- D: (Juegos) 163 GB libres de 466 GB (65 % usado)", texto)
+
+    def test_home_panel_has_one_bar_per_disk(self) -> None:
+        import tkinter as tk
+
+        from jarvis_app import JarvisApp
+
+        try:
+            raiz = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk no disponible: {error}")
+        raiz.withdraw()
+        self.addCleanup(raiz.destroy)
+
+        class Host:
+            _home_bar_row = JarvisApp._home_bar_row
+            _render_home_disks = JarvisApp._render_home_disks
+            _set_home_bar = JarvisApp._set_home_bar
+
+        host = Host()
+        host._home_bars = {}
+        host._home_disks = tk.Frame(raiz)
+        host._home_disk_keys = None
+        c = info.Disco("C:", "", 50 * GB, 1000 * GB)
+        d = info.Disco("D:", "Juegos", 300 * GB, 500 * GB)
+        host._render_home_disks([c, d])
+        self.assertEqual(len(host._home_disks.winfo_children()), 2)
+        self.assertEqual(host._home_bars["disco:C:"][1].cget("text"), "95 % · 50 GB libres de 1000")
+        host._render_home_disks([c])  # se desconectó uno
+        self.assertEqual(list(host._home_bars), ["disco:C:"])
+        self.assertEqual(len(host._home_disks.winfo_children()), 1)
+
     def test_friendly_names(self) -> None:
         self.assertEqual(info.nombre_aplicacion("brave.exe"), "Brave")
         self.assertEqual(info.nombre_aplicacion("ApplicationFrameHost.exe", "Calculadora"), "Calculadora")

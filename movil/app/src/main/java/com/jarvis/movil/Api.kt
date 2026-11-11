@@ -23,23 +23,29 @@ class Api(private val base: String, private val token: String?) {
         return connection
     }
 
+    /**
+     * Lee la respuesta entera y cierra el flujo sin disconnect(): así la conexión
+     * vuelve al grupo y la siguiente petición (p. ej. el próximo cuadro de la
+     * pantalla) no tiene que abrir otra.
+     */
     private fun read(connection: HttpURLConnection): ByteArray {
-        try {
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
-            if (code !in 200..299) {
-                val message = try {
-                    JSONObject(String(bytes, Charsets.UTF_8)).optString("error", "Error $code")
-                } catch (e: Exception) {
-                    "Error $code"
-                }
-                throw ApiException(code, message)
-            }
-            return bytes
-        } finally {
+        val code = try {
+            connection.responseCode
+        } catch (e: Exception) {
             connection.disconnect()
+            throw e
         }
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
+        if (code !in 200..299) {
+            val message = try {
+                JSONObject(String(bytes, Charsets.UTF_8)).optString("error", "Error $code")
+            } catch (e: Exception) {
+                "Error $code"
+            }
+            throw ApiException(code, message)
+        }
+        return bytes
     }
 
     private fun post(path: String, body: ByteArray, contentType: String, timeoutMs: Int): JSONObject {
@@ -60,4 +66,12 @@ class Api(private val base: String, private val token: String?) {
         JSONObject(String(read(open(path, "GET", readTimeoutMs)), Charsets.UTF_8))
 
     fun getBytes(path: String): ByteArray = read(open(path, "GET", 20000))
+
+    /** Flujo continuo (vídeo): conexión abierta y ya comprobada; quien la usa la cierra. */
+    fun openStream(path: String): HttpURLConnection {
+        val connection = open(path, "GET", 5000)
+        val code = connection.responseCode
+        if (code !in 200..299) read(connection)  // lanza ApiException con el mensaje de Jarvis
+        return connection
+    }
 }

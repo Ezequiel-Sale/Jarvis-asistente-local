@@ -2,6 +2,9 @@
 # Para actualizar: instala la nueva versión en .venv313, ejecuta los tests y
 # cambia el número aquí en el mismo commit.
 Pillow==13.0.0
+mss==10.1.0
+av==19.0.2
+dxcam==0.3.0
 PyAudio==0.2.14
 prometheus-client==0.26.0
 pystray==0.19.5

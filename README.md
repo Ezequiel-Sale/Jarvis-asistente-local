@@ -14,7 +14,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
 | **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» (incluye temperaturas de la GPU y la CPU; avisa solo si algo se calienta demasiado) |
 | **Limpieza** | «Libera espacio», «vacía la papelera», «borra los archivos temporales»: muestra cuánto ocupa cada cosa (temporales, papelera, caché de Brave, Docker, modelos de Ollama sin usar) y borra solo lo que marques tras confirmar |
-| **Panel de inicio** | Primera página: hora, clima, salud del equipo, próximos recordatorios y rutinas, lo que suena, batería de los auriculares y estado de los servicios |
+| **Panel de inicio** | Primera página: hora, clima, salud del equipo (con el espacio de cada disco), próximos recordatorios y rutinas, lo que suena, batería de los auriculares y estado de los servicios |
 | **Multimedia** | «Reanuda el vídeo del monitor 2», «pausa el vídeo del monitor 1 y reanuda el del monitor 2», «dale play al vídeo de la segunda pantalla», «pon el vídeo en pantalla completa», «sal de pantalla completa del monitor 3», «silencia la pestaña que suena», «mutea YouTube», «devuélvele el sonido al vídeo», «Pausa la música», «siguiente canción», «la anterior», «¿qué está sonando?», «pon el volumen de Spotify al 30», «silencia Discord» |
 | **Temporizadores y recordatorios** | «Pon un temporizador de 10 minutos», «recuérdame en 20 minutos sacar la ropa», «recuérdame mañana a las 9 pagar la luz», «pon una alarma a las 7», «¿qué recordatorios tengo?», «cancela el temporizador» |
 | **Auriculares G533** | «¿Cuánta batería tienen los auriculares?»; aviso automático cuando baja del 15 % |
@@ -127,7 +127,7 @@ Las integraciones se configuran en `integraciones.json`, que se crea solo al arr
    ```
    e instala `movil/app/build/outputs/apk/debug/app-debug.apk` en el teléfono.
 3. En Jarvis: **⚙ Ajustes → App del celular**, actívala y pulsa «VINCULAR CELULAR». Escribe en la app la dirección y el código que aparecen.
-4. Para ver las pantallas de la PC, toca 🖥 en la app: elige el monitor, acerca con dos dedos y escribe o dicta órdenes abajo. Mientras miras, la PC muestra un aviso arriba; un clic en él (o «VER PANTALLA: NO» en Ajustes) lo corta.
+4. Para ver las pantallas de la PC, toca 🖥 en la app: elige el monitor y la calidad (AUTO usa vídeo a 60 cuadros por segundo con Wi-Fi y AHORRO con datos móviles; también hay 30 FPS y modos de imágenes), acerca con dos dedos y escribe o dicta órdenes abajo. Mientras miras, la PC muestra un aviso arriba; un clic en él (o «VER PANTALLA: NO» en Ajustes) lo corta.
 
 ## Tests y compilación
 
