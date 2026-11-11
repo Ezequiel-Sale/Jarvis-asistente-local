@@ -1085,6 +1085,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._live_text = ""
             if self._live_label is not None:
                 self._live_label.configure(text="…")
+            self._notify_mobile_live("")
             return
         self._live_text += trozo
         if (
@@ -1108,6 +1109,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._live_label.pack(anchor="w")
         self._live_label.configure(text=self._live_text.strip() or "…")
         self._scroll_chat_to_bottom()
+        self._notify_mobile_live(self._live_text)
 
     def _clear_live_answer(self, *, keep_text: bool = False) -> None:
         if self._live_row is not None and self._live_row.winfo_exists():
@@ -1116,6 +1118,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._live_label = None
         if not keep_text:
             self._live_text = ""
+            self._notify_mobile_live(None)
 
     def _approval_decision(self, kind: str, transcript: str) -> bool | None:
         """«sí»/«no» (o las frases de cada tipo de confirmación) en lo dicho."""

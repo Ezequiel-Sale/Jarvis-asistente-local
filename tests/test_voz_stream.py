@@ -6,7 +6,7 @@ import tempfile
 import threading
 import unittest
 import wave
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import jarvis_agent as agent
 import jarvis_voz_stream as voz
@@ -151,6 +151,7 @@ class LiveBubbleTests(unittest.TestCase):
         class Host:
             _show_live_answer = JarvisApp._show_live_answer
             _clear_live_answer = JarvisApp._clear_live_answer
+            _notify_mobile_live = JarvisApp._notify_mobile_live
 
             def _scroll_chat_to_bottom(self) -> None:
                 pass
@@ -160,6 +161,8 @@ class LiveBubbleTests(unittest.TestCase):
         self.host._live_row = None
         self.host._live_label = None
         self.host._live_text = ""
+        self.host.mobile = Mock()
+        self.host.mobile.activo.return_value = True
 
     def test_grows_and_clears(self) -> None:
         self.host._show_live_answer(None)
@@ -171,6 +174,10 @@ class LiveBubbleTests(unittest.TestCase):
         self.host._clear_live_answer()
         self.assertIsNone(self.host._live_row)
         self.assertEqual(self.host.messages.winfo_children(), [])
+        # El celular recibe el texto acumulado (sin markdown) y el aviso de descarte.
+        movil = self.host.mobile
+        self.assertEqual([c.args[0] for c in movil.en_vivo.call_args_list], ["", "Hola", "Hola, ¿qué tal?", ""])
+        movil.fin_en_vivo.assert_called_once()
 
 
 class _RespuestaFalsa:
@@ -207,6 +214,16 @@ class AgentStreamTests(unittest.TestCase):
         self.assertEqual(mensaje["content"], "Hola mundo")
         self.assertEqual(len(mensaje["tool_calls"]), 1)
         self.assertEqual(trozos, ["Hola", " mundo"])
+        self.assertNotIn("done_reason", mensaje)
+
+    def test_stream_reports_length_cut(self) -> None:
+        respuesta = _RespuestaFalsa([
+            {"message": {"content": "Uno, do"}, "done": False},
+            {"message": {"content": ""}, "done": True, "done_reason": "length"},
+        ])
+        with patch.object(agent.core, "registrar_latencia"):
+            mensaje = agent._leer_stream(respuesta, lambda _: None, 0.0)
+        self.assertEqual(mensaje["done_reason"], "length")
 
     def test_no_streaming_while_actions_are_pending(self) -> None:
         """Si el usuario pidió una acción y aún no hay llamadas, no se habla:

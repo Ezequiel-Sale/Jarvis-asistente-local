@@ -11,10 +11,11 @@ from types import ModuleType
 
 import jarvis_core as core
 from jarvis_tool_registry import ToolRegistry
-from plugins import clima
+from plugins import busqueda, clima
 
 PLUGINS_DISPONIBLES: dict[str, ModuleType] = {
     clima.NOMBRE: clima,
+    busqueda.NOMBRE: busqueda,
 }
 
 

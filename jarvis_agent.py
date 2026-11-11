@@ -180,6 +180,12 @@ def _post_con_reintento(endpoint: str, payload: dict[str, Any], *, stream: bool)
     raise AssertionError("inalcanzable")
 
 
+# Tokens que puede escribir el modelo por ronda. Con 256 las explicaciones se cortaban
+# a mitad de frase («¿qué es Python?» → lista de 4 puntos cortada en el 4.º).
+MAX_TOKENS_RESPUESTA = 1024
+AVISO_CORTADA = "…\n\n(La respuesta era muy larga y se cortó; dime «cuéntame más» para continuar.)"
+
+
 def _request_chat(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
@@ -197,7 +203,7 @@ def _request_chat(
             # Las ~19 herramientas ocupan ~1.700 tokens; con instrucciones, historial
             # y el contenido de un archivo leído, 4096 se desbordaba (medido 2026-11-05).
             "num_ctx": 8192,
-            "num_predict": 256,
+            "num_predict": MAX_TOKENS_RESPUESTA,
             "temperature": 0.2,
         },
     }
@@ -233,6 +239,8 @@ def _request_chat(
     message = data.get("message")
     if not isinstance(message, dict):
         raise ValueError("Ollama no devolvió el campo message esperado.")
+    if data.get("done_reason"):
+        message["done_reason"] = data["done_reason"]  # «length» = se cortó por longitud
     return message
 
 
@@ -240,6 +248,7 @@ def _leer_stream(response, entregar: Callable[[str], None], started: float) -> d
     contenido: list[str] = []
     tool_calls: list[Any] = []
     primero: float | None = None
+    resultado_final: str | None = None
     for linea in response.iter_lines():
         if not linea:
             continue
@@ -256,6 +265,8 @@ def _leer_stream(response, entregar: Callable[[str], None], started: float) -> d
         if mensaje.get("tool_calls"):
             tool_calls.extend(mensaje["tool_calls"])
         if datos.get("done"):
+            if datos.get("done_reason"):
+                resultado_final = datos["done_reason"]
             break
     total = time.perf_counter() - started
     core.registrar_latencia("llm", total)
@@ -266,6 +277,8 @@ def _leer_stream(response, entregar: Callable[[str], None], started: float) -> d
     resultado: dict[str, Any] = {"role": "assistant", "content": "".join(contenido)}
     if tool_calls:
         resultado["tool_calls"] = tool_calls
+    if resultado_final:
+        resultado["done_reason"] = resultado_final
     return resultado
 
 
@@ -342,6 +355,54 @@ def procesar_con_herramientas(
         return "Cancelé la operación. " + _resumen_completadas(completadas)
 
 
+# Seguimientos cortos («¿qué más me puedes contar?», «sigue», «¿y eso?»): el modelo a
+# veces los tomaba como una pregunta nueva sin tema y respondía «¿sobre qué quieres saber?».
+INSTRUCCION_SEGUIMIENTO = (
+    "Si el último mensaje del usuario es un seguimiento corto o ambiguo (por ejemplo "
+    "«¿qué más me puedes contar?», «cuéntame más», «sigue», «¿y eso?», «¿por qué?»), "
+    "se refiere al tema de los mensajes anteriores de esta conversación: continúa ese "
+    "tema con información nueva en lugar de preguntar de qué quiere hablar. "
+)
+
+
+HERRAMIENTA_BUSQUEDA = "web_search"  # plugins/busqueda.py
+INSTRUCCION_BUSQUEDA = (
+    "\nTienes la herramienta web_search para buscar en internet. Si te preguntan por algo "
+    "que no conoces con seguridad o que puede ser posterior a 2024, llama a web_search "
+    "antes de responder: nunca digas que no tienes información sin haber buscado. Esto vale "
+    "aunque en mensajes anteriores de la conversación hayas dicho que no sabías algo: "
+    "antes no podías buscar, ahora sí."
+)
+_DICE_QUE_NO_SABE = re.compile(
+    r"no\s+tengo\s+(?:informaci[oó]n|datos|conocimiento)|no\s+(?:estoy\s+familiarizad[oa]|conozco)"
+    r"|no\s+dispongo\s+de\s+informaci[oó]n|no\s+s[eé]\s+(?:qu[eé]|a\s+qu[eé])\s+(?:es|te\s+refieres)"
+    r"|mi\s+(?:conocimiento|informaci[oó]n)\s+(?:llega|est[aá]\s+actualizad)",
+    re.IGNORECASE,
+)
+
+
+def _sin_respuestas_sin_saber(
+    historial: Sequence[tuple[str, str]], registry: ToolRegistry
+) -> list[tuple[str, str]]:
+    """Quita los turnos en que respondió «no tengo información» si ahora puede buscar.
+
+    El modelo imita sus respuestas anteriores: con tres «no tengo información sobre MCP»
+    en el historial contestaba lo mismo en vez de usar web_search.
+    """
+    try:
+        registry.get(HERRAMIENTA_BUSQUEDA)
+    except ToolError:
+        return list(historial)
+    limpio: list[tuple[str, str]] = []
+    for role, content in historial:
+        if role == "assistant" and _DICE_QUE_NO_SABE.search(content):
+            if limpio and limpio[-1][0] == "user":
+                limpio.pop()  # su pregunta también: sin respuesta confundiría al modelo
+            continue
+        limpio.append((role, content))
+    return limpio
+
+
 def _procesar_con_herramientas(
     texto: str,
     conversacion_id: str,
@@ -376,6 +437,7 @@ def _procesar_con_herramientas(
                 f"{jarvis_system_info.contexto_fecha_hora()}\n"
                 f"{memoria_contextual}\n"
                 "Eres JARVIS, un asistente local. Responde en español y de forma clara. "
+                + INSTRUCCION_SEGUIMIENTO +
                 "Usa herramientas únicamente cuando el usuario solicite explícitamente "
                 "una acción compatible. Una preferencia o un dato que el usuario "
                 "quiera recordar no es una solicitud para ejecutar una herramienta. "
@@ -401,13 +463,17 @@ def _procesar_con_herramientas(
     ]
     messages.extend(
         {"role": role, "content": content}
-        for role, content in historial
+        for role, content in _sin_respuestas_sin_saber(historial, registry)
         if role in {"user", "assistant"}
     )
     messages.append({"role": "user", "content": texto})
     requested_action_count = _requested_action_count(texto)
 
     tool_schemas = registry.ollama_tools()
+    puede_buscar = any(t.get("function", {}).get("name") == HERRAMIENTA_BUSQUEDA for t in tool_schemas)
+    if puede_buscar:
+        messages[0]["content"] += INSTRUCCION_BUSQUEDA
+    busqueda_insistida = False
     calls_made = 0
     tool_rounds = 0
     plan_stopped = False
@@ -434,11 +500,28 @@ def _procesar_con_herramientas(
         if transmitir is not None:
             transmitir(None)
         assistant_message = _solicitar_chat(messages, available_tools, cancel_token, transmitir)
+        cortada = assistant_message.pop("done_reason", None) == "length"
         tool_calls = _extract_tool_calls(assistant_message)
 
         content = assistant_message.get("content", "")
         if not isinstance(content, str):
             raise ValueError("Ollama devolvió contenido de respuesta con tipo inválido.")
+        if (
+            not tool_calls
+            and puede_buscar
+            and not busqueda_insistida
+            and calls_made == 0
+            and tool_rounds < max_tool_rounds
+            and _DICE_QUE_NO_SABE.search(content.strip())
+        ):
+            # El modelo decía «no tengo información» sin buscar (y, si se le pedía que
+            # buscara, escribía la llamada como texto): Jarvis busca la pregunta él mismo
+            # y le pasa los resultados (2026-11-10, «¿qué es MCP?»).
+            logging.info("El modelo dijo que no sabía sin buscar; se busca en internet.")
+            tool_calls = [{"function": {"name": HERRAMIENTA_BUSQUEDA,
+                                        "arguments": {"query": texto.strip()[:300]}}}]
+            assistant_message = {"role": "assistant", "content": "", "tool_calls": tool_calls}
+            busqueda_insistida = True
         if not tool_calls:
             answer = content.strip()
             if (
@@ -477,6 +560,9 @@ def _procesar_con_herramientas(
                 )
             if not answer:
                 raise ValueError("Ollama devolvió una respuesta vacía.")
+            if cortada:
+                logging.warning("La respuesta del modelo se cortó al llegar a %d tokens.", MAX_TOKENS_RESPUESTA)
+                answer += AVISO_CORTADA
             return _con_avisos(answer, fallos)
         if tool_rounds >= max_tool_rounds:
             raise RuntimeError(

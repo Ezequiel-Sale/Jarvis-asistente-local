@@ -35,6 +35,12 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("write_file", archivos.herramientas_permitidas)
         self.assertIn(str(Path.home() / "Documents"), archivos.args)
 
+    def test_new_builtin_plugins_are_active_in_older_files(self) -> None:
+        # integraciones.json creado antes de que existiera el plugin de búsqueda.
+        datos = {"plugins": {"clima": {"activo": True}}, "mcp_servers": {}}
+        (self.dir / integ.NOMBRE_ARCHIVO).write_text(json.dumps(datos), encoding="utf-8")
+        self.assertEqual(set(integ.cargar_integraciones(self.dir).plugins), {"clima", "busqueda"})
+
     def test_invalid_json_disables_integrations(self) -> None:
         (self.dir / integ.NOMBRE_ARCHIVO).write_text("{ roto", encoding="utf-8")
         result = integ.cargar_integraciones(self.dir)
@@ -44,6 +50,7 @@ class ConfigTests(unittest.TestCase):
     def test_inactive_entries_are_skipped_and_bad_entries_rejected(self) -> None:
         datos = integ.configuracion_por_defecto()
         datos["plugins"]["clima"]["activo"] = False
+        datos["plugins"]["busqueda"]["activo"] = False
         datos["mcp_servers"]["archivos"]["activo"] = False
         (self.dir / integ.NOMBRE_ARCHIVO).write_text(json.dumps(datos), encoding="utf-8")
         result = integ.cargar_integraciones(self.dir)

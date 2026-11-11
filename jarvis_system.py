@@ -401,9 +401,52 @@ def iniciar_ejecutable_juego(executable: Path) -> None:
             raise ctypes.WinError(error_code) from error
 
 
+_PAQUETE_TIENDA = re.compile(r"^(?P<nombre>[^_]+)_[^_]*_[^_]*_[^_]*_(?P<editor>[^_]+)$")
+
+
+def app_de_la_tienda(ruta: Path) -> str | None:
+    r"""«shell:AppsFolder\Familia!App» si ``ruta`` está dentro de una app de la Tienda.
+
+    Los .exe de ``Program Files\WindowsApps`` no se pueden ejecutar directamente
+    (WinError 5, acceso denegado): hay que abrirlos por su identidad de paquete.
+    La familia no incluye la versión, así que sigue valiendo cuando la app se actualiza.
+    """
+    partes = ruta.parts
+    indice = next((i for i, p in enumerate(partes) if p.lower() == "windowsapps"), None)
+    if indice is None or indice + 1 >= len(partes):
+        return None
+    coincidencia = _PAQUETE_TIENDA.match(partes[indice + 1])
+    if coincidencia is None:
+        return None
+    familia = f"{coincidencia['nombre']}_{coincidencia['editor']}"
+    app_id = "App"
+    try:
+        import xml.etree.ElementTree as ET
+
+        manifiesto = Path(*partes[: indice + 2]) / "AppxManifest.xml"
+        aplicaciones = [
+            nodo for nodo in ET.parse(manifiesto).iter()
+            if nodo.tag.rsplit("}", 1)[-1] == "Application" and nodo.get("Id")
+        ]
+        elegida = next(
+            (a for a in aplicaciones
+             if Path(a.get("Executable", "")).name.lower() == ruta.name.lower()),
+            aplicaciones[0] if aplicaciones else None,
+        )
+        if elegida is not None:
+            app_id = elegida.get("Id")
+    except (OSError, ET.ParseError):
+        pass  # sin manifiesto legible: «App» es el Id habitual
+    return "shell:AppsFolder\\" + f"{familia}!{app_id}"
+
+
 def abrir_programa(target: str) -> str:
     """Abre un programa, acceso directo, documento o carpeta elegido por el usuario."""
     ruta = Path(str(target).strip().strip('"')).expanduser()
+    tienda = app_de_la_tienda(ruta)
+    if tienda is not None:
+        os.startfile(tienda)  # type: ignore[attr-defined]  # solo Windows
+        return f"Abrí «{ruta.stem or ruta.name}»."
     if not ruta.exists():
         raise FileNotFoundError(f"No encuentro «{ruta}».")
     os.startfile(str(ruta))  # type: ignore[attr-defined]  # solo Windows

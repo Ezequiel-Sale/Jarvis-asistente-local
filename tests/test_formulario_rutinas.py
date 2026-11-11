@@ -89,6 +89,30 @@ class OpenProgramTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             jarvis_system.abrir_programa(r"C:\no\existe\programa.exe")
 
+    def test_store_apps_open_by_package_family(self) -> None:
+        # WinError 5 al ejecutar el .exe de WindowsApps: se abre por su familia de paquete,
+        # que no cambia cuando la app se actualiza de versión.
+        ruta = (r"C:\Program Files\WindowsApps\5319275A.WhatsAppDesktop_2.1.0.0_x64__"
+                r"cv1g1gvanyjgm\WhatsApp.Root.exe")
+        with patch.object(jarvis_system.os, "startfile", create=True) as abrir:
+            self.assertIn("WhatsApp.Root", jarvis_system.abrir_programa(ruta))
+        abrir.assert_called_once_with(r"shell:AppsFolder\5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App")
+        self.assertIsNone(jarvis_system.app_de_la_tienda(Path(r"C:\Windows\notepad.exe")))
+        self.assertIsNone(jarvis_system.app_de_la_tienda(Path(r"C:\Program Files\WindowsApps")))
+
+    def test_store_app_id_comes_from_the_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as carpeta:
+            paquete = Path(carpeta) / "WindowsApps" / "Editor.Notas_1.0.0.0_x64__abc123"
+            paquete.mkdir(parents=True)
+            (paquete / "AppxManifest.xml").write_text(
+                '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">'
+                '<Applications><Application Id="Principal" Executable="otro.exe"/>'
+                r'<Application Id="Notas" Executable="bin\Notas.exe"/></Applications></Package>',
+                encoding="utf-8",
+            )
+            self.assertEqual(jarvis_system.app_de_la_tienda(paquete / "bin" / "notas.exe"),
+                             r"shell:AppsFolder\Editor.Notas_abc123!Notas")
+
 
 class PhraseExecutionTests(unittest.TestCase):
     def _host(self, aprueba_energia: bool = True) -> Mock:

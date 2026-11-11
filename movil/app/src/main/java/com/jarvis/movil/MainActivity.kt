@@ -56,6 +56,8 @@ class MainActivity : Activity() {
     private var connected = false
     private var busy = false
     private var mode = "idle"
+    private var liveBubble: LinearLayout? = null
+    private var liveText: TextView? = null
 
     /** Cambia cada vez que se reinicia la escucha: los hilos viejos se detienen solos. */
     @Volatile
@@ -186,6 +188,8 @@ class MainActivity : Activity() {
         val client = api() ?: return
         val mine = ++generation
         messages.removeAllViews()
+        liveBubble = null
+        liveText = null
         questions.clear()
         connected = false
         refreshStatus()
@@ -242,7 +246,9 @@ class MainActivity : Activity() {
             val text = event.optString("text")
             when (event.optString("type")) {
                 "user" -> addBubble(text, true)
+                "live" -> showLive(text)
                 "assistant" -> {
+                    showLive("")
                     addBubble(text, false)
                     if (!initial) speak(text)
                 }
@@ -288,7 +294,24 @@ class MainActivity : Activity() {
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
     }
 
-    private fun addBubble(text: String, user: Boolean) {
+    /** Respuesta que Jarvis está escribiendo: una burbuja que se actualiza; vacía = quitarla. */
+    private fun showLive(text: String) {
+        if (text.isEmpty()) {
+            liveBubble?.let { messages.removeView(it) }
+            liveBubble = null
+            liveText = null
+            return
+        }
+        val view = liveText
+        if (view != null) {
+            view.text = text
+            return
+        }
+        liveBubble = addBubble(text, false)
+        liveText = liveBubble?.getChildAt(1) as? TextView
+    }
+
+    private fun addBubble(text: String, user: Boolean): LinearLayout {
         val bubble = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(getColor(if (user) R.color.cyan_dark else R.color.panel_light))
@@ -311,6 +334,7 @@ class MainActivity : Activity() {
             if (user) marginStart = dp(48) else marginEnd = dp(48)
         }
         messages.addView(bubble, params)
+        return bubble
     }
 
     private fun addNotice(text: String) {

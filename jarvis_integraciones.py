@@ -31,6 +31,7 @@ def configuracion_por_defecto() -> dict:
     return {
         "plugins": {
             "clima": {"activo": True},
+            "busqueda": {"activo": True},
         },
         "mcp_servers": {
             "archivos": {
@@ -71,6 +72,9 @@ def _parsear(datos: dict, ruta: Path) -> Integraciones:
     servidores = datos.get("mcp_servers", {})
     if not isinstance(plugins, dict) or not isinstance(servidores, dict):
         raise ValueError("«plugins» y «mcp_servers» deben ser objetos.")
+    # Plugins integrados nuevos: activos aunque el archivo sea anterior a ellos.
+    # Para desactivar uno, escribirlo con «"activo": false».
+    plugins = {**configuracion_por_defecto()["plugins"], **plugins}
     activos = {
         nombre: config
         for nombre, config in plugins.items()

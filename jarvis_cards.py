@@ -17,7 +17,7 @@ ICONOS = {
     "cancel_power_action": "⏻", "lock_computer": "🔒", "set_reminder": "⏰",
     "cancel_reminder": "⏰", "list_reminders": "⏰", "schedule_routine": "⏱",
     "screen_click": "🖱", "screen_vision": "👁", "set_theme": "🎨",
-    "get_weather": "☁", "get_headset_battery": "🔋", "get_system_status": "📊",
+    "get_weather": "☁", "web_search": "🔎", "get_headset_battery": "🔋", "get_system_status": "📊",
     "list_top_processes": "📊", "list_open_applications": "🗂",
     "get_current_datetime": "🕒", "get_jarvis_diagnostics": "🩺",
 }

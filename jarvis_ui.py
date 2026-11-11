@@ -168,6 +168,7 @@ class JarvisUIMixin:
                 self._load_routines_page()
             if nombre == "ajustes":
                 self._refresh_monitor_map()
+                self._refresh_search_settings()
             if nombre == "inicio":
                 self._refresh_home_now()
 
@@ -439,6 +440,7 @@ class JarvisUIMixin:
                  "los auriculares: por los altavoces el micrófono oiría su propia voz.",
                  "interrupt_button", "✋  INTERRUMPIR …", self._toggle_interrupt)
             self._build_mobile_settings(cuerpo)
+            self._build_search_settings(cuerpo)
             fila("Aviso flotante",
                  "Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la "
                  "respuesta, y las confirmaciones con SÍ / NO, sin quitarte el foco.",
@@ -734,6 +736,37 @@ class JarvisUIMixin:
                                         font=("Consolas", 16, "bold"))
             self.mobile_code.grid(row=3, column=0, columnspan=2, sticky="w")
 
+        def _build_search_settings(self, cuerpo: tk.Frame) -> None:
+            marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+            marco.pack(fill="x", pady=(0, 10))
+            tk.Label(marco, text="Búsqueda en internet", bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 11, "bold")).pack(anchor="w")
+            tk.Label(marco, text="Cuando le preguntas algo reciente o que no conoce, Jarvis busca en internet "
+                     "y responde citando las fuentes. Solo sale a internet el texto buscado. Usa Tavily "
+                     "(clave TAVILY_API_KEY en el .env junto a Jarvis.exe) y DuckDuckGo de respaldo.",
+                     bg=PANEL, fg=MUTED, justify="left", wraplength=620,
+                     font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
+            self.search_info = tk.Label(marco, text="", bg=PANEL, fg=MUTED, justify="left", anchor="w",
+                                        font=("Consolas", 9))
+            self.search_info.pack(anchor="w", pady=(8, 0))
+            self._refresh_search_settings()
+
+        def _refresh_search_settings(self) -> None:
+            etiqueta = getattr(self, "search_info", None)
+            if etiqueta is None:
+                return
+            import logging
+
+            import jarvis_core as core
+            from plugins import busqueda
+
+            try:
+                texto = busqueda.resumen_uso(core.obtener_preferencia, busqueda.leer_clave())
+            except Exception:  # la BD ocupada no debe romper Ajustes
+                logging.exception("No se pudo leer el uso de la búsqueda en internet.")
+                texto = "No pude leer el uso de este mes."
+            etiqueta.configure(text=texto)
+
         def _build_voice_settings(self, cuerpo: tk.Frame) -> None:
             import jarvis_voices
 
@@ -984,6 +1017,18 @@ class JarvisUIMixin:
 
                 text = jarvis_markdown.texto_plano(text)
             movil.mensaje(role, text)
+
+        def _notify_mobile_live(self, text: str | None) -> None:
+            """Respuesta en vivo para el celular; ``None`` = se descartó."""
+            movil = getattr(self, "mobile", None)
+            if movil is None or not movil.activo():
+                return
+            if text is None:
+                movil.fin_en_vivo()
+                return
+            import jarvis_markdown
+
+            movil.en_vivo(jarvis_markdown.texto_plano(text).strip())
 
         def _mobile_question(self, texto, si, no, aprobar_cb, rechazar_cb, imagen=None) -> str | None:
             """Publica una confirmación para responderla desde el celular. Devuelve su id."""

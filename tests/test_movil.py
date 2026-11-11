@@ -169,6 +169,35 @@ class ApiTests(unittest.TestCase):
         _, datos = _pedir(self.servidor, "GET", "/api/events?since=999", token=self.token)
         self.assertEqual(len(datos["events"]), 1)
 
+    def test_live_answer_replaces_itself_and_final_message_removes_it(self) -> None:
+        reloj = [0.0]
+        ahora = lambda: reloj[0]  # noqa: E731
+        self.servidor.mensaje("user", "¿qué es Python?")
+        self.assertTrue(self.servidor.en_vivo("Python es", reloj=ahora))
+        self.assertFalse(self.servidor.en_vivo("Python es un", reloj=ahora))  # muy seguido
+        reloj[0] += m.INTERVALO_EN_VIVO
+        self.assertTrue(self.servidor.en_vivo("Python es un lenguaje", reloj=ahora))
+        _, datos = _pedir(self.servidor, "GET", "/api/events?since=-1", token=self.token)
+        self.assertEqual([(e["type"], e["text"]) for e in datos["events"]],
+                         [("user", "¿qué es Python?"), ("live", "Python es un lenguaje")])
+        # El celular que ya tenía el primer borrador recibe el texto nuevo.
+        _, nuevos = _pedir(self.servidor, "GET", f"/api/events?since={datos['last'] - 1}", token=self.token)
+        self.assertEqual(nuevos["events"][-1]["text"], "Python es un lenguaje")
+        self.servidor.mensaje("assistant", "Python es un lenguaje de programación.")
+        _, datos = _pedir(self.servidor, "GET", "/api/events?since=-1", token=self.token)
+        self.assertEqual([e["type"] for e in datos["events"]], ["user", "assistant"])
+
+    def test_discarded_live_answer_tells_the_phone_to_remove_it(self) -> None:
+        self.servidor.fin_en_vivo()  # nada abierto: no publica
+        self.assertEqual(self.servidor.registro.ultimo, 0)
+        self.servidor.en_vivo("Voy a")
+        self.servidor.en_vivo("")  # nueva ronda del modelo
+        self.servidor.fin_en_vivo()  # ya cerrada: no repite
+        _, datos = _pedir(self.servidor, "GET", "/api/events?since=-1", token=self.token)
+        self.assertEqual([(e["type"], e["text"]) for e in datos["events"]], [("live", "")])
+        self.servidor.en_vivo("Otra")  # tras cerrar, la siguiente sale enseguida
+        self.assertEqual(self.servidor.registro.desde(-1)[-1]["text"], "Otra")
+
     def test_cancel_and_unknown_route(self) -> None:
         self.assertEqual(_pedir(self.servidor, "POST", "/api/cancel", token=self.token)[0], 200)
         self.assertEqual(self.eventos.get_nowait(), ("mobile_cancel",))

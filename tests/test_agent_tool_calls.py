@@ -7,6 +7,7 @@ from jarvis_agent import (
     _requested_action_count,
     procesar_con_herramientas,
 )
+import jarvis_media as media
 from jarvis_tool_registry import ToolRegistry, ToolRisk
 
 
@@ -89,6 +90,22 @@ class AgentToolCallTests(unittest.TestCase):
         self.assertEqual(payload["model"], "qwen2.5-coder:14b")
         self.assertEqual(payload["messages"][1]["content"], "Earlier question")
         self.assertEqual(len(payload["tools"]), 3)
+        # «¿Qué más me puedes contar?» sigue el tema anterior en vez de preguntar cuál.
+        self.assertIn("seguimiento corto", payload["messages"][0]["content"])
+        self.assertEqual(payload["options"]["num_predict"], 1024)
+
+    @patch("jarvis_agent.core.cargar_contexto_db", return_value="System context.")
+    @patch("jarvis_agent.core.obtener_historial", return_value=[])
+    @patch("jarvis_agent.requests.post")
+    def test_answer_cut_by_length_says_so(self, post: Mock, _history: Mock, _context: Mock) -> None:
+        respuesta = _response({"role": "assistant", "content": "1. Uno\n2. Do"})
+        respuesta.json.return_value["done_reason"] = "length"
+        post.return_value = respuesta
+        answer = procesar_con_herramientas("Explícame algo largo", "c1", self.registry, Mock(return_value=False))
+        self.assertTrue(answer.startswith("1. Uno\n2. Do…"))
+        self.assertIn("dime «cuéntame más»", answer)
+        # «sigue» solo es reanudar el vídeo (jarvis_media): el aviso no debe sugerirlo.
+        self.assertIsNone(media.detectar_comando("cuentame mas"))
 
     @patch("jarvis_agent.core.cargar_contexto_db", return_value="System context.")
     @patch("jarvis_agent.core.obtener_historial", return_value=[])
@@ -857,6 +874,71 @@ class AgentToolCallTests(unittest.TestCase):
             ),
             1,
         )
+
+
+class WebSearchFallbackTests(unittest.TestCase):
+    """«¿Qué es MCP?»: el modelo decía que no sabía en vez de usar web_search."""
+
+    def setUp(self) -> None:
+        for objetivo, valor in (
+            ("jarvis_agent.jarvis_memory.buscar_recuerdos", []),
+            ("jarvis_agent.core.cargar_contexto_db", "Contexto."),
+        ):
+            parche = patch(objetivo, return_value=valor)
+            parche.start()
+            self.addCleanup(parche.stop)
+        self.busquedas: list[str] = []
+        self.registry = ToolRegistry()
+        self.registry.register(
+            "web_search", "Busca en internet.",
+            {"type": "object", "properties": {"query": {"type": "string"}},
+             "required": ["query"], "additionalProperties": False},
+            lambda query: self.busquedas.append(query) or "Resultados: MCP es un protocolo abierto.",
+        )
+        self.no_se = "Lo siento, pero no tengo información específica sobre \"MCP\"."
+
+    @patch("jarvis_agent.requests.post")
+    def test_searches_by_itself_when_the_model_says_it_does_not_know(self, post: Mock) -> None:
+        post.side_effect = [
+            _response({"role": "assistant", "content": self.no_se}),
+            _response({"role": "assistant", "content": "MCP es un protocolo abierto.\n\nFuentes: x"}),
+        ]
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("¿Qué es MCP?", "c", self.registry, Mock(return_value=True))
+        self.assertEqual(self.busquedas, ["¿Qué es MCP?"])
+        self.assertTrue(answer.startswith("MCP es un protocolo abierto."))
+        sistema = post.call_args_list[0].kwargs["json"]["messages"][0]["content"]
+        self.assertIn("nunca digas que no tienes información sin haber buscado", sistema)
+        segunda = post.call_args_list[1].kwargs["json"]["messages"]
+        self.assertEqual(segunda[-1]["role"], "tool")
+
+    @patch("jarvis_agent.requests.post")
+    def test_only_once_and_old_answers_are_dropped_from_history(self, post: Mock) -> None:
+        post.side_effect = [
+            _response({"role": "assistant", "content": self.no_se}),
+            _response({"role": "assistant", "content": self.no_se}),
+        ]
+        historial = [("user", "¿Qué es MCP?"), ("assistant", self.no_se),
+                     ("user", "hola"), ("assistant", "Hola, ¿en qué te ayudo?")]
+        with patch("jarvis_agent.core.obtener_historial", return_value=historial):
+            answer = procesar_con_herramientas("¿Qué es MCP?", "c", self.registry, Mock(return_value=True))
+        self.assertEqual(answer, self.no_se)  # no insiste en bucle
+        self.assertEqual(len(self.busquedas), 1)
+        # (la lista de mensajes es la misma en todas las llamadas: crece después)
+        enviados = [m["content"] for m in post.call_args_list[0].kwargs["json"]["messages"][1:4]]
+        self.assertEqual(enviados, ["hola", "Hola, ¿en qué te ayudo?", "¿Qué es MCP?"])
+
+    @patch("jarvis_agent.requests.post")
+    def test_without_search_tool_nothing_changes(self, post: Mock) -> None:
+        post.return_value = _response({"role": "assistant", "content": self.no_se})
+        historial = [("user", "¿Qué es MCP?"), ("assistant", self.no_se)]
+        with patch("jarvis_agent.core.obtener_historial", return_value=historial):
+            answer = procesar_con_herramientas("¿Qué es MCP?", "c", ToolRegistry(), Mock(return_value=True))
+        self.assertEqual(answer, self.no_se)
+        self.assertEqual(post.call_count, 1)
+        mensajes = post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(len(mensajes), 4)  # el historial queda igual
+        self.assertNotIn("web_search", mensajes[0]["content"])
 
 
 if __name__ == "__main__":

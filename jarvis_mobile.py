@@ -142,6 +142,9 @@ class Vinculacion:
             self._guardar(PREFERENCIA_DISPOSITIVOS, "[]")
 
 
+INTERVALO_EN_VIVO = 0.4  # segundos entre actualizaciones de la respuesta en vivo
+
+
 class RegistroEventos:
     """Lo que ve el celular: mensajes, acciones, preguntas y estado (en memoria)."""
 
@@ -154,8 +157,18 @@ class RegistroEventos:
     def ultimo(self) -> int:
         return self._ultimo
 
-    def publicar(self, tipo: str, **datos) -> int:
+    def publicar(self, tipo: str, *, reemplaza: tuple[str, ...] = (), **datos) -> int:
+        """Añade un evento; ``reemplaza`` quita antes los eventos de esos tipos.
+
+        La respuesta en vivo («live») se publica muchas veces mientras se escribe: cada
+        una reemplaza a la anterior y el mensaje final las quita, para que el historial
+        que recibe el celular al abrir la app no se llene de borradores.
+        """
         with self._cond:
+            if reemplaza:
+                vivos = [e for e in self._eventos if e["type"] not in reemplaza]
+                self._eventos.clear()
+                self._eventos.extend(vivos)
             self._ultimo += 1
             self._eventos.append({"id": self._ultimo, "type": tipo, "ts": int(time.time()), **datos})
             self._cond.notify_all()
@@ -201,11 +214,41 @@ class ServidorMovil:
         self._pendiente: str | None = None
         self._http: ThreadingHTTPServer | None = None
         self.direccion: str | None = None
+        self._vivo_enviado = 0.0  # última vez que se publicó la respuesta en vivo
+        self._vivo_abierto = False
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
     def mensaje(self, rol: str, texto: str) -> None:
-        self.registro.publicar("user" if rol == "user" else "assistant", text=texto)
+        if rol == "user":
+            self.registro.publicar("user", text=texto)
+            return
+        self._vivo_abierto = False
+        self.registro.publicar("assistant", reemplaza=("live",), text=texto)
+
+    def en_vivo(self, texto: str, *, reloj: Callable[[], float] = time.monotonic) -> bool:
+        """Respuesta que se está escribiendo (texto completo hasta ahora).
+
+        Como mucho una cada ``INTERVALO_EN_VIVO`` segundos: el mensaje final siempre
+        llega con ``mensaje``, así que perder el último trozo no importa.
+        Devuelve si se publicó.
+        """
+        if not texto:  # nueva ronda del modelo: lo escrito hasta ahora ya no vale
+            self.fin_en_vivo()
+            return False
+        ahora = reloj()
+        if self._vivo_abierto and ahora - self._vivo_enviado < INTERVALO_EN_VIVO:
+            return False
+        self._vivo_enviado = ahora
+        self._vivo_abierto = True
+        self.registro.publicar("live", reemplaza=("live",), text=texto)
+        return True
+
+    def fin_en_vivo(self) -> None:
+        """La respuesta en vivo se descartó (cancelada o sin texto): el celular la quita."""
+        if self._vivo_abierto:
+            self._vivo_abierto = False
+            self.registro.publicar("live", reemplaza=("live",), text="")
 
     def estado(self, modo: str) -> None:
         self.registro.publicar("state", mode=modo)
