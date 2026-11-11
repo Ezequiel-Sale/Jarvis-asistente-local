@@ -85,6 +85,49 @@ class Api(private val base: String, private val token: String?) {
         return bytes to connection.getHeaderField("X-Cursor")
     }
 
+    /** Sube un archivo por partes (sin cargarlo entero en memoria); ``progress`` recibe los bytes enviados. */
+    fun postStream(path: String, input: java.io.InputStream, size: Long, progress: (Long) -> Unit): JSONObject {
+        val connection = open(path, "POST", 120000)
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/octet-stream")
+        connection.setFixedLengthStreamingMode(size)
+        connection.outputStream.use { out ->
+            val buffer = ByteArray(256 * 1024)
+            var sent = 0L
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                out.write(buffer, 0, read)
+                sent += read
+                progress(sent)
+            }
+        }
+        return JSONObject(String(read(connection), Charsets.UTF_8))
+    }
+
+    /** Descarga a ``output`` por partes; ``progress`` recibe (bytes, total o -1). */
+    fun download(path: String, output: java.io.OutputStream, progress: (Long, Long) -> Unit) {
+        val connection = open(path, "GET", 120000)
+        val code = connection.responseCode
+        if (code !in 200..299) read(connection)  // lanza ApiException con el mensaje de Jarvis
+        val total = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
+        try {
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(256 * 1024)
+                var received = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    output.write(buffer, 0, read)
+                    received += read
+                    progress(received, total)
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     /** Flujo continuo (vídeo): conexión abierta y ya comprobada; quien la usa la cierra. */
     fun openStream(path: String): HttpURLConnection {
         val connection = open(path, "GET", 5000)

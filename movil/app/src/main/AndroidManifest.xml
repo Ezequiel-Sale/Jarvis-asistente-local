@@ -63,6 +63,30 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="false"
             android:screenOrientation="sensorLandscape" />
+        <activity
+            android:name=".FilesActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait" />
+        <!-- «Compartir → Jarvis» desde cualquier app: links, textos, fotos y archivos. -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="true"
+            android:label="Jarvis (PC)"
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.DeviceDefault.Dialog.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
         <receiver
             android:name=".InstallReceiver"
             android:exported="false" />

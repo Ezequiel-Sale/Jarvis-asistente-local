@@ -36,6 +36,17 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
   ``tool_registry.execute``, con registro, como si se pidiera en la PC.
 - ``GET  /api/status?fps=1`` → temperaturas, cargas, RAM, discos, historial de ~10 min
   y, con ``fps=1``, los FPS de la ventana en primer plano (PresentMon).
+- ``POST /api/share`` {text} → un link se abre en Brave (``navigate_browser``); otro
+  texto va al portapapeles de la PC.
+- ``POST /api/upload?name=foto.jpg`` (cuerpo: el archivo, con Content-Length) → se
+  guarda en Descargas sin cargarlo entero en memoria (hasta 4 GB).
+- ``GET  /api/files/roots`` → carpetas permitidas (Descargas, Documentos y los otros
+  discos, «disco:D»); ``GET /api/files?root=…&path=sub/carpeta`` → lista;
+  ``GET /api/files/download?root=…&path=…`` → el archivo, por partes. Sin salir de
+  esas carpetas (jarvis_archivos.resolver).
+- ``GET/POST /api/clipboard`` {text} → leer o escribir el portapapeles de la PC.
+- Eventos ``file`` {root, path, name, size} y ``clipboard`` {text}: lo que Jarvis
+  le manda al celular (herramientas ``send_file_to_phone`` y ``send_clipboard_to_phone``).
 - ``GET  /api/app`` → {versionCode, versionName, size, sha256} de la última app
   compilada (``movil/Jarvis.apk`` y ``Jarvis.apk.json`` junto a Jarvis); 404 si no hay.
 - ``GET  /api/app/apk`` → el APK, para que la app se actualice sola.
@@ -72,6 +83,8 @@ import time
 from collections import deque
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import re
+import urllib.parse
 from urllib.parse import parse_qs, urlparse
 
 PUERTO = 8765
@@ -256,6 +269,10 @@ class ServidorMovil:
         audio: Callable[[threading.Event], object] | None = None,
         entrada: Callable[[list], int] | None = None,
         control_permitido: Callable[[], bool] = lambda: False,
+        carpetas: Callable[[str], Path] | None = None,
+        raices: Callable[[], list[dict]] | None = None,
+        abrir_link: Callable[[str], str] | None = None,
+        portapapeles: tuple[Callable[[], str], Callable[[str], None]] | None = None,
         tts: Callable[[str], bytes] | None = None,
         musica: Callable[[], dict] | None = None,
         portada: Callable[[], bytes | None] | None = None,
@@ -285,6 +302,11 @@ class ServidorMovil:
         self.audio = audio  # detener → bloques PCM (el primero, el formato)
         self.entrada = entrada  # eventos del touchpad → SendInput
         self.control_permitido = control_permitido
+        self.carpetas = carpetas  # "descargas"/"documentos"/"disco:D" → carpeta real
+        self.raices = raices or (lambda: [{"key": "descargas", "name": "Descargas"},
+                                          {"key": "documentos", "name": "Documentos"}])
+        self.abrir_link = abrir_link  # url → texto (por tool_registry.execute)
+        self.portapapeles = portapapeles  # (leer, escribir)
         self._control = False
         self._ultimo_control = 0.0
         self.carpeta_app = carpeta_app  # donde están Jarvis.apk y Jarvis.apk.json
@@ -393,6 +415,45 @@ class ServidorMovil:
         """Sin usar el touchpad ni mirar la pantalla en ``limite`` s: se corta solo."""
         ahora = time.monotonic() if ahora is None else ahora
         return ahora - self._ultimo_control > limite and not self.mirando(ahora)
+
+    # --- Archivos y portapapeles -------------------------------------------------------------
+
+    def _carpeta(self, consulta: dict) -> tuple[str, Path]:
+        import jarvis_archivos
+
+        raiz = consulta.get("root", ["descargas"])[0]
+        if self.carpetas is None or not self.raiz_valida(raiz):
+            raise _Error(400, "Solo se puede usar Descargas, Documentos o los otros discos.")
+        return raiz, self.carpetas(raiz)
+
+    def raiz_valida(self, raiz: str) -> bool:
+        return any(r["key"] == raiz for r in self.raices())
+
+    def subir(self, url: str, cabeceras, ip: str, origen, largo: int) -> tuple[int, str, bytes]:
+        """Archivo del celular a Descargas, leyendo el cuerpo por partes (sin pasar por ``manejar``)."""
+        import jarvis_archivos
+
+        try:
+            if not es_tailscale(ip):
+                raise _Error(403, "Solo se aceptan conexiones por Tailscale.")
+            autorizacion = cabeceras.get("Authorization", "") or ""
+            token = autorizacion[7:].strip() if autorizacion.lower().startswith("bearer ") else None
+            if not self.vinculacion.autorizado(token):
+                raise _Error(401, "Este celular no está vinculado con Jarvis.")
+            if self.carpetas is None:
+                raise _Error(501, "Recibir archivos no está disponible.")
+            nombre = parse_qs(urlparse(url).query).get("name", [""])[0]
+            try:
+                ruta = jarvis_archivos.guardar_subida(origen, largo, nombre, self.carpetas("descargas"))
+            except jarvis_archivos.ErrorArchivo as error:
+                raise _Error(400, str(error)) from error
+            except OSError as error:
+                raise _Error(507, f"No pude guardar el archivo: {error}") from error
+            logging.info("Archivo recibido del celular (%s).", jarvis_archivos.tamano_legible(largo))
+            self.eventos_app.put(("mobile_file_received", ruta.name, largo))
+            return self._json({"ok": True, "name": ruta.name})
+        except _Error as error:
+            return error.estado, "application/json", json.dumps({"error": error.mensaje}).encode("utf-8")
 
     def mirando(self, ahora: float | None = None) -> bool:
         """Si algún celular está viendo la pantalla ahora mismo."""
@@ -665,6 +726,75 @@ class ServidorMovil:
             logging.info("«¿Qué es esto?» desde el celular sobre el monitor %s.", monitor)
             self.eventos_app.put(("mobile_vision", monitor, (x, y, min(w, 1 - x), min(h, 1 - y)), pregunta))
             return self._json({"ok": True})
+        if metodo == "POST" and ruta == "/api/share":
+            texto = str(self._cuerpo_json(cuerpo).get("text", "")).strip()[:MAX_TEXTO]
+            if not texto:
+                raise _Error(400, "No llegó nada para compartir.")
+            enlace = re.search(r"https?://\S+", texto)
+            if enlace and self.abrir_link is not None:
+                try:
+                    resultado = self.abrir_link(enlace.group(0).rstrip(").,;»\"'"))
+                except Exception as error:
+                    raise _Error(409, str(error) or "No pude abrir el link.") from error
+                self.eventos_app.put(("mobile_shared", "link", enlace.group(0)))
+                return self._json({"ok": True, "text": resultado})
+            if self.portapapeles is None:
+                raise _Error(501, "El portapapeles de la PC no está disponible.")
+            self.portapapeles[1](texto)
+            self.eventos_app.put(("mobile_shared", "text", ""))
+            return self._json({"ok": True, "text": "Lo copié en el portapapeles de la PC."})
+        if ruta == "/api/clipboard" and metodo in ("GET", "POST"):
+            if self.portapapeles is None:
+                raise _Error(501, "El portapapeles de la PC no está disponible.")
+            try:
+                if metodo == "GET":
+                    return self._json({"text": self.portapapeles[0]()})
+                texto = str(self._cuerpo_json(cuerpo).get("text", ""))
+                if not texto:
+                    raise _Error(400, "No hay texto para copiar.")
+                self.portapapeles[1](texto)
+            except OSError as error:
+                raise _Error(409, str(error)) from error
+            logging.info("Portapapeles %s desde el celular.", "leído" if metodo == "GET" else "escrito")
+            return self._json({"ok": True})
+        if metodo == "GET" and ruta == "/api/files/roots":
+            return self._json({"roots": self.raices() if self.carpetas else []})
+        if metodo == "GET" and ruta == "/api/files":
+            import jarvis_archivos
+
+            raiz, base = self._carpeta(consulta)
+            relativa = consulta.get("path", [""])[0]
+            try:
+                elementos = jarvis_archivos.listar(base, relativa)
+            except jarvis_archivos.ErrorArchivo as error:
+                raise _Error(404, str(error)) from error
+            return self._json({"root": raiz, "path": relativa.strip("/\\"), "items": elementos})
+        if metodo == "GET" and ruta == "/api/files/download":
+            import jarvis_archivos
+
+            _raiz, base = self._carpeta(consulta)
+            try:
+                archivo = jarvis_archivos.resolver(base, consulta.get("path", [""])[0])
+            except jarvis_archivos.ErrorArchivo as error:
+                raise _Error(404, str(error)) from error
+            if not archivo.is_file():
+                raise _Error(404, "Ese archivo no existe.")
+            tamano = archivo.stat().st_size
+            logging.info("El celular descarga un archivo (%s).", jarvis_archivos.tamano_legible(tamano))
+
+            def enviar(salida) -> None:
+                try:
+                    with open(archivo, "rb") as origen:
+                        while trozo := origen.read(jarvis_archivos.BLOQUE):
+                            salida.write(trozo)
+                except OSError:
+                    pass  # el celular canceló
+
+            nombre = urllib.parse.quote(archivo.name)
+            return 200, "application/octet-stream", enviar, {
+                "Content-Length": str(tamano),
+                "Content-Disposition": f"attachment; filename*=UTF-8''{nombre}",
+            }
         if metodo == "GET" and ruta == "/api/media":
             if self.musica is None:
                 raise _Error(501, "El control multimedia no está disponible.")
@@ -766,7 +896,13 @@ class _Manejador(BaseHTTPRequestHandler):
             largo = int(self.headers.get("Content-Length", "0") or 0)
         except ValueError:
             largo = -1
-        if largo < 0 or largo > MAX_AUDIO:
+        if metodo == "POST" and urlparse(self.path).path.rstrip("/") == "/api/upload":
+            # Los archivos no pasan por ``manejar``: se escriben a disco por partes.
+            estado, tipo, cuerpo = movil.subir(self.path, self.headers, self.client_address[0], self.rfile, largo)
+            if estado != 200:
+                self.close_connection = True  # el cuerpo quizá no se leyó
+            extra = {}
+        elif largo < 0 or largo > MAX_AUDIO:
             estado, tipo, cuerpo = 413, "application/json", b'{"error": "Demasiado grande."}'
             extra = {}
             self.close_connection = True
@@ -775,9 +911,11 @@ class _Manejador(BaseHTTPRequestHandler):
             respuesta = movil.manejar(metodo, self.path, self.headers, datos, self.client_address[0])
             estado, tipo, cuerpo = respuesta[:3]
             extra = respuesta[3] if len(respuesta) > 3 else {}
-        if callable(cuerpo):  # flujo continuo (vídeo): sin largo, hasta cerrar
+        if callable(cuerpo):  # flujo continuo (vídeo, descargas): hasta cerrar
             self.close_connection = True
             self.send_response(estado)
+            for nombre, valor in extra.items():
+                self.send_header(nombre, valor)
             self.send_header("Content-Type", tipo)
             self.send_header("Cache-Control", "no-store")
             self.send_header("Connection", "close")

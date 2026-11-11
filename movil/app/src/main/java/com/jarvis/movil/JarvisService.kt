@@ -38,6 +38,7 @@ class JarvisService : Service() {
         const val ID_FOREGROUND = 1
         const val ID_REPLY = 2
         const val ID_QUESTION = 3
+        const val ID_CLIPBOARD = 4
         private const val HEADSET_WINDOW_MS = 3 * 60 * 1000L
 
         /** Arranca (o refresca) el servicio si la app está vinculada y los avisos están activos. */
@@ -214,11 +215,46 @@ class JarvisService : Service() {
                 }
             }
             "question" -> if (!visible && event.optString("qid") == pending) notifyQuestion(event)
+            // Lo que Jarvis manda a propósito se avisa siempre, aunque la app esté a la vista.
+            "file" -> notifyFile(event)
+            "clipboard" -> notifyClipboard(event.optString("text"))
             "resolved" -> if (event.optString("qid") == pendingQuestion) {
                 manager.cancel(ID_QUESTION)
                 pendingQuestion = null
             }
         }
+    }
+
+    private fun notifyFile(event: JSONObject) {
+        val name = event.optString("name")
+        val open = PendingIntent.getActivity(this, 20 + (nextAlertId % 50),
+            Intent(this, FilesActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(FilesActivity.EXTRA_ROOT, event.optString("root"))
+                .putExtra(FilesActivity.EXTRA_PATH, event.optString("path"))
+                .putExtra(FilesActivity.EXTRA_NAME, name),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        manager.notify(nextAlertId++, Notification.Builder(this, CHANNEL_ALERTS)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle("Jarvis te manda un archivo")
+            .setContentText("«$name» (${Transfers.readable(event.optLong("size"))}) · toca para bajarlo")
+            .setContentIntent(open)
+            .addAction(Notification.Action.Builder(null, "Bajar", open).build())
+            .setAutoCancel(true)
+            .build())
+    }
+
+    private fun notifyClipboard(text: String) {
+        if (text.isEmpty()) return
+        manager.notify(ID_CLIPBOARD, Notification.Builder(this, CHANNEL_ALERTS)
+            .setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle("Portapapeles de la PC")
+            .setContentText(text.take(200))
+            .setStyle(Notification.BigTextStyle().bigText(text.take(1000)))
+            .setContentIntent(NotifyReceiver.copyIntent(this, text, 30))
+            .addAction(Notification.Action.Builder(null, "Copiar", NotifyReceiver.copyIntent(this, text, 31)).build())
+            .setAutoCancel(true)
+            .build())
     }
 
     private fun notifyReply(text: String) {

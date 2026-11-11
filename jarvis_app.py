@@ -32,6 +32,7 @@ import jarvis_mobile
 import jarvis_video_movil
 import jarvis_system_info
 import jarvis_fps
+import jarvis_archivos
 import jarvis_input
 import jarvis_audio_movil
 import jarvis_media
@@ -254,6 +255,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             audio=jarvis_audio_movil.capturar,
             entrada=jarvis_input.aplicar,
             control_permitido=lambda: self._mobile_control_enabled,
+            carpetas=jarvis_archivos.carpeta,
+            raices=jarvis_archivos.raices,
+            abrir_link=lambda url: str(self.tool_registry.execute("navigate_browser", {"url": url}, origin="celular")),
+            portapapeles=(jarvis_archivos.leer_portapapeles, jarvis_archivos.escribir_portapapeles),
         )
         self.fps_meter = jarvis_fps.MedidorFPS()
         try:
@@ -293,6 +298,27 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             label="Control remoto desde el celular",
             timeout_seconds=10,
             exposed=False,  # solo tras la tarjeta de confirmación; el modelo no la ve
+        )
+        self.tool_registry.register(
+            "send_file_to_phone",
+            "Manda al celular del usuario un archivo (ruta completa) de Descargas, Documentos o de los otros "
+            "discos (D:, E:…; no del disco del sistema). Le llega como notificación para descargarlo.",
+            {"type": "object", "properties": {"path": {"type": "string", "description": "Ruta completa del archivo."}},
+             "required": ["path"]},
+            self._tool_send_file_to_phone,
+            risk=ToolRisk.LOW,
+            label="Mandar archivo al celular",
+            timeout_seconds=10,
+        )
+        self.tool_registry.register(
+            "send_clipboard_to_phone",
+            "Manda al celular el texto que el usuario copió en la PC («manda lo que copié al celular»).",
+            {"type": "object", "properties": {}},
+            self._tool_send_clipboard_to_phone,
+            risk=ToolRisk.LOW,
+            label="Mandar portapapeles al celular",
+            timeout_seconds=10,
+            record_result=False,  # el texto copiado puede ser privado
         )
         self.integraciones = cargar_integraciones()
         self.plugins = GestorPlugins()
@@ -2183,6 +2209,15 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._on_mobile_control_request()
                     elif event[0] == "mobile_control_changed":
                         self._refresh_screen_badge()
+                    elif event[0] == "mobile_file_received":
+                        self._add_message("assistant", f"📥 Recibí «{event[1]}» del celular "
+                                          f"({jarvis_archivos.tamano_legible(event[2])}). Está en Descargas.")
+                    elif event[0] == "mobile_shared":
+                        if event[1] == "link":
+                            self._add_message("assistant", f"🔗 Abrí en la PC el link que compartiste: {event[2]}")
+                        else:
+                            self._add_message("assistant", "📋 Copié en el portapapeles de la PC el texto que "
+                                                           "compartiste desde el celular.")
                     elif event[0] == "mobile_vision":
                         self._start_mobile_vision(event[1], event[2], event[3])
                     elif event[0] == "mobile_paired":
@@ -3387,6 +3422,33 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         if not self._mobile_control_enabled:
             self.mobile.activar_control(False)
         self._refresh_mobile_settings()
+
+    def _tool_send_file_to_phone(self, path: str) -> str:
+        if not self.mobile.activo():
+            raise ToolError("La app del celular no está activada en Ajustes.")
+        archivo = Path(path)
+        for raiz in (r["key"] for r in jarvis_archivos.raices()):
+            base = jarvis_archivos.carpeta(raiz)
+            try:
+                relativa = archivo.resolve().relative_to(base.resolve())
+            except (OSError, ValueError):
+                continue
+            if not archivo.is_file():
+                raise ToolError("Ese archivo no existe.")
+            tamano = archivo.stat().st_size
+            self.mobile.registro.publicar("file", root=raiz, path=relativa.as_posix(), name=archivo.name, size=tamano)
+            return (f"Le mandé «{archivo.name}» ({jarvis_archivos.tamano_legible(tamano)}) al celular: "
+                    "le llega como notificación para descargarlo.")
+        raise ToolError("Solo puedo mandar archivos de Descargas, Documentos o los otros discos (no del disco del sistema).")
+
+    def _tool_send_clipboard_to_phone(self) -> str:
+        if not self.mobile.activo():
+            raise ToolError("La app del celular no está activada en Ajustes.")
+        texto = jarvis_archivos.leer_portapapeles()
+        if not texto.strip():
+            return "El portapapeles de la PC no tiene texto."
+        self.mobile.registro.publicar("clipboard", text=texto)
+        return "Le mandé al celular lo que copiaste; tócalo en la notificación para copiarlo allí."
 
     def _tool_mobile_remote_control(self, enable: bool) -> str:
         if enable and not self._mobile_control_enabled:

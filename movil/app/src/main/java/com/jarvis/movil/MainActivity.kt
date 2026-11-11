@@ -88,6 +88,9 @@ class MainActivity : Activity() {
             startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
         }
         findViewById<View>(R.id.screen).setOnClickListener { openScreen() }
+        findViewById<View>(R.id.files).setOnClickListener {
+            startActivity(Intent(this, FilesActivity::class.java))
+        }
         val root = findViewById<ViewGroup>(android.R.id.content).getChildAt(0) as LinearLayout
         tabs = Tabs.bar(this, "chat").apply { visibility = View.GONE }
         root.addView(tabs)
@@ -174,6 +177,7 @@ class MainActivity : Activity() {
         setupError.text = message
         pair.isEnabled = true
         findViewById<View>(R.id.screen).visibility = View.GONE
+        findViewById<View>(R.id.files).visibility = View.GONE
         tabs.visibility = View.GONE
         status.text = "● SIN VINCULAR"
         status.setTextColor(getColor(R.color.muted))
@@ -184,6 +188,7 @@ class MainActivity : Activity() {
         scroll.visibility = View.VISIBLE
         composer.visibility = View.VISIBLE
         findViewById<View>(R.id.screen).visibility = View.VISIBLE
+        findViewById<View>(R.id.files).visibility = View.VISIBLE
         tabs.visibility = View.VISIBLE
     }
 

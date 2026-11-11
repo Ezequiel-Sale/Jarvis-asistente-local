@@ -16,6 +16,13 @@ class NotifyReceiver : BroadcastReceiver() {
         const val EXTRA_QID = "qid"
         const val EXTRA_APPROVE = "aprobar"
         const val EXTRA_TEXT = "texto"
+        const val ACTION_COPY = "com.jarvis.movil.COPIAR"
+
+        /** Botón «Copiar» del portapapeles que manda la PC (escribir el portapapeles sí se permite en segundo plano). */
+        fun copyIntent(context: Context, text: String, code: Int): PendingIntent =
+            PendingIntent.getBroadcast(context, code,
+                Intent(context, NotifyReceiver::class.java).setAction(ACTION_COPY).putExtra(EXTRA_TEXT, text),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         fun answerIntent(context: Context, qid: String, approve: Boolean, code: Int): PendingIntent =
             PendingIntent.getBroadcast(context, code,
@@ -42,6 +49,14 @@ class NotifyReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_COPY) {
+            val text = intent.getStringExtra(EXTRA_TEXT) ?: return
+            context.getSystemService(android.content.ClipboardManager::class.java)
+                .setPrimaryClip(android.content.ClipData.newPlainText("Portapapeles de la PC", text))
+            context.getSystemService(NotificationManager::class.java).cancel(JarvisService.ID_CLIPBOARD)
+            android.widget.Toast.makeText(context, "Copiado en el celular.", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         if (intent.action != ACTION_ANSWER) return
         val qid = intent.getStringExtra(EXTRA_QID) ?: return
         val result = goAsync()
