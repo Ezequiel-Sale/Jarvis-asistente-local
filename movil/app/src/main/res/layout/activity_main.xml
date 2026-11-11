@@ -42,6 +42,17 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/screen"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Ver las pantallas de la PC"
+            android:gravity="center"
+            android:text="🖥"
+            android:textSize="20sp"
+            android:visibility="gone" />
+
+        <TextView
             android:id="@+id/menu"
             android:layout_width="40dp"
             android:layout_height="40dp"

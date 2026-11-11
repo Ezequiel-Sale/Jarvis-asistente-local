@@ -136,6 +136,30 @@ def capturar_monitor(monitor: Monitor):
     )
 
 
+def pantallas_para_movil() -> list[dict]:
+    """Monitores para el selector de la app del celular (con la numeración fija)."""
+    monitores = sorted(renumerar(listar_monitores()), key=lambda m: m.numero)
+    return [{"number": m.numero, "width": m.ancho, "height": m.alto, "primary": m.principal}
+            for m in monitores]
+
+
+def captura_para_movil(numero: int, ancho: int, calidad: int) -> bytes:
+    """JPEG reducido de un monitor (0 = todos juntos) para verlo en vivo desde el celular."""
+    from PIL import Image, ImageGrab
+
+    if numero == 0:
+        imagen = ImageGrab.grab(all_screens=True)
+    else:
+        imagen = capturar_monitor(elegir_monitor(renumerar(listar_monitores()), numero))
+    imagen = imagen.convert("RGB")
+    if imagen.width > ancho:
+        imagen = imagen.resize((ancho, max(1, round(imagen.height * ancho / imagen.width))),
+                               Image.Resampling.BILINEAR)
+    buffer = io.BytesIO()
+    imagen.save(buffer, format="JPEG", quality=calidad)
+    return buffer.getvalue()
+
+
 def preparar_imagen(imagen, max_lado: int = MAX_LADO) -> bytes:
     """Reduce la captura si hace falta y la codifica en JPEG (en memoria)."""
     imagen = imagen.convert("RGB")

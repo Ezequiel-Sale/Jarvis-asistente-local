@@ -3,6 +3,7 @@ package com.jarvis.movil
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -87,6 +88,7 @@ class MainActivity : Activity() {
         mic.setOnClickListener { toggleMic() }
         pair.setOnClickListener { doPair() }
         findViewById<View>(R.id.menu).setOnClickListener { showMenu(it) }
+        findViewById<View>(R.id.screen).setOnClickListener { openScreen() }
         address.setText(prefs.getString("base", ""))
         if (prefs.getBoolean("leer", false)) startTts()
     }
@@ -129,6 +131,7 @@ class MainActivity : Activity() {
         composer.visibility = View.GONE
         setupError.text = message
         pair.isEnabled = true
+        findViewById<View>(R.id.screen).visibility = View.GONE
         status.text = "● SIN VINCULAR"
         status.setTextColor(getColor(R.color.muted))
     }
@@ -137,6 +140,11 @@ class MainActivity : Activity() {
         setup.visibility = View.GONE
         scroll.visibility = View.VISIBLE
         composer.visibility = View.VISIBLE
+        findViewById<View>(R.id.screen).visibility = View.VISIBLE
+    }
+
+    private fun openScreen() {
+        if (api() != null) startActivity(Intent(this, ScreenActivity::class.java))
     }
 
     private fun doPair() {
@@ -511,6 +519,7 @@ class MainActivity : Activity() {
         val reading = prefs.getBoolean("leer", false)
         val menu = PopupMenu(this, anchor)
         menu.menu.add(0, 1, 0, if (reading) "No leer las respuestas en voz alta" else "Leer las respuestas en voz alta")
+        menu.menu.add(0, 4, 1, "Ver las pantallas de la PC")
         menu.menu.add(0, 2, 1, "Cancelar lo que está haciendo")
         menu.menu.add(0, 3, 2, "Desvincular este celular")
         menu.setOnMenuItemClickListener { item ->
@@ -529,6 +538,7 @@ class MainActivity : Activity() {
                         }
                     }
                 }
+                4 -> openScreen()
                 3 -> AlertDialog.Builder(this)
                     .setMessage("¿Desvincular este celular? Para volver a usarlo tendrás que vincularlo con un código nuevo.")
                     .setPositiveButton("Desvincular") { _, _ -> unpair("") }

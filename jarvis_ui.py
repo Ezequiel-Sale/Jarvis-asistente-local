@@ -715,7 +715,7 @@ class JarvisUIMixin:
             marco.grid_columnconfigure(0, weight=1)
             tk.Label(marco, text="App del celular", bg=PANEL, fg=TEXT,
                      font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
-            tk.Label(marco, text="Chatea y da órdenes a esta PC desde la app de Android, en casa o fuera. "
+            tk.Label(marco, text="Chatea, da órdenes y mira las pantallas de esta PC desde la app de Android, en casa o fuera. "
                      "Solo funciona por Tailscale (red privada y cifrada entre tus dispositivos) y con "
                      "celulares que hayas vinculado con un código.", bg=PANEL, fg=MUTED, justify="left",
                      wraplength=540, font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
@@ -729,6 +729,10 @@ class JarvisUIMixin:
             self.mobile_pair_button = self._ui_button(fila_botones, "VINCULAR CELULAR", self._pair_mobile)
             self.mobile_pair_button.pack(side="left")
             self._ui_button(fila_botones, "DESVINCULAR", self._unpair_mobile, fg=MUTED).pack(side="left", padx=(6, 0))
+            self.mobile_screen_button = self._ui_button(botones, "▣  VER PANTALLA …", self._toggle_mobile_screen,
+                                                        fg=MUTED)
+            self.mobile_screen_button.configure(width=30)
+            self.mobile_screen_button.pack(anchor="e", pady=(6, 0))
             self.mobile_info = tk.Label(marco, text="", bg=PANEL, fg=MUTED, justify="left", anchor="w",
                                         font=("Consolas", 9))
             self.mobile_info.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))

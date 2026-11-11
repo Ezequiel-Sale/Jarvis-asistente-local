@@ -233,11 +233,19 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.events,
             jarvis_mobile.Vinculacion(core.obtener_preferencia, core.guardar_preferencia),
             ocupado=lambda: bool(self.busy),
+            pantallas=jarvis_vision.pantallas_para_movil,
+            captura=jarvis_vision.captura_para_movil,
+            pantalla_permitida=lambda: self._mobile_screen_enabled,
         )
         try:
             self._mobile_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_ACTIVO) == "1"
         except Exception:
             self._mobile_enabled = False
+        try:  # ver la pantalla desde el celular: activado salvo que se apague en Ajustes
+            self._mobile_screen_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_PANTALLA) != "0"
+        except Exception:
+            self._mobile_screen_enabled = True
+        self._screen_badge: tk.Toplevel | None = None
         self._ensure_mobile_server()
         try:
             self._interrupt_enabled = core.obtener_preferencia(self._PREFERENCIA_INTERRUMPIR) != "0"
@@ -2083,6 +2091,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             respuestas[0 if event[2] else 1]()
                     elif event[0] == "mobile_cancel":
                         self._cancel_current_operation()
+                    elif event[0] == "mobile_screen":
+                        self._show_screen_badge()
                     elif event[0] == "mobile_paired":
                         self.mobile_code.configure(text="✓ Celular vinculado")
                         self._refresh_mobile_settings()
@@ -3179,6 +3189,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 "Vinculados: " + ", ".join(vinculados) if vinculados else "Ningún celular vinculado todavía."
             )
         self.mobile_info.configure(text=texto)
+        pantalla = getattr(self, "mobile_screen_button", None)
+        if pantalla is not None:
+            pantalla.configure(text="▣  VER PANTALLA: SÍ" if self._mobile_screen_enabled else "▣  VER PANTALLA: NO",
+                               fg=CYAN if self._mobile_screen_enabled else MUTED)
         self.mobile_pair_button.configure(state="normal" if self.mobile.activo() else "disabled")
 
     def _toggle_mobile(self) -> None:
@@ -3189,6 +3203,50 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             logging.exception("No se pudo guardar el ajuste de la app del celular.")
         self.mobile_code.configure(text="")
         self._ensure_mobile_server()
+
+    def _toggle_mobile_screen(self) -> None:
+        self._mobile_screen_enabled = not self._mobile_screen_enabled
+        try:
+            core.guardar_preferencia(jarvis_mobile.PREFERENCIA_PANTALLA, "1" if self._mobile_screen_enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar el ajuste de ver la pantalla desde el celular.")
+        if not self._mobile_screen_enabled:
+            self._hide_screen_badge()
+        self._refresh_mobile_settings()
+
+    SCREEN_BADGE_MS = 1000
+
+    def _show_screen_badge(self) -> None:
+        """Aviso siempre visible mientras un celular ve la pantalla; clic = dejar de compartirla."""
+        if self._screen_badge is None:
+            aviso = tk.Toplevel(self.root)
+            aviso.overrideredirect(True)
+            aviso.attributes("-topmost", True)
+            aviso.configure(bg=CYAN)
+            etiqueta = tk.Label(aviso, text="📱  El celular está viendo la pantalla  ·  clic para cortar",
+                                bg=PANEL, fg=CYAN, font=("Segoe UI", 10, "bold"), padx=14, pady=6,
+                                cursor="hand2")
+            etiqueta.pack(padx=1, pady=1)
+            etiqueta.bind("<Button-1>", lambda _e: self._toggle_mobile_screen())
+            aviso.update_idletasks()
+            x = (aviso.winfo_screenwidth() - aviso.winfo_reqwidth()) // 2
+            aviso.geometry(f"+{max(0, x)}+8")
+            self._screen_badge = aviso
+            self.root.after(self.SCREEN_BADGE_MS, self._check_screen_badge)
+
+    def _check_screen_badge(self) -> None:
+        if self._screen_badge is None:
+            return
+        if self.mobile.mirando() and self._mobile_screen_enabled:
+            self.root.after(self.SCREEN_BADGE_MS, self._check_screen_badge)
+        else:
+            logging.info("El celular dejó de ver la pantalla.")
+            self._hide_screen_badge()
+
+    def _hide_screen_badge(self) -> None:
+        aviso, self._screen_badge = self._screen_badge, None
+        if aviso is not None and aviso.winfo_exists():
+            aviso.destroy()
 
     def _pair_mobile(self) -> None:
         codigo = self.mobile.vinculacion.nuevo_codigo()

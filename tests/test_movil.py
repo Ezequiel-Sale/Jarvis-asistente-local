@@ -32,6 +32,59 @@ def _vincular(servidor):
     return _pedir(servidor, "POST", "/api/pair", {"code": codigo, "device": "Motorola"})[1]["token"]
 
 
+class ScreenTests(unittest.TestCase):
+    """Ver la pantalla desde el celular: permiso, parámetros acotados y aviso en la PC."""
+
+    def setUp(self) -> None:
+        self.permitido = True
+        self.pedidas: list[tuple[int, int, int]] = []
+
+        def captura(monitor, ancho, calidad):
+            self.pedidas.append((monitor, ancho, calidad))
+            if monitor == 9:
+                raise ValueError("No existe el monitor 9.")
+            return b"jpeg"
+
+        self.eventos: queue.Queue = queue.Queue()
+        guardado: dict[str, str] = {}
+        vinculacion = m.Vinculacion(guardado.get, guardado.__setitem__)
+        self.servidor = m.ServidorMovil(
+            self.eventos, vinculacion, captura=captura,
+            pantallas=lambda: [{"number": 1, "width": 2560, "height": 1440, "primary": True}],
+            pantalla_permitida=lambda: self.permitido,
+        )
+        self.token = _vincular(self.servidor)
+        self.eventos.get_nowait()  # mobile_paired
+
+    def test_requires_pairing(self) -> None:
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/screen")[0], 401)
+        self.assertEqual(self.pedidas, [])
+
+    def test_frames_with_clamped_parameters_and_watch_notice(self) -> None:
+        self.assertFalse(self.servidor.mirando())
+        estado, cuerpo = _pedir(self.servidor, "GET", "/api/screen?n=1&w=99999&q=5", token=self.token)
+        self.assertEqual((estado, cuerpo), (200, b"jpeg"))
+        _pedir(self.servidor, "GET", "/api/screen", token=self.token)
+        self.assertEqual(self.pedidas, [(1, 2560, 25), (0, 1280, 60)])
+        self.assertTrue(self.servidor.mirando())
+        self.assertFalse(self.servidor.mirando(ahora=10**9))
+        # La PC se entera una sola vez de que alguien empezó a mirar.
+        self.assertEqual(self.eventos.get_nowait(), ("mobile_screen",))
+        self.assertTrue(self.eventos.empty())
+
+    def test_disabled_or_errors(self) -> None:
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/screen?n=9", token=self.token)[0], 404)
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/screen?n=x", token=self.token)[0], 400)
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/screens", token=self.token)[1]["screens"][0]["number"], 1)
+        self.permitido = False
+        estado, datos = _pedir(self.servidor, "GET", "/api/screen", token=self.token)
+        self.assertEqual(estado, 403)
+        self.assertIn("Ajustes", datos["error"])
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/screens", token=self.token)[1],
+                         {"allowed": False, "screens": []})
+        self.assertFalse(self.servidor.mirando())
+
+
 class NetworkTests(unittest.TestCase):
     def test_only_tailscale_addresses(self) -> None:
         self.assertTrue(m.es_tailscale("100.104.121.13"))

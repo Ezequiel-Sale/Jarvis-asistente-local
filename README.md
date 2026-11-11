@@ -28,7 +28,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Voz** | «Hey Jarvis… sube el volumen», «desactiva la palabra de activación», «deja de escucharme». Con los auriculares puestos, decir «Hey Jarvis» mientras habla lo interrumpe. Seis voces (España, México y Argentina) para elegir en **⚙ Ajustes** o con «cambia tu voz a la argentina» |
 | **Apariencia** | Temas Cian, Mark (rojo y dorado) y Claro: «cambia al tema rojo», «pon el modo claro» o desde **⚙ Ajustes**. Las respuestas muestran negritas, listas, código, tablas y enlaces; cada acción aparece como una tarjeta con su estado, y las confirmaciones aparecen dentro del chat. Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la respuesta (y las confirmaciones con SÍ / NO) sin quitarte el foco. «Modo compacto» deja solo el orbe en una ventanita siempre visible |
 | **Undervolt de la GPU (AMD)** | Comprueba cada minuto que la GPU tenga aplicado tu perfil de Adrenalin (`undervolt.xml` en Documentos) y lo reaplica si se perdió tras un reinicio o un pantallazo negro. «Aplica el undervolt», «¿está aplicado el undervolt?». Si se pierde 3 veces en una hora deja de reaplicarlo y te avisa |
-| **App del celular (Android)** | Chat y órdenes a la PC desde el teléfono, por texto o voz, en casa o fuera. Va solo por [Tailscale](https://tailscale.com) (red privada y cifrada entre tus dispositivos), está desactivada por defecto y cada celular se vincula con un código que muestra Jarvis. Las confirmaciones se responden desde el teléfono y las respuestas se ven mientras Jarvis las escribe |
+| **App del celular (Android)** | Chat y órdenes a la PC desde el teléfono, por texto o voz, en casa o fuera. Va solo por [Tailscale](https://tailscale.com) (red privada y cifrada entre tus dispositivos), está desactivada por defecto y cada celular se vincula con un código que muestra Jarvis. Las confirmaciones se responden desde el teléfono y las respuestas se ven mientras Jarvis las escribe. Con 🖥 ves las pantallas de la PC en vivo (solo ver) y le das órdenes sobre lo que ves; mientras miras, la PC muestra un aviso |
 | **Diagnóstico** | «Diagnóstico», «historial de acciones», «¿cuál fue la última acción?» |
 
 ## Seguridad y privacidad
@@ -127,6 +127,7 @@ Las integraciones se configuran en `integraciones.json`, que se crea solo al arr
    ```
    e instala `movil/app/build/outputs/apk/debug/app-debug.apk` en el teléfono.
 3. En Jarvis: **⚙ Ajustes → App del celular**, actívala y pulsa «VINCULAR CELULAR». Escribe en la app la dirección y el código que aparecen.
+4. Para ver las pantallas de la PC, toca 🖥 en la app: elige el monitor, acerca con dos dedos y escribe o dicta órdenes abajo. Mientras miras, la PC muestra un aviso arriba; un clic en él (o «VER PANTALLA: NO» en Ajustes) lo corta.
 
 ## Tests y compilación
 

@@ -22,6 +22,10 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
 - ``POST /api/answer`` {qid, approve}
 - ``POST /api/cancel``
 - ``GET  /api/question/<qid>/image`` → JPEG de la captura de una confirmación
+- ``GET  /api/screens`` → {allowed, screens: [{number, width, height, primary}]}
+- ``GET  /api/screen?n=0&w=1280&q=60`` → JPEG de la pantalla en vivo (n=0: todas
+  juntas). Solo para ver: no se puede controlar la PC. Se desactiva en Ajustes, y
+  mientras un celular mira, la PC muestra un aviso.
 """
 
 import hashlib
@@ -47,6 +51,10 @@ MAX_INTENTOS = 5
 MAX_TEXTO = 2000
 MAX_AUDIO = 6 * 1024 * 1024  # ~3 min a 16 kHz mono
 MAX_ESPERA = 25
+PREFERENCIA_PANTALLA = "movil_pantalla"
+MIRANDO_SEGUNDOS = 4.0  # sin capturas en este tiempo = el celular dejó de mirar
+ANCHO_PANTALLA = (480, 2560, 1280)  # mínimo, máximo y por defecto
+CALIDAD_PANTALLA = (25, 85, 60)
 RED_TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
 
 
@@ -204,6 +212,9 @@ class ServidorMovil:
         *,
         ocupado: Callable[[], bool] = lambda: False,
         nombre: str = "Jarvis",
+        pantallas: Callable[[], list[dict]] | None = None,
+        captura: Callable[[int, int, int], bytes] | None = None,
+        pantalla_permitida: Callable[[], bool] = lambda: True,
     ) -> None:
         self.eventos_app = eventos_app  # cola de la app: todo lo que toca Tk pasa por ahí
         self.vinculacion = vinculacion
@@ -216,6 +227,11 @@ class ServidorMovil:
         self.direccion: str | None = None
         self._vivo_enviado = 0.0  # última vez que se publicó la respuesta en vivo
         self._vivo_abierto = False
+        self.pantallas = pantallas
+        self.captura = captura  # (monitor, ancho, calidad) → JPEG; corre en el hilo HTTP
+        self.pantalla_permitida = pantalla_permitida
+        self._captura_lock = threading.Lock()
+        self._ultima_captura: float | None = None
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
@@ -265,6 +281,47 @@ class ServidorMovil:
             self._pendiente = None
         self._imagenes.pop(qid, None)
         self.registro.publicar("resolved", qid=qid, text=texto)
+
+    def mirando(self, ahora: float | None = None) -> bool:
+        """Si algún celular está viendo la pantalla ahora mismo."""
+        if self._ultima_captura is None:
+            return False
+        ahora = time.monotonic() if ahora is None else ahora
+        return ahora - self._ultima_captura < MIRANDO_SEGUNDOS
+
+    def _pantalla(self, consulta: dict) -> tuple[int, str, bytes]:
+        if self.captura is None or not self.pantalla_permitida():
+            raise _Error(403, "Ver la pantalla está desactivado en los Ajustes de Jarvis.")
+
+        def numero(nombre: str, limites: tuple[int, int, int]) -> int:
+            minimo, maximo, defecto = limites
+            try:
+                valor = int(consulta.get(nombre, [str(defecto)])[0])
+            except ValueError as error:
+                raise _Error(400, "Parámetros no válidos.") from error
+            return max(minimo, min(maximo, valor))
+
+        try:
+            monitor = max(0, int(consulta.get("n", ["0"])[0]))
+        except ValueError as error:
+            raise _Error(400, "Parámetros no válidos.") from error
+        ancho, calidad = numero("w", ANCHO_PANTALLA), numero("q", CALIDAD_PANTALLA)
+        if not self._captura_lock.acquire(timeout=5):
+            raise _Error(503, "La PC está ocupada capturando; reintenta.")
+        try:
+            imagen = self.captura(monitor, ancho, calidad)
+        except ValueError as error:  # monitor inexistente
+            raise _Error(404, str(error)) from error
+        except OSError as error:
+            raise _Error(503, f"No pude capturar la pantalla: {error}") from error
+        finally:
+            self._captura_lock.release()
+        empezo = not self.mirando()
+        self._ultima_captura = time.monotonic()
+        if empezo:
+            logging.info("Un celular empezó a ver la pantalla.")
+            self.eventos_app.put(("mobile_screen",))
+        return 200, "image/jpeg", imagen
 
     # --- HTTP ----------------------------------------------------------------------
 
@@ -348,6 +405,15 @@ class ServidorMovil:
             if imagen is None:
                 raise _Error(404, "Esa confirmación ya no tiene imagen.")
             return 200, "image/jpeg", imagen
+        if metodo == "GET" and ruta == "/api/screens":
+            permitido = self.captura is not None and bool(self.pantalla_permitida())
+            try:
+                lista = self.pantallas() if permitido and self.pantallas else []
+            except OSError as error:
+                raise _Error(503, f"No pude leer los monitores: {error}") from error
+            return self._json({"allowed": permitido, "screens": lista})
+        if metodo == "GET" and ruta == "/api/screen":
+            return self._pantalla(consulta)
         if metodo == "POST" and ruta == "/api/message":
             texto = " ".join(str(self._cuerpo_json(cuerpo).get("text", "")).split())
             if not texto:
