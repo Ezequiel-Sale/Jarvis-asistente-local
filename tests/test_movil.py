@@ -230,6 +230,49 @@ class NoticeAndVoiceTests(unittest.TestCase):
         self.assertEqual(_pedir(self.servidor, "POST", "/api/tts", {"text": "x"})[0], 401)
 
 
+class MediaAndStatusTests(unittest.TestCase):
+    """Pestañas Música y Equipo: solo herramientas de riesgo bajo, por la función inyectada."""
+
+    def setUp(self) -> None:
+        self.acciones: list[tuple] = []
+
+        def accion(herramienta, argumentos):
+            self.acciones.append((herramienta, argumentos))
+            if argumentos.get("app") == "nada":
+                raise RuntimeError("No encuentro audio de «nada».")
+            return "Hecho."
+
+        guardado: dict[str, str] = {}
+        self.servidor = m.ServidorMovil(
+            queue.Queue(), m.Vinculacion(guardado.get, guardado.__setitem__),
+            musica=lambda: {"playing": {"app": "Spotify"}, "apps": []},
+            portada=lambda: b"\x89PNG-imagen", accion=accion,
+            estado_equipo=lambda fps: {"gpu": 50.0, "fps": {"fps": 144} if fps else None},
+        )
+        self.token = _vincular(self.servidor)
+
+    def test_media_reads_and_cover(self) -> None:
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/media", token=self.token)[1]["playing"]["app"], "Spotify")
+        estado, tipo, cuerpo = self.servidor.manejar("GET", "/api/media/cover", {"Authorization": f"Bearer {self.token}"},
+                                                      b"", TS)
+        self.assertEqual((estado, tipo, cuerpo), (200, "image/png", b"\x89PNG-imagen"))
+
+    def test_only_whitelisted_tools_run(self) -> None:
+        pedir = lambda datos: _pedir(self.servidor, "POST", "/api/media", datos, token=self.token)
+        self.assertEqual(pedir({"tool": "media_control", "args": {"action": "next"}}), (200, {"ok": True, "text": "Hecho."}))
+        self.assertEqual(pedir({"tool": "power_control", "args": {"action": "shutdown"}})[0], 400)
+        self.assertEqual(pedir({"tool": "set_app_volume", "args": "x"})[0], 400)
+        estado, datos = pedir({"tool": "set_app_volume", "args": {"app": "nada", "mute": True}})
+        self.assertEqual((estado, datos["error"]), (409, "No encuentro audio de «nada»."))
+        self.assertEqual(self.acciones, [("media_control", {"action": "next"}),
+                                         ("set_app_volume", {"app": "nada", "mute": True})])
+        self.assertEqual(_pedir(self.servidor, "POST", "/api/media", {"tool": "media_control", "args": {}})[0], 401)
+
+    def test_status_with_and_without_fps(self) -> None:
+        self.assertIsNone(_pedir(self.servidor, "GET", "/api/status", token=self.token)[1]["fps"])
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/status?fps=1", token=self.token)[1]["fps"], {"fps": 144})
+
+
 class ScreenCaptureTests(unittest.TestCase):
     """captura_para_movil: recorte de cada monitor, «todos» y reducción (sin capturar de verdad)."""
 

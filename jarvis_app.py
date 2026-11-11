@@ -31,6 +31,9 @@ import jarvis_memory
 import jarvis_mobile
 import jarvis_video_movil
 import jarvis_system_info
+import jarvis_fps
+import jarvis_media
+import psutil
 import jarvis_monitor_view
 import jarvis_audio_devices
 import jarvis_cleanup
@@ -241,7 +244,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             pantalla_permitida=lambda: self._mobile_screen_enabled,
             carpeta_app=core.APP_DIR / "movil",
             tts=self._tts_for_mobile,
+            musica=self._media_for_mobile,
+            portada=jarvis_media.portada_actual,
+            accion=self._action_from_mobile,
+            estado_equipo=self._status_for_mobile,
         )
+        self.fps_meter = jarvis_fps.MedidorFPS()
         try:
             self._mobile_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_ACTIVO) == "1"
         except Exception:
@@ -293,7 +301,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.reminder_watcher = jarvis_reminders.VigilanteRecordatorios(self.events)
         self.reminder_watcher.start()
         self.health_watcher = jarvis_hardware.VigilanteSalud(
-            self.events, discos=jarvis_system_info.listar_discos
+            self.events, discos=jarvis_system_info.listar_discos,
+            memoria=lambda: psutil.virtual_memory().percent,
         )
         self.health_watcher.start()
         self.games_watcher = jarvis_games_watch.VigilanteJuegos(self.events)
@@ -452,6 +461,42 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.root.state("normal")
         self.root.lift()
         self.root.focus_force()
+
+    def _media_for_mobile(self) -> dict:
+        """Pestaña «Música» del celular (hilo HTTP; solo lectura)."""
+        datos: dict = {"playing": {}, "apps": [], "volume": None, "output": None,
+                       "outputs": [{"device": "headphones", "name": "Auriculares"},
+                                   {"device": "speakers", "name": "Parlantes"}]}
+        for clave, leer in (("playing", jarvis_media.estado_reproduccion),
+                            ("apps", jarvis_media.aplicaciones_con_audio),
+                            ("volume", jarvis_audio_devices.obtener_volumen_sistema)):
+            try:
+                datos[clave] = leer()
+            except Exception:
+                logging.debug("No se pudo leer %s para el celular.", clave, exc_info=True)
+        try:
+            salida = jarvis_audio_devices.salida_predeterminada()
+            datos["output"] = "headphones" if jarvis_audio_devices.es_auriculares(salida) else "speakers"
+            datos["outputName"] = salida
+        except Exception:
+            logging.debug("No se pudo leer la salida de audio.", exc_info=True)
+        return datos
+
+    def _action_from_mobile(self, tool: str, arguments: dict) -> str:
+        """Música desde el celular: por tool_registry.execute (validación, tiempo máximo, registro)."""
+        return str(self.tool_registry.execute(tool, arguments, origin="celular"))
+
+    def _status_for_mobile(self, fps: bool) -> dict:
+        discos = []
+        try:
+            discos = jarvis_system_info.listar_discos()
+        except Exception:
+            logging.debug("No se pudieron leer los discos para el celular.", exc_info=True)
+        return jarvis_dashboard.estado_movil(
+            self.health_watcher, discos=discos, memoria=psutil.virtual_memory(),
+            fps=self.fps_meter.actual() if fps else None,
+            juegos=self.games_watcher.jugando if getattr(self, "games_watcher", None) else (),
+        )
 
     @staticmethod
     def _tts_for_mobile(texto: str) -> bytes:
@@ -2462,6 +2507,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             self._set_status("ACCIÓN CANCELADA", MUTED)
                         self._set_idle()
                     elif event[0] == "action_result":
+                        if event[1].origen == "celular" and event[1].exitosa:
+                            # Deslizadores y botones de la pestaña Música: ya se ven en el
+                            # celular y quedan en el registro; en el chat solo serían ruido.
+                            continue
                         self._show_action_result(event[1])
                         try:
                             tarjeta = self._add_action_card(event[1])
@@ -4091,6 +4140,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.battery_watcher.stop()
         self.reminder_watcher.stop()
         self.health_watcher.stop()
+        self.fps_meter.detener()
         self.games_watcher.stop()
         self.gpu_watcher.stop()
         self.taskbar_watcher.stop()

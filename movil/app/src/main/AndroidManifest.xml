@@ -42,6 +42,27 @@
             android:exported="false"
             android:screenOrientation="fullSensor"
             android:windowSoftInputMode="adjustResize|stateHidden" />
+        <activity
+            android:name=".MusicActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".StatusActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".SettingsActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <!-- Pantalla de juego: siempre en horizontal, como segunda pantalla. -->
+        <activity
+            android:name=".GameActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape" />
         <receiver
             android:name=".InstallReceiver"
             android:exported="false" />

@@ -38,6 +38,36 @@ class DatosPanel:
     ollama_ok: bool = False
 
 
+def _redondeo(valor: float | None) -> float | None:
+    return None if valor is None else round(valor, 1)
+
+
+def estado_movil(vigilante, *, discos, memoria, fps=None, juegos=()) -> dict:
+    """Estado del equipo para la pestaña «Equipo» de la app (todo en números)."""
+    t = vigilante.ultimo
+    inicio = vigilante.historial[0][0] if vigilante.historial else 0.0
+    historial = [
+        {"t": round(momento - inicio, 1), "gpu": _redondeo(m.gpu), "gpuHot": _redondeo(m.gpu_punto_caliente),
+         "cpu": _redondeo(m.cpu), "gpuLoad": _redondeo(m.gpu_carga), "cpuLoad": _redondeo(m.cpu_carga),
+         "ram": round(ram, 1)}
+        for momento, m, ram in list(vigilante.historial)
+    ]
+    return {
+        "gpuName": t.gpu_nombre, "cpuName": t.cpu_nombre,
+        "gpu": _redondeo(t.gpu), "gpuHot": _redondeo(t.gpu_punto_caliente), "cpu": _redondeo(t.cpu),
+        "gpuLoad": _redondeo(t.gpu_carga), "cpuLoad": _redondeo(t.cpu_carga),
+        "ram": {"pct": round(memoria.percent, 1), "used": memoria.total - memoria.available,
+                "total": memoria.total},
+        "disks": [{"unit": d.unidad, "name": d.nombre, "free": d.libre, "total": d.total,
+                   "pct": round(d.usado_pct, 1)} for d in discos],
+        "history": historial,
+        "limits": {"gpu": jarvis_hardware.LIMITE_GPU, "gpuHot": jarvis_hardware.LIMITE_GPU_PUNTO_CALIENTE,
+                   "cpu": jarvis_hardware.LIMITE_CPU},
+        "fps": fps,
+        "games": sorted(juegos),
+    }
+
+
 def saludo(hora: int) -> str:
     if 6 <= hora < 13:
         return "Buenos días"

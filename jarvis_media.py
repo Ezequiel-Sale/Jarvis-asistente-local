@@ -10,6 +10,7 @@ El título de lo que suena no se escribe en los registros.
 """
 
 import asyncio
+import threading
 import logging
 import time
 import re
@@ -71,8 +72,28 @@ class Sesion:
     artista: str = ""
 
 
-def _ejecutar(corrutina_factory: Callable):
-    return asyncio.run(corrutina_factory())
+def _ejecutar(corrutina_factory: Callable, *, limite: float = 15.0):
+    """Corre la consulta WinRT en un hilo propio.
+
+    Si el hilo que llama ya usó COM con pycaw (CoInitialize/CoUninitialize), WinRT
+    se cuelga en ese mismo hilo; en uno nuevo no. ``limite`` evita esperar para siempre.
+    """
+    resultado: dict = {}
+
+    def correr() -> None:
+        try:
+            resultado["valor"] = asyncio.run(corrutina_factory())
+        except BaseException as error:  # se relanza en el hilo que llamó
+            resultado["error"] = error
+
+    hilo = threading.Thread(target=correr, name="JarvisWinRT", daemon=True)
+    hilo.start()
+    hilo.join(limite)
+    if hilo.is_alive():
+        raise OSError("Windows no respondió a la consulta multimedia.")
+    if "error" in resultado:
+        raise resultado["error"]
+    return resultado.get("valor")
 
 
 def _estado_texto(codigo) -> str:
@@ -115,6 +136,66 @@ def sesion_actual(*, con_titulo: bool = False) -> Sesion | None:
         )
 
     return _ejecutar(leer)
+
+
+def estado_reproduccion() -> dict:
+    """Lo que suena, para la app del celular: {app, state, title, artist, cover}."""
+    try:
+        import winrt.windows.media.control  # noqa: F401
+    except ImportError:
+        return {}
+
+    async def leer():
+        sesion = await _sesion_actual()
+        if sesion is None:
+            return {}
+        titulo = artista = ""
+        portada = False
+        try:
+            props = await sesion.try_get_media_properties_async()
+            titulo, artista = props.title or "", props.artist or ""
+            portada = props.thumbnail is not None
+        except OSError:
+            pass
+        return {
+            "app": nombre_app(sesion.source_app_user_model_id or ""),
+            "state": _estado_texto(sesion.get_playback_info().playback_status),
+            "title": titulo,
+            "artist": artista,
+            "cover": portada,
+        }
+
+    return _ejecutar(leer)
+
+
+def portada_actual() -> bytes | None:
+    """Imagen (PNG o JPEG) de la carátula de lo que suena, o None."""
+    try:
+        from winrt.windows.storage.streams import DataReader
+    except ImportError:
+        return None
+
+    async def leer():
+        sesion = await _sesion_actual()
+        if sesion is None:
+            return None
+        props = await sesion.try_get_media_properties_async()
+        if props.thumbnail is None:
+            return None
+        flujo = await props.thumbnail.open_read_async()
+        tamano = int(flujo.size)
+        if not 0 < tamano <= 5 * 1024 * 1024:
+            return None
+        lector = DataReader(flujo)
+        await lector.load_async(tamano)
+        datos = bytearray(tamano)
+        lector.read_bytes(datos)
+        return bytes(datos)
+
+    try:
+        return _ejecutar(leer)
+    except OSError:
+        return None
 
 
 def _pulsar_tecla(vk: int) -> None:
@@ -664,6 +745,28 @@ def volumen_aplicacion(
         return f"Volumen de {nombre} al {percentage} %."
 
     return aplicar() if sesiones is not None else _con_com(aplicar)
+
+
+def aplicaciones_con_audio(*, sesiones: Callable[[], list] | None = None) -> list[dict]:
+    """Apps con sesión de audio: [{app, name, volume, muted}] (una por ejecutable)."""
+
+    def leer() -> list[dict]:
+        apps: dict[str, dict] = {}
+        for sesion in (sesiones or _sesiones_audio)():
+            ejecutable = sesion.Process.name()
+            clave = _normalizar(ejecutable).removesuffix(".exe")
+            if clave in apps:
+                continue
+            control = sesion.SimpleAudioVolume
+            apps[clave] = {
+                "app": clave,
+                "name": nombre_app(ejecutable),
+                "volume": round(control.GetMasterVolume() * 100),
+                "muted": bool(control.GetMute()),
+            }
+        return sorted(apps.values(), key=lambda a: a["name"].casefold())
+
+    return leer() if sesiones is not None else _con_com(leer)
 
 
 def leer_volumen_aplicacion(app: str) -> int | None:

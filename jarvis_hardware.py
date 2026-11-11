@@ -16,6 +16,7 @@
 
 import logging
 import sys
+from collections import deque
 import threading
 import time
 from collections.abc import Callable
@@ -29,6 +30,8 @@ PAUSA_AVISOS = 15 * 60
 LIMITE_DISCO = 90.0
 PAUSA_AVISOS_DISCO = 24 * 60 * 60
 INTERVALO_DISCOS = 10 * 60
+INTERVALO_SENSORES = 3.0
+HISTORIAL = 200  # lecturas: ~10 minutos a 3 s
 
 
 @dataclass(frozen=True)
@@ -194,10 +197,11 @@ class VigilanteSalud:
         self,
         eventos,
         *,
-        intervalo: float = 10.0,
+        intervalo: float = INTERVALO_SENSORES,
         leer: Callable[[], Temperaturas] | None = None,
         reloj: Callable[[], float] = time.monotonic,
         discos: Callable[[], list] | None = None,
+        memoria: Callable[[], float] | None = None,
     ) -> None:
         self._eventos = eventos
         self._intervalo = intervalo
@@ -207,6 +211,9 @@ class VigilanteSalud:
         self._sospecha = False
         self._ultimo_aviso = -float("inf")
         self.ultimo = Temperaturas()
+        # Últimos ~10 minutos para los gráficos de la app: (momento, temperaturas, % de RAM).
+        self.historial: deque[tuple[float, Temperaturas, float]] = deque(maxlen=HISTORIAL)
+        self._memoria = memoria
         self._discos = discos  # jarvis_system_info.listar_discos
         self._avisos_disco: dict[str, float] = {}
         self._discos_revisados = -float("inf")
@@ -224,6 +231,11 @@ class VigilanteSalud:
         except Exception:
             logging.debug("No se pudieron leer los sensores.", exc_info=True)
             return
+        try:
+            ram = self._memoria() if self._memoria else 0.0
+        except Exception:
+            ram = 0.0
+        self.historial.append((self._reloj(), self.ultimo, ram))
         avisos = alertas(self.ultimo)
         if not avisos:
             self._sospecha = False

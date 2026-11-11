@@ -210,3 +210,25 @@ class DiskAlertTests(unittest.TestCase):
         reloj["t"] = hw.PAUSA_AVISOS_DISCO + 1
         vigilante.revisar_discos()
         self.assertEqual(eventos.get_nowait()[0], "disk_alert")
+
+
+class PhoneActionCardTests(unittest.TestCase):
+    def test_successful_phone_media_actions_leave_no_card(self) -> None:
+        """Mover un deslizador en la pestaña Música no llena el chat de tarjetas."""
+        from jarvis_actions import EstadoAccion, ResultadoAccion
+        from jarvis_app import JarvisApp
+
+        def resultado(origen, estado):
+            return ResultadoAccion("set_system_volume", "Ajustar volumen del sistema", origen, estado, 0.1)
+
+        host = Mock()
+        host._closing = False
+        host._last_action_cards = {}
+        host.events = queue.Queue()
+        host.events.put(("action_result", resultado("celular", EstadoAccion.EXITO)))
+        JarvisApp._poll_events(host)
+        host._add_action_card.assert_not_called()
+        host.events.put(("action_result", resultado("celular", EstadoAccion.ERROR)))
+        host.events.put(("action_result", resultado("frase", EstadoAccion.EXITO)))
+        JarvisApp._poll_events(host)
+        self.assertEqual(host._add_action_card.call_count, 2)

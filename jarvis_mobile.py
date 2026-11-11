@@ -30,6 +30,12 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
   usa para leer las respuestas con la misma voz que Jarvis).
 - Los avisos (recordatorios, alertas del equipo) llegan como mensajes ``assistant``
   con ``alert`` = "alarm" o "info"; el celular los muestra como notificación.
+- ``GET  /api/media`` → {playing: {app, state, title, artist, cover}, apps: [{app,
+  name, volume, muted}], volume, output, outputs}; ``GET /api/media/cover`` → carátula.
+- ``POST /api/media`` {tool, args} → una de ``HERRAMIENTAS_MOVIL`` (riesgo bajo) por
+  ``tool_registry.execute``, con registro, como si se pidiera en la PC.
+- ``GET  /api/status?fps=1`` → temperaturas, cargas, RAM, discos, historial de ~10 min
+  y, con ``fps=1``, los FPS de la ventana en primer plano (PresentMon).
 - ``GET  /api/app`` → {versionCode, versionName, size, sha256} de la última app
   compilada (``movil/Jarvis.apk`` y ``Jarvis.apk.json`` junto a Jarvis); 404 si no hay.
 - ``GET  /api/app/apk`` → el APK, para que la app se actualice sola.
@@ -69,6 +75,7 @@ PREFERENCIA_PANTALLA = "movil_pantalla"
 MIRANDO_SEGUNDOS = 4.0  # sin capturas en este tiempo = el celular dejó de mirar
 ANCHO_PANTALLA = (480, 2560, 1280)  # mínimo, máximo y por defecto
 CALIDAD_PANTALLA = (25, 85, 60)
+HERRAMIENTAS_MOVIL = frozenset({"media_control", "set_app_volume", "set_system_volume", "set_output_device"})
 ANCHO_VIDEO = (640, 2560, 1920)
 KBPS_VIDEO = (1000, 30000, 8000)
 RED_TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
@@ -234,6 +241,10 @@ class ServidorMovil:
         video: Callable[..., object] | None = None,
         carpeta_app: Path | None = None,
         tts: Callable[[str], bytes] | None = None,
+        musica: Callable[[], dict] | None = None,
+        portada: Callable[[], bytes | None] | None = None,
+        accion: Callable[[str, dict], str] | None = None,
+        estado_equipo: Callable[[bool], dict] | None = None,
     ) -> None:
         self.eventos_app = eventos_app  # cola de la app: todo lo que toca Tk pasa por ahí
         self.vinculacion = vinculacion
@@ -256,6 +267,10 @@ class ServidorMovil:
         self.carpeta_app = carpeta_app  # donde están Jarvis.apk y Jarvis.apk.json
         self._app_cache: tuple[tuple, dict] | None = None
         self.tts = tts  # texto → WAV de Piper (corre en el hilo HTTP)
+        self.musica = musica
+        self.portada = portada
+        self.accion = accion  # (herramienta, argumentos) → texto; pasa por tool_registry.execute
+        self.estado_equipo = estado_equipo
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
@@ -523,6 +538,33 @@ class ServidorMovil:
             return self._json({"allowed": permitido, "screens": lista})
         if metodo == "GET" and ruta == "/api/screen":
             return self._pantalla(consulta)
+        if metodo == "GET" and ruta == "/api/media":
+            if self.musica is None:
+                raise _Error(501, "El control multimedia no está disponible.")
+            return self._json(self.musica())
+        if metodo == "GET" and ruta == "/api/media/cover":
+            imagen = self.portada() if self.portada else None
+            if not imagen:
+                raise _Error(404, "No hay carátula.")
+            tipo = "image/png" if imagen.startswith(b"\x89PNG") else "image/jpeg"
+            return 200, tipo, imagen
+        if metodo == "POST" and ruta == "/api/media":
+            datos = self._cuerpo_json(cuerpo)
+            herramienta = str(datos.get("tool", ""))
+            argumentos = datos.get("args") or {}
+            if herramienta not in HERRAMIENTAS_MOVIL or not isinstance(argumentos, dict):
+                raise _Error(400, "Esa acción no se puede pedir desde aquí.")
+            if self.accion is None:
+                raise _Error(501, "El control multimedia no está disponible.")
+            try:
+                texto = self.accion(herramienta, argumentos)
+            except Exception as error:  # la herramienta explica qué falló
+                raise _Error(409, str(error) or "No se pudo completar la acción.") from error
+            return self._json({"ok": True, "text": texto})
+        if metodo == "GET" and ruta == "/api/status":
+            if self.estado_equipo is None:
+                raise _Error(501, "El estado del equipo no está disponible.")
+            return self._json(self.estado_equipo(consulta.get("fps", ["0"])[0] == "1"))
         if metodo == "POST" and ruta == "/api/tts":
             texto = " ".join(str(self._cuerpo_json(cuerpo).get("text", "")).split())
             if not texto:

@@ -133,7 +133,7 @@ class ChatWidgetTests(unittest.TestCase):
     def test_fade_ends_with_current_theme_even_if_switched_midway(self) -> None:
         self.v._add_message("assistant", "Hola")
         jarvis_theme.recolorear(self.root, jarvis_theme.activar("claro"))  # a mitad del fundido
-        _esperar(self.root)
+        _esperar(self.root, 1.5)  # margen: con la PC muy cargada el fundido tarda más de 0,4 s
         paleta = {c.upper() for c in jarvis_theme.TEMAS["claro"].values()}
         for w in _todos(self.v.messages):
             if isinstance(w, (tk.Label, tk.Text)):

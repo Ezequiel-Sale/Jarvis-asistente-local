@@ -20,7 +20,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -47,6 +46,7 @@ class MainActivity : Activity() {
     private lateinit var code: EditText
     private lateinit var pair: Button
     private lateinit var setupError: TextView
+    private lateinit var tabs: View
 
     private val ui = Handler(Looper.getMainLooper())
     private val questions = HashMap<String, QuestionCard>()
@@ -84,8 +84,13 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.send).setOnClickListener { sendText() }
         mic.setOnClickListener { toggleMic() }
         pair.setOnClickListener { doPair() }
-        findViewById<View>(R.id.menu).setOnClickListener { showMenu(it) }
+        findViewById<View>(R.id.menu).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        }
         findViewById<View>(R.id.screen).setOnClickListener { openScreen() }
+        val root = findViewById<ViewGroup>(android.R.id.content).getChildAt(0) as LinearLayout
+        tabs = Tabs.bar(this, "chat").apply { visibility = View.GONE }
+        root.addView(tabs)
         address.setText(prefs.getString("base", ""))
         handleAnswerIntent(intent)
     }
@@ -169,6 +174,7 @@ class MainActivity : Activity() {
         setupError.text = message
         pair.isEnabled = true
         findViewById<View>(R.id.screen).visibility = View.GONE
+        tabs.visibility = View.GONE
         status.text = "● SIN VINCULAR"
         status.setTextColor(getColor(R.color.muted))
     }
@@ -178,6 +184,7 @@ class MainActivity : Activity() {
         scroll.visibility = View.VISIBLE
         composer.visibility = View.VISIBLE
         findViewById<View>(R.id.screen).visibility = View.VISIBLE
+        tabs.visibility = View.VISIBLE
     }
 
     private fun openScreen() {
@@ -569,66 +576,6 @@ class MainActivity : Activity() {
     }
 
     // --- Menú y lectura en voz alta ------------------------------------------------------
-
-    private fun showMenu(anchor: View) {
-        val reading = prefs.getBoolean("leer", false)
-        val menu = PopupMenu(this, anchor)
-        menu.menu.add(0, 1, 0, if (reading) "No leer las respuestas en voz alta" else "Leer las respuestas en voz alta")
-        menu.menu.add(0, 4, 1, "Ver las pantallas de la PC")
-        menu.menu.add(0, 2, 1, "Cancelar lo que está haciendo")
-        menu.menu.add(0, 3, 2, "Desvincular este celular")
-        menu.menu.add(0, 5, 3, "Buscar actualización de la app")
-        val notices = prefs.getBoolean("avisos", true)
-        menu.menu.add(0, 7, 5, if (notices) "No avisar con la app cerrada" else "Avisar con la app cerrada")
-        val headset = prefs.getBoolean("auriculares", true)
-        menu.menu.add(0, 8, 6, if (headset) "No usar el botón de los auriculares" else "Hablar con el botón de los auriculares")
-        val lockOn = Lock.enabled(this)
-        menu.menu.add(0, 6, 4, if (lockOn) "No pedir huella al abrir" else "Pedir huella al abrir")
-        menu.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                1 -> {
-                    prefs.edit().putBoolean("leer", !reading).apply()
-                    if (reading) Speaker.stop()
-                }
-                2 -> {
-                    val client = api()
-                    thread {
-                        try {
-                            client?.postJson("/api/cancel")
-                        } catch (e: Exception) {
-                            ui.post { toast("No pude conectar con Jarvis.") }
-                        }
-                    }
-                }
-                4 -> openScreen()
-                5 -> api()?.let { Updater(this, it).check(manual = true) }
-                7 -> {
-                    prefs.edit().putBoolean("avisos", !notices).apply()
-                    if (notices) JarvisService.stop(this) else JarvisService.start(this)
-                    toast(if (notices) "Ya no te aviso con la app cerrada." else "Te avisaré aunque la app esté cerrada.")
-                }
-                8 -> {
-                    prefs.edit().putBoolean("auriculares", !headset).apply()
-                    JarvisService.stop(this)
-                    JarvisService.start(this)
-                    toast(if (headset) "El botón de los auriculares vuelve a ser solo de la música."
-                    else "Pulsa el botón de los auriculares para hablarle a Jarvis (tras un pitido).")
-                }
-                6 -> Lock.authenticate(this, "Cambiar el bloqueo de Jarvis", "Confirma que eres tú",
-                    onSuccess = {
-                        prefs.edit().putBoolean("huella", !lockOn).apply()
-                        toast(if (lockOn) "La app ya no pedirá huella al abrirse." else "La app pedirá huella al abrirse.")
-                    })
-                3 -> AlertDialog.Builder(this)
-                    .setMessage("¿Desvincular este celular? Para volver a usarlo tendrás que vincularlo con un código nuevo.")
-                    .setPositiveButton("Desvincular") { _, _ -> unpair("") }
-                    .setNegativeButton("Cancelar", null)
-                    .show()
-            }
-            true
-        }
-        menu.show()
-    }
 
     /** Con la voz de Piper de la PC (o la del teléfono si la PC no puede). */
     private fun speak(text: String) {
