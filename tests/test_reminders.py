@@ -211,7 +211,7 @@ class AnnounceTests(unittest.TestCase):
     def test_announce_does_not_touch_busy_state(self, thread: Mock) -> None:
         host = Mock()
         JarvisApp._announce(host, "Recordatorio: sacar la ropa.", alarm=True)
-        host._add_message.assert_called_once_with("assistant", "Recordatorio: sacar la ropa.")
+        host._add_message.assert_called_once_with("assistant", "Recordatorio: sacar la ropa.", aviso="alarm")
         host.tray_icon.notify.assert_called_once()
         host._set_idle.assert_not_called()
         host._start_busy.assert_not_called()

@@ -199,6 +199,37 @@ class AppUpdateTests(unittest.TestCase):
         self.assertEqual([e["high"] for e in eventos], [True, False])
 
 
+class NoticeAndVoiceTests(unittest.TestCase):
+    """Avisos marcados para notificar y voz de Piper para el celular."""
+
+    def setUp(self) -> None:
+        self.textos: list[str] = []
+
+        def tts(texto):
+            self.textos.append(texto)
+            if texto == "falla":
+                raise ConnectionError("Piper caído")
+            return b"RIFF-wav"
+
+        guardado: dict[str, str] = {}
+        self.servidor = m.ServidorMovil(queue.Queue(), m.Vinculacion(guardado.get, guardado.__setitem__), tts=tts)
+        self.token = _vincular(self.servidor)
+
+    def test_alerts_are_marked_and_replies_are_not(self) -> None:
+        self.servidor.mensaje("assistant", "Recordatorio: llamar a mamá.", "alarm")
+        self.servidor.mensaje("assistant", "Listo.")
+        eventos = [e for e in self.servidor.registro.desde(-1) if e["type"] == "assistant"]
+        self.assertEqual([e.get("alert") for e in eventos], ["alarm", None])
+
+    def test_tts_returns_wav(self) -> None:
+        estado, cuerpo = _pedir(self.servidor, "POST", "/api/tts", {"text": "  Hola   mundo "}, token=self.token)
+        self.assertEqual((estado, cuerpo), (200, b"RIFF-wav"))
+        self.assertEqual(self.textos, ["Hola mundo"])
+        self.assertEqual(_pedir(self.servidor, "POST", "/api/tts", {"text": " "}, token=self.token)[0], 400)
+        self.assertEqual(_pedir(self.servidor, "POST", "/api/tts", {"text": "falla"}, token=self.token)[0], 503)
+        self.assertEqual(_pedir(self.servidor, "POST", "/api/tts", {"text": "x"})[0], 401)
+
+
 class ScreenCaptureTests(unittest.TestCase):
     """captura_para_movil: recorte de cada monitor, «todos» y reducción (sin capturar de verdad)."""
 

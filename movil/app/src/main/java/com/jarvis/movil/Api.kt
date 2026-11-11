@@ -62,6 +62,17 @@ class Api(private val base: String, private val token: String?) {
 
     fun postWav(path: String, wav: ByteArray): JSONObject = post(path, wav, "audio/wav", 30000)
 
+    /** POST con JSON que devuelve bytes (p. ej. el WAV de /api/tts). */
+    fun postForBytes(path: String, body: JSONObject, timeoutMs: Int = 60000): ByteArray {
+        val connection = open(path, "POST", timeoutMs)
+        val data = body.toString().toByteArray(Charsets.UTF_8)
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setFixedLengthStreamingMode(data.size)
+        connection.outputStream.use { it.write(data) }
+        return read(connection)
+    }
+
     fun getJson(path: String, readTimeoutMs: Int = 15000): JSONObject =
         JSONObject(String(read(open(path, "GET", readTimeoutMs)), Charsets.UTF_8))
 

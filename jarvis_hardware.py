@@ -10,7 +10,8 @@
   como vulnerable). Sin PawnIO la biblioteca devuelve 0 °C: se trata como «sin dato».
 - Si la biblioteca no carga, todo sigue funcionando sin temperaturas.
 - ``VigilanteSalud`` avisa (evento ``health_alert``) si una temperatura supera su
-  límite en dos lecturas seguidas, como mucho una vez cada 15 minutos.
+  límite en dos lecturas seguidas, como mucho una vez cada 15 minutos, y (evento
+  ``disk_alert``) si un disco pasa del 90 %, como mucho una vez al día por disco.
 """
 
 import logging
@@ -25,6 +26,9 @@ LIMITE_CPU = 90.0
 LIMITE_GPU = 90.0
 LIMITE_GPU_PUNTO_CALIENTE = 105.0
 PAUSA_AVISOS = 15 * 60
+LIMITE_DISCO = 90.0
+PAUSA_AVISOS_DISCO = 24 * 60 * 60
+INTERVALO_DISCOS = 10 * 60
 
 
 @dataclass(frozen=True)
@@ -193,6 +197,7 @@ class VigilanteSalud:
         intervalo: float = 10.0,
         leer: Callable[[], Temperaturas] | None = None,
         reloj: Callable[[], float] = time.monotonic,
+        discos: Callable[[], list] | None = None,
     ) -> None:
         self._eventos = eventos
         self._intervalo = intervalo
@@ -202,6 +207,9 @@ class VigilanteSalud:
         self._sospecha = False
         self._ultimo_aviso = -float("inf")
         self.ultimo = Temperaturas()
+        self._discos = discos  # jarvis_system_info.listar_discos
+        self._avisos_disco: dict[str, float] = {}
+        self._discos_revisados = -float("inf")
         self._hilo = threading.Thread(target=self._bucle, name="JarvisSensores", daemon=True)
 
     def start(self) -> None:
@@ -231,8 +239,33 @@ class VigilanteSalud:
         logging.warning("Aviso de temperatura: %s", texto)
         self._eventos.put(("health_alert", texto))
 
+    def revisar_discos(self) -> None:
+        """Avisa de cada disco al 90 % o más, como mucho una vez al día por disco."""
+        if self._discos is None:
+            return
+        ahora = self._reloj()
+        self._discos_revisados = ahora
+        try:
+            discos = self._discos()
+        except Exception:
+            logging.debug("No se pudo revisar el espacio de los discos.", exc_info=True)
+            return
+        for disco in discos:
+            if disco.usado_pct < LIMITE_DISCO:
+                continue
+            if ahora - self._avisos_disco.get(disco.unidad, -float("inf")) < PAUSA_AVISOS_DISCO:
+                continue
+            self._avisos_disco[disco.unidad] = ahora
+            libres = disco.libre / 1024**3
+            texto = (f"El disco {disco.titulo} está al {disco.usado_pct:.0f} % (quedan {libres:.0f} GB). "
+                     "Di «libera espacio» si quieres que haga limpieza.")
+            logging.warning("Aviso de disco casi lleno: %s %.0f %%.", disco.unidad, disco.usado_pct)
+            self._eventos.put(("disk_alert", texto))
+
     def _bucle(self) -> None:
         while not self._parar.is_set():
             self.revisar_una_vez()
+            if self._reloj() - self._discos_revisados >= INTERVALO_DISCOS:
+                self.revisar_discos()
             self._parar.wait(self._intervalo)
         sensores.cerrar()

@@ -30,6 +30,7 @@ import jarvis_vision
 import jarvis_memory
 import jarvis_mobile
 import jarvis_video_movil
+import jarvis_system_info
 import jarvis_monitor_view
 import jarvis_audio_devices
 import jarvis_cleanup
@@ -239,6 +240,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             video=jarvis_video_movil.transmitir,
             pantalla_permitida=lambda: self._mobile_screen_enabled,
             carpeta_app=core.APP_DIR / "movil",
+            tts=self._tts_for_mobile,
         )
         try:
             self._mobile_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_ACTIVO) == "1"
@@ -290,7 +292,9 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.battery_watcher.start()
         self.reminder_watcher = jarvis_reminders.VigilanteRecordatorios(self.events)
         self.reminder_watcher.start()
-        self.health_watcher = jarvis_hardware.VigilanteSalud(self.events)
+        self.health_watcher = jarvis_hardware.VigilanteSalud(
+            self.events, discos=jarvis_system_info.listar_discos
+        )
         self.health_watcher.start()
         self.games_watcher = jarvis_games_watch.VigilanteJuegos(self.events)
         self.games_watcher.start()
@@ -449,10 +453,22 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.root.lift()
         self.root.focus_force()
 
+    @staticmethod
+    def _tts_for_mobile(texto: str) -> bytes:
+        """WAV de Piper para el celular (hilo HTTP): sin markdown ni enlaces, sin guardarlo."""
+        import secrets
+
+        ruta = Path(core.generar_audio_tts(jarvis_voz_stream.limpiar_para_voz(texto),
+                                           "movil_" + secrets.token_hex(4)))
+        try:
+            return ruta.read_bytes()
+        finally:
+            ruta.unlink(missing_ok=True)
+
     def _announce(self, text: str, *, alarm: bool = False) -> None:
         """Aviso que no responde a una orden: chat, notificación de Windows,
         sonido opcional y voz. No cambia el estado ocupado/libre de la app."""
-        self._add_message("assistant", text)
+        self._add_message("assistant", text, aviso="alarm" if alarm else "info")
         self._set_status("⏰ " + text[:60].upper() if alarm else text[:60].upper(), CYAN)
         try:
             self.tray_icon.notify(text, "J.A.R.V.I.S.")
@@ -2105,6 +2121,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                         self._announce(event[1], alarm=True)
                     elif event[0] == "health_alert":
                         self._announce(event[1], alarm=True)
+                    elif event[0] == "disk_alert":
+                        self._announce(event[1])
                     elif event[0] == "taskbar_misplaced":
                         self._on_taskbar_misplaced(event[1])
                     elif event[0] == "display_keep":

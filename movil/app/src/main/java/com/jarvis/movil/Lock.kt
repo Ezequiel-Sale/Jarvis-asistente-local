@@ -28,11 +28,16 @@ object Lock {
     const val GRACE_MS = 2 * 60 * 1000L
     private const val REQUEST_CODE = 4711
 
+    @Volatile
     private var started = 0
     private var hiddenAt = 0L
     private var unlocked = false
     private var pending: (() -> Unit)? = null
     private var pendingFail: (() -> Unit)? = null
+
+    /** Si alguna pantalla de la app está a la vista (el servicio no notifica entonces). */
+    val visible: Boolean
+        get() = started > 0
 
     fun enabled(activity: Activity): Boolean =
         activity.getSharedPreferences("jarvis", Activity.MODE_PRIVATE).getBoolean("huella", true)

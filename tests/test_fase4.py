@@ -184,3 +184,29 @@ class VoiceCleanupTests(unittest.TestCase):
         self.assertEqual([c[0] for c in orden.mock_calls], ["idle", "start"])
         orden.start.assert_called_once_with("¡Libera espacio!", None)
         host._add_message.assert_not_called()  # la frase ya la mostró la transcripción
+
+
+class DiskAlertTests(unittest.TestCase):
+    def test_full_disk_alerts_once_a_day_per_disk(self) -> None:
+        import queue
+
+        import jarvis_hardware as hw
+        from jarvis_system_info import Disco
+
+        GB = 1024**3
+        reloj = {"t": 0.0}
+        discos = [Disco("C:", "", 56 * GB, 927 * GB), Disco("D:", "Juegos", 300 * GB, 466 * GB)]
+        eventos: queue.Queue = queue.Queue()
+        vigilante = hw.VigilanteSalud(eventos, leer=lambda: hw.Temperaturas(), reloj=lambda: reloj["t"],
+                                      discos=lambda: discos)
+        vigilante.revisar_discos()
+        tipo, texto = eventos.get_nowait()
+        self.assertEqual(tipo, "disk_alert")
+        self.assertIn("El disco C: está al 94 %", texto)
+        self.assertTrue(eventos.empty())  # D: está al 36 %
+        reloj["t"] = 3600
+        vigilante.revisar_discos()
+        self.assertTrue(eventos.empty())  # una vez al día
+        reloj["t"] = hw.PAUSA_AVISOS_DISCO + 1
+        vigilante.revisar_discos()
+        self.assertEqual(eventos.get_nowait()[0], "disk_alert")

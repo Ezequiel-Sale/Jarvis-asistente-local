@@ -13,7 +13,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -27,7 +26,6 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.Locale
 import kotlin.concurrent.thread
 
 /**
@@ -53,8 +51,6 @@ class MainActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
     private val questions = HashMap<String, QuestionCard>()
     private var recorder: Recorder? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
     private var connected = false
     private var busy = false
     private var mode = "idle"
@@ -91,7 +87,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.menu).setOnClickListener { showMenu(it) }
         findViewById<View>(R.id.screen).setOnClickListener { openScreen() }
         address.setText(prefs.getString("base", ""))
-        if (prefs.getBoolean("leer", false)) startTts()
+        handleAnswerIntent(intent)
     }
 
     override fun onStart() {
@@ -102,8 +98,37 @@ class MainActivity : Activity() {
             showChat()
             startPolling()
             Updater(this, client).check(manual = false)
+            askNotificationPermission()
+            JarvisService.start(this)
         } else {
             showSetup("")
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleAnswerIntent(intent)
+    }
+
+    /** SÍ de riesgo alto pulsado en una notificación: huella y luego la respuesta. */
+    private fun handleAnswerIntent(intent: Intent?) {
+        val qid = intent?.getStringExtra(NotifyReceiver.EXTRA_QID) ?: return
+        val approve = intent.getBooleanExtra(NotifyReceiver.EXTRA_APPROVE, false)
+        val text = intent.getStringExtra(NotifyReceiver.EXTRA_TEXT) ?: ""
+        intent.removeExtra(NotifyReceiver.EXTRA_QID)  // que no se repita al girar o volver
+        getSystemService(android.app.NotificationManager::class.java).cancel(JarvisService.ID_QUESTION)
+        Lock.authenticate(this, "Confirmar acción", text.take(120), onSuccess = {
+            NotifyReceiver.send(this, qid, approve) { error ->
+                ui.post { toast(error?.let { "No se envió: $it" } ?: "Respuesta enviada a Jarvis.") }
+            }
+        })
+    }
+
+    private fun askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && !prefs.getBoolean("pidio_avisos", false) &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putBoolean("pidio_avisos", true).apply()
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
         }
     }
 
@@ -125,7 +150,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        tts?.shutdown()
         super.onDestroy()
     }
 
@@ -200,6 +224,8 @@ class MainActivity : Activity() {
 
     private fun unpair(message: String) {
         prefs.edit().remove("token").apply()
+        JarvisService.stop(this)
+        Speaker.stop()
         showSetup(message)
     }
 
@@ -552,13 +578,17 @@ class MainActivity : Activity() {
         menu.menu.add(0, 2, 1, "Cancelar lo que está haciendo")
         menu.menu.add(0, 3, 2, "Desvincular este celular")
         menu.menu.add(0, 5, 3, "Buscar actualización de la app")
+        val notices = prefs.getBoolean("avisos", true)
+        menu.menu.add(0, 7, 5, if (notices) "No avisar con la app cerrada" else "Avisar con la app cerrada")
+        val headset = prefs.getBoolean("auriculares", true)
+        menu.menu.add(0, 8, 6, if (headset) "No usar el botón de los auriculares" else "Hablar con el botón de los auriculares")
         val lockOn = Lock.enabled(this)
         menu.menu.add(0, 6, 4, if (lockOn) "No pedir huella al abrir" else "Pedir huella al abrir")
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> {
                     prefs.edit().putBoolean("leer", !reading).apply()
-                    if (!reading) startTts() else tts?.stop()
+                    if (reading) Speaker.stop()
                 }
                 2 -> {
                     val client = api()
@@ -572,6 +602,18 @@ class MainActivity : Activity() {
                 }
                 4 -> openScreen()
                 5 -> api()?.let { Updater(this, it).check(manual = true) }
+                7 -> {
+                    prefs.edit().putBoolean("avisos", !notices).apply()
+                    if (notices) JarvisService.stop(this) else JarvisService.start(this)
+                    toast(if (notices) "Ya no te aviso con la app cerrada." else "Te avisaré aunque la app esté cerrada.")
+                }
+                8 -> {
+                    prefs.edit().putBoolean("auriculares", !headset).apply()
+                    JarvisService.stop(this)
+                    JarvisService.start(this)
+                    toast(if (headset) "El botón de los auriculares vuelve a ser solo de la música."
+                    else "Pulsa el botón de los auriculares para hablarle a Jarvis (tras un pitido).")
+                }
                 6 -> Lock.authenticate(this, "Cambiar el bloqueo de Jarvis", "Confirma que eres tú",
                     onSuccess = {
                         prefs.edit().putBoolean("huella", !lockOn).apply()
@@ -588,17 +630,8 @@ class MainActivity : Activity() {
         menu.show()
     }
 
-    private fun startTts() {
-        if (tts != null) return
-        tts = TextToSpeech(this) { result ->
-            ttsReady = result == TextToSpeech.SUCCESS
-            if (ttsReady) tts?.language = Locale("es")
-        }
-    }
-
+    /** Con la voz de Piper de la PC (o la del teléfono si la PC no puede). */
     private fun speak(text: String) {
-        if (ttsReady && prefs.getBoolean("leer", false)) {
-            tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "jarvis")
-        }
+        if (prefs.getBoolean("leer", false)) api()?.let { Speaker.say(this, it, text) }
     }
 }

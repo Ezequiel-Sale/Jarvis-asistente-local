@@ -9,6 +9,12 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Huella para abrir la app y para aprobar acciones de riesgo alto. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Avisos con la app cerrada: servicio en primer plano y notificaciones. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- usesCleartextTraffic: la conexión va siempre por Tailscale, que ya la cifra (WireGuard). -->
     <application
@@ -21,6 +27,7 @@
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
             android:exported="true"
+            android:launchMode="singleTop"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize|stateHidden">
             <intent-filter>
@@ -38,5 +45,21 @@
         <receiver
             android:name=".InstallReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".NotifyReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <!-- dataSync: escuchar avisos; microphone: hablar con el botón de los auriculares. -->
+        <service
+            android:name=".JarvisService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|microphone" />
     </application>
 </manifest>

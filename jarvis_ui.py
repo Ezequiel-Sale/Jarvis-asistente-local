@@ -1035,7 +1035,7 @@ class JarvisUIMixin:
 
         # --- App del celular (jarvis_mobile) ---------------------------------------
 
-        def _notify_mobile(self, role: str, text: str) -> None:
+        def _notify_mobile(self, role: str, text: str, aviso: str | None = None) -> None:
             movil = getattr(self, "mobile", None)
             if movil is None or not movil.activo():
                 return
@@ -1043,7 +1043,7 @@ class JarvisUIMixin:
                 import jarvis_markdown
 
                 text = jarvis_markdown.texto_plano(text)
-            movil.mensaje(role, text)
+            movil.mensaje(role, text, aviso)
 
         def _notify_mobile_live(self, text: str | None) -> None:
             """Respuesta en vivo para el celular; ``None`` = se descartó."""
@@ -1134,7 +1134,9 @@ class JarvisUIMixin:
             role: str,
             text: str,
             audio_path: str | None = None,
+            aviso: str | None = None,
         ) -> None:
+            """``aviso`` ("alarm"/"info"): recordatorio o alerta; el celular lo notifica."""
             should_follow = self._chat_following
             is_user = role == "user"
             row = tk.Frame(self.messages, bg=PANEL)
@@ -1187,7 +1189,7 @@ class JarvisUIMixin:
 
             self._fade_in(row)
             self._notify_floating(role, text)
-            self._notify_mobile(role, text)
+            self._notify_mobile(role, text, aviso)
             if should_follow:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
 

@@ -26,6 +26,10 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
 - ``GET  /api/screen?n=0&w=1280&q=60`` → JPEG de la pantalla en vivo (n=0: todas
   juntas). Solo para ver: no se puede controlar la PC. Se desactiva en Ajustes, y
   mientras un celular mira, la PC muestra un aviso.
+- ``POST /api/tts`` {text} → WAV con la voz de Piper elegida en la PC (la app la
+  usa para leer las respuestas con la misma voz que Jarvis).
+- Los avisos (recordatorios, alertas del equipo) llegan como mensajes ``assistant``
+  con ``alert`` = "alarm" o "info"; el celular los muestra como notificación.
 - ``GET  /api/app`` → {versionCode, versionName, size, sha256} de la última app
   compilada (``movil/Jarvis.apk`` y ``Jarvis.apk.json`` junto a Jarvis); 404 si no hay.
 - ``GET  /api/app/apk`` → el APK, para que la app se actualice sola.
@@ -229,6 +233,7 @@ class ServidorMovil:
         pantalla_permitida: Callable[[], bool] = lambda: True,
         video: Callable[..., object] | None = None,
         carpeta_app: Path | None = None,
+        tts: Callable[[str], bytes] | None = None,
     ) -> None:
         self.eventos_app = eventos_app  # cola de la app: todo lo que toca Tk pasa por ahí
         self.vinculacion = vinculacion
@@ -250,15 +255,18 @@ class ServidorMovil:
         self._video_detener: threading.Event | None = None
         self.carpeta_app = carpeta_app  # donde están Jarvis.apk y Jarvis.apk.json
         self._app_cache: tuple[tuple, dict] | None = None
+        self.tts = tts  # texto → WAV de Piper (corre en el hilo HTTP)
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
-    def mensaje(self, rol: str, texto: str) -> None:
+    def mensaje(self, rol: str, texto: str, aviso: str | None = None) -> None:
+        """``aviso`` ("alarm" o "info"): no responde a una orden (recordatorio, alerta)."""
         if rol == "user":
             self.registro.publicar("user", text=texto)
             return
         self._vivo_abierto = False
-        self.registro.publicar("assistant", reemplaza=("live",), text=texto)
+        extra = {"alert": aviso} if aviso else {}
+        self.registro.publicar("assistant", reemplaza=("live",), text=texto, **extra)
 
     def en_vivo(self, texto: str, *, reloj: Callable[[], float] = time.monotonic) -> bool:
         """Respuesta que se está escribiendo (texto completo hasta ahora).
@@ -515,6 +523,18 @@ class ServidorMovil:
             return self._json({"allowed": permitido, "screens": lista})
         if metodo == "GET" and ruta == "/api/screen":
             return self._pantalla(consulta)
+        if metodo == "POST" and ruta == "/api/tts":
+            texto = " ".join(str(self._cuerpo_json(cuerpo).get("text", "")).split())
+            if not texto:
+                raise _Error(400, "No hay texto para leer.")
+            if self.tts is None:
+                raise _Error(501, "La voz de la PC no está disponible.")
+            try:
+                audio = self.tts(texto[:MAX_TEXTO])
+            except Exception as error:
+                logging.warning("No se pudo sintetizar la voz para el celular: %s", error)
+                raise _Error(503, "La voz de la PC no respondió.") from error
+            return 200, "audio/wav", audio
         if metodo == "GET" and ruta == "/api/app":
             return self._json(self._app()[0])
         if metodo == "GET" and ruta == "/api/app/apk":
