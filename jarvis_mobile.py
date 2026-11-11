@@ -26,6 +26,9 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
 - ``GET  /api/screen?n=0&w=1280&q=60`` → JPEG de la pantalla en vivo (n=0: todas
   juntas). Solo para ver: no se puede controlar la PC. Se desactiva en Ajustes, y
   mientras un celular mira, la PC muestra un aviso.
+- ``GET  /api/app`` → {versionCode, versionName, size, sha256} de la última app
+  compilada (``movil/Jarvis.apk`` y ``Jarvis.apk.json`` junto a Jarvis); 404 si no hay.
+- ``GET  /api/app/apk`` → el APK, para que la app se actualice sola.
 - ``GET  /api/video?n=1&fps=60&w=1920&kbps=8000`` → vídeo H.264 en vivo de un
   monitor, como flujo continuo de paquetes: 4 bytes de largo (big endian), 1 byte
   de banderas (1 = cuadro clave) y el paquete (Annex B). Uno a la vez: abrir otro
@@ -38,6 +41,7 @@ import ipaddress
 import json
 import logging
 import os
+from pathlib import Path
 import secrets
 import socket
 import struct
@@ -224,6 +228,7 @@ class ServidorMovil:
         captura: Callable[[int, int, int], bytes] | None = None,
         pantalla_permitida: Callable[[], bool] = lambda: True,
         video: Callable[..., object] | None = None,
+        carpeta_app: Path | None = None,
     ) -> None:
         self.eventos_app = eventos_app  # cola de la app: todo lo que toca Tk pasa por ahí
         self.vinculacion = vinculacion
@@ -243,6 +248,8 @@ class ServidorMovil:
         self._ultima_captura: float | None = None
         self.video = video  # (monitor, fps, ancho, kbps, detener) → paquetes (bytes, clave)
         self._video_detener: threading.Event | None = None
+        self.carpeta_app = carpeta_app  # donde están Jarvis.apk y Jarvis.apk.json
+        self._app_cache: tuple[tuple, dict] | None = None
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
@@ -280,18 +287,46 @@ class ServidorMovil:
     def estado(self, modo: str) -> None:
         self.registro.publicar("state", mode=modo)
 
-    def pregunta(self, qid: str, texto: str, si: str, no: str, imagen: bytes | None = None) -> None:
+    def pregunta(self, qid: str, texto: str, si: str, no: str, imagen: bytes | None = None,
+                 alto_riesgo: bool = False) -> None:
+        """``alto_riesgo``: el celular pide huella antes de enviar el SÍ."""
         self._imagenes.clear()
         if imagen:
             self._imagenes[qid] = imagen
         self._pendiente = qid
-        self.registro.publicar("question", qid=qid, text=texto, yes=si, no=no, image=bool(imagen))
+        self.registro.publicar("question", qid=qid, text=texto, yes=si, no=no, image=bool(imagen),
+                               high=bool(alto_riesgo))
 
     def pregunta_resuelta(self, qid: str, texto: str) -> None:
         if self._pendiente == qid:
             self._pendiente = None
         self._imagenes.pop(qid, None)
         self.registro.publicar("resolved", qid=qid, text=texto)
+
+    def _app(self) -> tuple[dict, Path]:
+        """Datos de la última app compilada (se recalculan si cambia el archivo)."""
+        if self.carpeta_app is None:
+            raise _Error(404, "No hay ninguna versión de la app en la PC.")
+        apk = self.carpeta_app / "Jarvis.apk"
+        datos = self.carpeta_app / "Jarvis.apk.json"
+        try:
+            firma = (apk.stat().st_mtime_ns, apk.stat().st_size, datos.stat().st_mtime_ns)
+        except OSError as error:
+            raise _Error(404, "No hay ninguna versión de la app en la PC.") from error
+        if self._app_cache is None or self._app_cache[0] != firma:
+            try:
+                version = json.loads(datos.read_text(encoding="utf-8-sig"))  # PowerShell 5 escribe BOM
+                info = {
+                    "versionCode": int(version["versionCode"]),
+                    "versionName": str(version.get("versionName", "")),
+                    "size": firma[1],
+                    "sha256": hashlib.sha256(apk.read_bytes()).hexdigest(),
+                }
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                logging.warning("No se pudo leer la versión de la app del celular: %s", error)
+                raise _Error(404, "La versión de la app en la PC está incompleta.") from error
+            self._app_cache = (firma, info)
+        return self._app_cache[1], apk
 
     def mirando(self, ahora: float | None = None) -> bool:
         """Si algún celular está viendo la pantalla ahora mismo."""
@@ -480,6 +515,12 @@ class ServidorMovil:
             return self._json({"allowed": permitido, "screens": lista})
         if metodo == "GET" and ruta == "/api/screen":
             return self._pantalla(consulta)
+        if metodo == "GET" and ruta == "/api/app":
+            return self._json(self._app()[0])
+        if metodo == "GET" and ruta == "/api/app/apk":
+            info, apk = self._app()
+            logging.info("El celular descarga la app %s.", info["versionName"] or info["versionCode"])
+            return 200, "application/vnd.android.package-archive", apk.read_bytes()
         if metodo == "GET" and ruta == "/api/video":
             return 200, "application/octet-stream", self._video(consulta)
         if metodo == "POST" and ruta == "/api/message":

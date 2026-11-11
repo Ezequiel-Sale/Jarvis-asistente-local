@@ -11,8 +11,10 @@ android {
         minSdk = 26
         // 34: teclado y barras del sistema con el comportamiento clásico (sin «edge to edge» forzado).
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // compilar.ps1 pasa una versión que sube en cada compilación (minutos desde 2026);
+        // la app se actualiza sola cuando la PC tiene una mayor que la instalada.
+        versionCode = (project.findProperty("jarvisVersionCode") as String?)?.toInt() ?: 1
+        versionName = (project.findProperty("jarvisVersionName") as String?) ?: "1.0"
     }
     buildTypes {
         release {

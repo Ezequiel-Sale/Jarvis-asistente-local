@@ -1057,7 +1057,8 @@ class JarvisUIMixin:
 
             movil.en_vivo(jarvis_markdown.texto_plano(text).strip())
 
-        def _mobile_question(self, texto, si, no, aprobar_cb, rechazar_cb, imagen=None) -> str | None:
+        def _mobile_question(self, texto, si, no, aprobar_cb, rechazar_cb, imagen=None,
+                             alto_riesgo: bool = False) -> str | None:
             """Publica una confirmación para responderla desde el celular. Devuelve su id."""
             movil = getattr(self, "mobile", None)
             if movil is None or not movil.activo():
@@ -1077,7 +1078,7 @@ class JarvisUIMixin:
                     datos = None
             qid = "q" + secrets.token_hex(4)
             self._mobile_callbacks = {qid: (aprobar_cb, rechazar_cb)}
-            movil.pregunta(qid, texto, si, no, datos)
+            movil.pregunta(qid, texto, si, no, datos, alto_riesgo=alto_riesgo)
             return qid
 
         def _notify_floating(self, role: str, text: str) -> None:
@@ -1319,6 +1320,7 @@ class JarvisUIMixin:
             resumen: str | None = None,
             necesita_ventana: bool = False,
             imagen=None,
+            alto_riesgo: bool | None = None,
         ) -> tuple[tk.Frame, tk.Frame]:
             """Confirmación como tarjeta dentro del chat (antes eran ventanas aparte).
 
@@ -1326,11 +1328,17 @@ class JarvisUIMixin:
             llaman a ``_resolve_plan_approval`` salvo que se pasen ``al_aprobar`` /
             ``al_rechazar``. Al resolverse, la tarjeta se queda en el historial con el
             resultado en lugar de los botones (``tarjeta.jarvis_resolver``).
+
+            ``alto_riesgo`` (por defecto: las tarjetas rojas) hace que el celular pida
+            huella antes de aprobar.
             """
+            if alto_riesgo is None:
+                alto_riesgo = color == ERROR
             aprobar_cb = al_aprobar or (lambda: self._resolve_plan_approval(True))
             rechazar_cb = al_rechazar or (lambda: self._resolve_plan_approval(False))
             qid_movil = self._mobile_question(
-                resumen or titulo.capitalize(), aprobar, rechazar, aprobar_cb, rechazar_cb, imagen
+                resumen or titulo.capitalize(), aprobar, rechazar, aprobar_cb, rechazar_cb, imagen,
+                alto_riesgo=alto_riesgo,
             )
             en_aviso = self._floating_active() and not necesita_ventana
             if en_aviso:

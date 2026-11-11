@@ -49,3 +49,4 @@ movil/app/build/
 movil/local.properties
 movil/.kotlin/
 movil/*.apk
+movil/Jarvis.apk.json

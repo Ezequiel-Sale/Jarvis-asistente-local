@@ -154,6 +154,51 @@ class VideoTests(unittest.TestCase):
         self.assertEqual(jv.tamano_salida(1366, 768, 1000), (1000, 562))
 
 
+class AppUpdateTests(unittest.TestCase):
+    """/api/app y /api/app/apk: la app se actualiza con el APK que deja compilar.ps1."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        self.carpeta = Path(tempfile.mkdtemp())
+        guardado: dict[str, str] = {}
+        self.servidor = m.ServidorMovil(queue.Queue(), m.Vinculacion(guardado.get, guardado.__setitem__),
+                                        carpeta_app=self.carpeta)
+        self.token = _vincular(self.servidor)
+
+    def _escribir(self, apk: bytes, codigo: int) -> None:
+        (self.carpeta / "Jarvis.apk").write_bytes(apk)
+        # Con BOM, como lo escribe PowerShell 5.
+        (self.carpeta / "Jarvis.apk.json").write_text(
+            json.dumps({"versionCode": codigo, "versionName": f"1.{codigo}"}), encoding="utf-8-sig")
+
+    def test_version_and_download(self) -> None:
+        import hashlib
+
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/app", token=self.token)[0], 404)
+        self._escribir(b"PK-apk-1", 10)
+        estado, info = _pedir(self.servidor, "GET", "/api/app", token=self.token)
+        self.assertEqual(estado, 200)
+        self.assertEqual(info, {"versionCode": 10, "versionName": "1.10", "size": 8,
+                                "sha256": hashlib.sha256(b"PK-apk-1").hexdigest()})
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/app/apk", token=self.token)[1], b"PK-apk-1")
+        self._escribir(b"PK-apk-dos", 11)  # compilación nueva: se recalcula
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/app", token=self.token)[1]["versionCode"], 11)
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/app/apk")[0], 401)
+
+    def test_broken_version_file(self) -> None:
+        (self.carpeta / "Jarvis.apk").write_bytes(b"PK")
+        (self.carpeta / "Jarvis.apk.json").write_text("{roto", encoding="utf-8")
+        self.assertEqual(_pedir(self.servidor, "GET", "/api/app", token=self.token)[0], 404)
+
+    def test_high_risk_questions_are_marked(self) -> None:
+        self.servidor.pregunta("q1", "¿Apago el equipo?", "SÍ", "NO", alto_riesgo=True)
+        self.servidor.pregunta("q2", "¿Ejecuto el plan?", "SÍ", "NO")
+        eventos = [e for e in self.servidor.registro.desde(-1) if e["type"] == "question"]
+        self.assertEqual([e["high"] for e in eventos], [True, False])
+
+
 class ScreenCaptureTests(unittest.TestCase):
     """captura_para_movil: recorte de cada monitor, «todos» y reducción (sin capturar de verdad)."""
 

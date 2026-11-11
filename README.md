@@ -123,11 +123,12 @@ Las integraciones se configuran en `integraciones.json`, que se crea solo al arr
    cd movil
    ```
    ```bash
-   gradlew.bat assembleDebug
+   powershell -ExecutionPolicy Bypass -File compilar.ps1
    ```
-   e instala `movil/app/build/outputs/apk/debug/app-debug.apk` en el teléfono.
+   e instala `movil/Jarvis.apk` en el teléfono. Copia `Jarvis.apk` y `Jarvis.apk.json` a una carpeta `movil` junto a Jarvis.exe: desde entonces la app se actualiza sola (te avisa al abrirla y Android pide confirmar).
 3. En Jarvis: **⚙ Ajustes → App del celular**, actívala y pulsa «VINCULAR CELULAR». Escribe en la app la dirección y el código que aparecen.
-4. Para ver las pantallas de la PC, toca 🖥 en la app: elige el monitor y la calidad (AUTO usa vídeo a 60 cuadros por segundo con Wi-Fi y AHORRO con datos móviles; también hay 30 FPS y modos de imágenes), acerca con dos dedos y escribe o dicta órdenes abajo. Mientras miras, la PC muestra un aviso arriba; un clic en él (o «VER PANTALLA: NO» en Ajustes) lo corta.
+4. La app pide tu huella (o el bloqueo del teléfono) al abrirla y antes de aprobar acciones de riesgo alto, como apagar o borrar. Se puede desactivar desde el menú ⋮.
+5. Para ver las pantallas de la PC, toca 🖥 en la app: elige el monitor y la calidad (AUTO usa vídeo a 60 cuadros por segundo con Wi-Fi y AHORRO con datos móviles; también hay 30 FPS y modos de imágenes), acerca con dos dedos y escribe o dicta órdenes abajo. Mientras miras, la PC muestra un aviso arriba; un clic en él (o «VER PANTALLA: NO» en Ajustes) lo corta.
 
 ## Tests y compilación
 

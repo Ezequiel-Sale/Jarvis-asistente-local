@@ -238,6 +238,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             captura=jarvis_vision.captura_para_movil,
             video=jarvis_video_movil.transmitir,
             pantalla_permitida=lambda: self._mobile_screen_enabled,
+            carpeta_app=core.APP_DIR / "movil",
         )
         try:
             self._mobile_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_ACTIVO) == "1"
@@ -2680,6 +2681,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         tarjeta, cuerpo = self._confirmation_card(
             titulo=f"PUEDO LIBERAR HASTA {jarvis_cleanup.tamano_legible(total).upper()}",
             color=CYAN, aprobar="LIBERAR ESPACIO", rechazar="NO BORRAR NADA",
+            alto_riesgo=True,  # borra archivos: el celular pide huella
             pista="Marca lo que quieras borrar. Di «sí» para borrar lo marcado o «no». ESC cancela.",
             resumen=f"¿Libero espacio? Hasta {jarvis_cleanup.tamano_legible(total)} (lo marcado en la tarjeta).",
         )

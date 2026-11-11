@@ -16,6 +16,7 @@ import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
@@ -95,16 +96,28 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
-        if (api() != null) {
+        Lock.onStart(this, findViewById<ViewGroup>(android.R.id.content))
+        val client = api()
+        if (client != null) {
             showChat()
             startPolling()
+            Updater(this, client).check(manual = false)
         } else {
             showSetup("")
         }
     }
 
+    @Deprecated("Solo para la pantalla de bloqueo de Android 8–9.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (!Lock.onActivityResult(requestCode, resultCode)) {
+            @Suppress("DEPRECATION")
+            super.onActivityResult(requestCode, resultCode, data)
+        }
+    }
+
     override fun onStop() {
         super.onStop()
+        Lock.onStop()
         generation++
         recorder?.stop()
         recorder = null
@@ -399,21 +412,16 @@ class MainActivity : Activity() {
         }
 
         fun answer(approve: Boolean) {
-            buttons.visibility = View.GONE
-            result.text = "Enviando…"
-            result.visibility = View.VISIBLE
-            val client = api()
-            thread {
-                try {
-                    client?.postJson("/api/answer", JSONObject().put("qid", qid).put("approve", approve))
-                } catch (e: Exception) {
-                    ui.post { result.text = e.message ?: "No pude enviar la respuesta." }
-                }
+            if (approve && event.optBoolean("high")) {  // riesgo alto: primero la huella
+                Lock.authenticate(this, "Confirmar acción", event.optString("text").take(120),
+                    onSuccess = { send(qid, true, buttons, result) })
+                return
             }
+            send(qid, approve, buttons, result)
         }
 
         val yes = Button(this).apply {
-            text = event.optString("yes", "SÍ")
+            text = (if (event.optBoolean("high")) "🔒 " else "") + event.optString("yes", "SÍ")
             setTextColor(getColor(R.color.bg))
             backgroundTintList = getColorStateList(R.color.cyan)
             setOnClickListener { answer(true) }
@@ -424,6 +432,27 @@ class MainActivity : Activity() {
             backgroundTintList = getColorStateList(R.color.panel_light)
             setOnClickListener { answer(false) }
         }
+        finishQuestion(event, pending, qid, card, buttons, result, yes, no)
+    }
+
+    private fun send(qid: String, approve: Boolean, buttons: View, result: TextView) {
+        buttons.visibility = View.GONE
+        result.text = "Enviando…"
+        result.visibility = View.VISIBLE
+        val client = api()
+        thread {
+            try {
+                client?.postJson("/api/answer", JSONObject().put("qid", qid).put("approve", approve))
+            } catch (e: Exception) {
+                ui.post { result.text = e.message ?: "No pude enviar la respuesta." }
+            }
+        }
+    }
+
+    private fun finishQuestion(
+        event: JSONObject, pending: String?, qid: String, card: LinearLayout,
+        buttons: LinearLayout, result: TextView, yes: Button, no: Button,
+    ) {
         val half = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         buttons.addView(yes, half)
         buttons.addView(no, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -522,6 +551,9 @@ class MainActivity : Activity() {
         menu.menu.add(0, 4, 1, "Ver las pantallas de la PC")
         menu.menu.add(0, 2, 1, "Cancelar lo que está haciendo")
         menu.menu.add(0, 3, 2, "Desvincular este celular")
+        menu.menu.add(0, 5, 3, "Buscar actualización de la app")
+        val lockOn = Lock.enabled(this)
+        menu.menu.add(0, 6, 4, if (lockOn) "No pedir huella al abrir" else "Pedir huella al abrir")
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> {
@@ -539,6 +571,12 @@ class MainActivity : Activity() {
                     }
                 }
                 4 -> openScreen()
+                5 -> api()?.let { Updater(this, it).check(manual = true) }
+                6 -> Lock.authenticate(this, "Cambiar el bloqueo de Jarvis", "Confirma que eres tú",
+                    onSuccess = {
+                        prefs.edit().putBoolean("huella", !lockOn).apply()
+                        toast(if (lockOn) "La app ya no pedirá huella al abrirse." else "La app pedirá huella al abrirse.")
+                    })
                 3 -> AlertDialog.Builder(this)
                     .setMessage("¿Desvincular este celular? Para volver a usarlo tendrás que vincularlo con un código nuevo.")
                     .setPositiveButton("Desvincular") { _, _ -> unpair("") }

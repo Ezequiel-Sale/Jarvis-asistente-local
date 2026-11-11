@@ -19,6 +19,7 @@ import android.view.Surface
 import android.view.TextureView
 import android.view.Gravity
 import android.view.View
+import android.content.Intent
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -45,6 +46,7 @@ import kotlin.concurrent.thread
 class ScreenActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
+    private lateinit var screenRoot: FrameLayout
     private lateinit var image: ZoomImageView
     private lateinit var video: ZoomTextureView
 
@@ -194,6 +196,7 @@ class ScreenActivity : Activity() {
         root.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
 
         setContentView(root)
+        screenRoot = root
         refreshQuality()
     }
 
@@ -286,6 +289,7 @@ class ScreenActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        Lock.onStart(this, screenRoot)
         val client = api() ?: return finish()
         val mine = ++generation
         info.text = "Conectando…"
@@ -293,8 +297,17 @@ class ScreenActivity : Activity() {
         thread(name = "eventos-pantalla") { pollEvents(client, mine) }
     }
 
+    @Deprecated("Solo para la pantalla de bloqueo de Android 8–9.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (!Lock.onActivityResult(requestCode, resultCode)) {
+            @Suppress("DEPRECATION")
+            super.onActivityResult(requestCode, resultCode, data)
+        }
+    }
+
     override fun onStop() {
         super.onStop()
+        Lock.onStop()
         generation++
         recorder?.stop()
         recorder = null
@@ -513,7 +526,12 @@ class ScreenActivity : Activity() {
         question = AlertDialog.Builder(this)
             .setTitle("Jarvis pregunta")
             .setMessage(event.optString("text"))
-            .setPositiveButton(event.optString("yes", "SÍ")) { _, _ -> answer(true) }
+            .setPositiveButton(event.optString("yes", "SÍ")) { _, _ ->
+                if (event.optBoolean("high")) {
+                    Lock.authenticate(this, "Confirmar acción", event.optString("text").take(120),
+                        onSuccess = { answer(true) })
+                } else answer(true)
+            }
             .setNegativeButton(event.optString("no", "NO")) { _, _ -> answer(false) }
             .setCancelable(false)
             .show()
