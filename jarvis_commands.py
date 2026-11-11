@@ -482,7 +482,8 @@ def detectar_decision_guardar_rutina(texto: str) -> bool | None:
 
 
 def detectar_comando_juego(texto: str) -> str | None:
-    coincidencia = GAME_LAUNCH_COMMAND_PATTERN.fullmatch(texto)
+    # «¡Abre WhatsApp!»: con los signos de apertura no coincidía y la orden iba al modelo.
+    coincidencia = GAME_LAUNCH_COMMAND_PATTERN.fullmatch(texto.strip().lstrip("¡¿").strip())
     if coincidencia is None:
         return None
     nombre = coincidencia.group(1).strip(" \t,;:")
@@ -531,6 +532,7 @@ _CORRECCIONES_VOZ = (
     (r"\bmutia\b", "mutea"),
     (r"\bspot(?:icia|ifai|ifay|ifi)\b", "Spotify"),
     (r"\b(?:jarbis|yarvis|harvis|yarbis)\b", "Jarvis"),
+    (r"^(?:initial|inicial|inissia)\b", "inicia"),  # «Inicia WhatsApp» → «Initial WhatsApp» (2026-11-11)
     (r"\bpesta[nñ]a\s+de\s+you\s+tube\b", "pestaña de YouTube"),
     (r"\byou\s+tube\b", "YouTube"),
     (r"\b(volumen\s+de\s+\w+)\s+el\s+(\d)", r"\1 al \2"),  # «… de Spotify el 30 %»
@@ -786,6 +788,72 @@ def detectar_mover_ventana(texto: str) -> tuple[str, dict[str, object]] | None:
     if match.group("tv"):
         return "move_window", {"app": app, "screen_name": "tv"}
     return "move_window", {"app": app, "monitor": _numero_monitor(match.group(3))}
+
+
+_DONDE_NAVEGADOR = r"(?:\s+(?:en|de)\s+(?:brave|el\s+navegador))?"
+_HISTORIAL = {
+    "back": re.compile(
+        r"^(?:(?:vuelve|volver|regresa|regresar|ve|ir|anda|vamos)\s+(?:a\s+la\s+|una\s+)?(?:pagina\s+)?"
+        r"(?:atras|anterior)|(?:pagina|web)\s+anterior|atras)" + _DONDE_NAVEGADOR + r"$"),
+    "forward": re.compile(
+        r"^(?:(?:ve|ir|anda|avanza|avanzar|vamos)\s+(?:a\s+la\s+|una\s+)?(?:pagina\s+)?(?:adelante|siguiente)|"
+        r"(?:pagina|web)\s+siguiente)" + _DONDE_NAVEGADOR + r"$"),
+    "reload": re.compile(
+        r"^(?:(?:p?recarga|recargar|refresca|refrescar|actualiza|actualizar)\s+(?:la\s+|esta\s+)?"
+        r"(?:pagina|pestana|web)|recarga|refresca|(?:(?:pulsa|aprieta|presiona|dale)\s+(?:a\s+)?)?f5)"
+        + _DONDE_NAVEGADOR + r"$"),
+}
+# Verbos inequívocos: «muestra», «ve a» o «agranda» se confundían con otras órdenes
+# («muestra la hora», «ve a youtube.com», «agranda la letra»).
+_VERBO_VENTANA = {
+    "window_minimize": r"minimiza|minimizar|minimizame|esconde",
+    "window_maximize": r"maximiza|maximizar|maximizame",
+    "window_restore": r"restaura|restaurar|desminimiza",
+    "window_focus": r"enfoca|enfocar",
+}
+_VENTANA = re.compile(
+    r"^(?P<verbo>" + "|".join(_VERBO_VENTANA.values()) + r")\s+(?:(?:la|el|las|los)\s+)?"
+    r"(?:ventanas?\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?(?P<app>.+?)(?:\s+(?:al\s+frente|adelante))?$"
+)
+_CAMBIA_A_VENTANA = re.compile(
+    r"^(?:cambia|cambiate|pasa|pasate|ve|ir|vamos)\s+a\s+la\s+ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?(?P<app>.+)$"
+)
+_AL_FRENTE = re.compile(
+    r"^(?:trae|traeme|pon|ponme)\s+(?:(?:la|el)\s+)?(?:ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?"
+    r"(?P<app>.+?)\s+(?:al\s+frente|adelante|encima)$"
+)
+# Brave y Jarvis ya tienen sus frases («minimiza Brave», «minimiza la ventana»).
+_VENTANA_EXCLUIDAS = {"brave", "navegador", "jarvis", "app", "aplicacion", "ventana", "la ventana",
+                      "esta ventana", "pantalla", "musica", "cancion", "video", "volumen"}
+
+
+def detectar_comando_ventanas(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«página anterior», «recarga la página», «F5», «minimiza Discord», «maximiza Spotify»,
+    «trae el explorador al frente», «muestra el escritorio» (= minimizar todo)."""
+    consulta = _normalizar_consulta(texto)
+    # Whisper parte el verbo: «minimiza Claude» → «Mini Mesa Claude».
+    consulta = re.sub(r"^mini\s*m[ie][sz]{1,2}a\b", "minimiza", consulta)
+    consulta = re.sub(r"^maxi\s*m[ie][sz]{1,2}a\b", "maximiza", consulta)
+    for accion, patron in _HISTORIAL.items():
+        if patron.fullmatch(consulta):
+            return "browser_history", {"action": accion}
+    if consulta in ("muestra el escritorio", "mostrar el escritorio", "minimiza todo",
+                    "minimiza todas las ventanas", "ver el escritorio"):
+        return "window_control", {"app": "todo", "action": "window_minimize"}
+    if (match := _AL_FRENTE.fullmatch(consulta) or _CAMBIA_A_VENTANA.fullmatch(consulta)) is not None:
+        app = match.group("app").strip()
+        if app and app not in _VENTANA_EXCLUIDAS:
+            return "window_control", {"app": app, "action": "window_focus"}
+        return None
+    match = _VENTANA.fullmatch(consulta)
+    if match is None:
+        return None
+    app = match.group("app").strip()
+    if not app or app in _VENTANA_EXCLUIDAS or app.startswith(("el monitor", "la pantalla", "el escritorio")):
+        return None
+    verbo = match.group("verbo")
+    accion = next(a for a, patron in _VERBO_VENTANA.items() if re.fullmatch(patron, verbo))
+    return "window_control", {"app": app, "action": accion}
 
 
 def detectar_comando_monitores(texto: str) -> tuple[str, dict[str, object]] | None:

@@ -49,6 +49,7 @@ import jarvis_voices
 import jarvis_hardware
 import jarvis_routines
 import jarvis_windows
+import jarvis_system
 import jarvis_theme
 from jarvis_actions import (
     CancellationToken,
@@ -65,6 +66,7 @@ from PIL import Image, ImageTk
 from jarvis_agent import PlannedAction, procesar_con_herramientas
 from jarvis_commands import (
     detectar_accion_ventana,
+    detectar_comando_ventanas,
     detectar_busqueda_youtube,
     detectar_comando_audio,
     detectar_comando_dispositivo_salida,
@@ -263,6 +265,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             portapapeles=(jarvis_archivos.leer_portapapeles, jarvis_archivos.escribir_portapapeles),
         )
         self.fps_meter = jarvis_fps.MedidorFPS()
+        self._stt_vocabulary_cache: tuple[float, list[str]] = (0.0, [])
+        core.configurar_vocabulario_stt(self._stt_vocabulary)
+        # La lista de apps del menú Inicio tarda ~0,4 s: se lee de fondo para que «abre X» responda enseguida.
+        threading.Thread(target=jarvis_system.apps_instaladas, name="JarvisApps", daemon=True).start()
         try:
             self._mobile_enabled = core.obtener_preferencia(jarvis_mobile.PREFERENCIA_ACTIVO) == "1"
         except Exception:
@@ -761,6 +767,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             or detectar_comando_voz(text)
             or detectar_comando_gpu(text)
             or detectar_comando_energia(text)
+            or detectar_comando_ventanas(text)
             or self.plugins.detectar_comando(text)
         )
         if system_query is not None:
@@ -982,6 +989,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 or detectar_comando_voz(transcript)
                 or detectar_comando_gpu(transcript)
                 or detectar_comando_energia(transcript)
+                or detectar_comando_ventanas(transcript)
             )
             plugins = getattr(self, "plugins", None)
             if system_query is None and isinstance(plugins, GestorPlugins):
@@ -2205,6 +2213,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             respuestas[0 if event[2] else 1]()
                     elif event[0] == "mobile_cancel":
                         self._cancel_current_operation()
+                    elif event[0] == "games_list":
+                        self._render_games(event[1])
                     elif event[0] == "mobile_screen":
                         self._show_screen_badge()
                     elif event[0] == "mobile_control_request":
@@ -2756,6 +2766,43 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         )
         faltan = f" ({total - movidas} no se pudieron mover)" if movidas < total else ""
         return f"Moví {quien} al monitor {numero}{faltan}."
+
+    STT_VOCABULARY_FIXED = ("Jarvis", "Claude", "Brave", "YouTube", "Discord", "Spotify", "WhatsApp", "Steam")
+
+    def _stt_vocabulary(self) -> list[str]:
+        """Nombres para la pista de Whisper (hilo de la transcripción; se guarda 30 s)."""
+        momento, nombres = self._stt_vocabulary_cache
+        if time.monotonic() - momento < 30 and nombres:
+            return nombres
+        nombres = list(self.STT_VOCABULARY_FIXED)
+        try:
+            nombres += jarvis_windows.nombres_para_voz(jarvis_windows.listar_ventanas(), os.getpid())
+        except Exception:
+            logging.debug("No se pudieron leer las ventanas para la transcripción.", exc_info=True)
+        try:
+            nombres += [rutina[1] for rutina in jarvis_routines.listar_rutinas()][:15]
+        except Exception:
+            logging.debug("No se pudieron leer las rutinas para la transcripción.", exc_info=True)
+        nombres = list(dict.fromkeys(n.strip() for n in nombres if n and n.strip()))
+        self._stt_vocabulary_cache = (time.monotonic(), nombres)
+        return nombres
+
+    def _tool_window_control(self, app: str, action: str) -> str:
+        """«minimiza Discord», «maximiza Spotify», «trae el explorador al frente»."""
+        clave = jarvis_windows.normalizar(app)
+        if clave == "jarvis" and action in ("window_minimize", "window_maximize"):
+            return self._tool_manage_window("minimize" if action == "window_minimize" else "maximize")
+        hechas, programas = jarvis_windows.cambiar_estado(app, action)
+        verbo = jarvis_windows.ACCIONES_ESTADO[action][0]
+        if hechas == 0:
+            raise RuntimeError(f"Windows no dejó cambiar la ventana de «{app}».")
+        if clave in jarvis_windows.TODO:
+            return f"{verbo.capitalize()} todas las ventanas ({hechas})."
+        cuantas = f"{hechas} ventanas" if hechas > 1 else "la ventana"
+        return f"{verbo.capitalize()} {cuantas} de {', '.join(programas)}."
+
+    def _tool_browser_history(self, action: str) -> str:
+        return jarvis_windows.navegar_historial(action)
 
     def _monitor_por_nombre(self, nombre: str) -> int:
         """«tv» → el monitor activo cuyo nombre lo contiene (la «Smart TV Pro»)."""
@@ -3899,7 +3946,23 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         )
 
     def _execute_game_action(self, game_name: str, command: str) -> None:
-        self._start_direct_tool_action("launch_game", {"name": game_name}, command)
+        """«abre X»: primero los juegos; si no es un juego, la app instalada (WhatsApp…).
+
+        Antes solo buscaba juegos y «abre WhatsApp» fallaba aunque esté instalada.
+        Se decide en otro hilo: buscar juegos y leer el menú Inicio toma un momento.
+        """
+
+        def decidir() -> None:
+            try:
+                localizar_ejecutable_juego(game_name)
+                herramienta, argumentos = "launch_game", {"name": game_name}
+            except Exception:
+                es_app = jarvis_system.buscar_app(game_name, jarvis_system.apps_instaladas()) is not None
+                herramienta, argumentos = ("open_app", {"name": game_name}) if es_app else (
+                    "launch_game", {"name": game_name})
+            self.events.put(("system_query", herramienta, argumentos, command))
+
+        threading.Thread(target=decidir, name="JarvisAbrir", daemon=True).start()
 
     def _execute_window_action(self, action: str, command: str) -> None:
         respuestas = {

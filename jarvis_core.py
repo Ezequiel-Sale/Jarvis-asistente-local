@@ -32,7 +32,8 @@ STT_MODEL = "Systran/faster-whisper-small"
 # devuelve texto. Que sea corto: una pista larga se cuela a veces en la transcripción.
 STT_PROMPT = (
     "Órdenes para Jarvis: pausa, reanuda, silencia, mutea, desmutea la pestaña de YouTube "
-    "en Brave, monitor 1, monitor 2, haz clic, volumen, Spotify."
+    "en Brave, monitor 1, monitor 2, haz clic, volumen, Spotify. Minimiza, maximiza, restaura, "
+    "recarga la página."
 )
 LLM_URL = "http://127.0.0.1:11434/api/generate"
 TTS_HOST = "127.0.0.1"
@@ -469,13 +470,48 @@ def precalentar_stt(intentos: int = 30, espera: float = 2.0) -> bool:
     return False
 
 
+_vocabulario_stt: "Callable[[], list[str]] | None" = None
+# Una pista larga se cuela a veces en la transcripción: pocos nombres y tope de largo.
+MAX_VOCABULARIO_STT = 12
+MAX_PISTA_STT = 300
+
+
+def configurar_vocabulario_stt(funcion: "Callable[[], list[str]] | None") -> None:
+    """Nombres que Whisper debe conocer (programas abiertos, rutinas…): los pone la app."""
+    global _vocabulario_stt
+    _vocabulario_stt = funcion
+
+
+def prompt_stt() -> str:
+    """Pista para Whisper: la fija más los nombres del momento.
+
+    Whisper escribe lo que le suena en español cuando no conoce una palabra
+    («Claude» salía como «Cloudy» o «clau de»); ver los nombres en la pista basta
+    para que los escriba bien.
+    """
+    palabras: list[str] = []
+    if _vocabulario_stt is not None:
+        try:
+            palabras = [p for p in dict.fromkeys(_vocabulario_stt()) if p]
+        except Exception:
+            logging.debug("No se pudo armar el vocabulario de la transcripción.", exc_info=True)
+    if not palabras:
+        return STT_PROMPT
+    pista = STT_PROMPT + " Nombres:"
+    for palabra in palabras[:MAX_VOCABULARIO_STT]:
+        if len(pista) + len(palabra) + 3 > MAX_PISTA_STT:
+            break
+        pista += (" " if pista.endswith(":") else ", ") + palabra
+    return pista + "."
+
+
 def procesar_stt(ruta_audio: str) -> str:
     inicio = time.perf_counter()
     try:
         with open(ruta_audio, 'rb') as f:
             res = requests.post(
                 STT_URL,
-                data={"model": STT_MODEL, "language": "es", "prompt": STT_PROMPT},
+                data={"model": STT_MODEL, "language": "es", "prompt": prompt_stt()},
                 files={"file": (Path(ruta_audio).name, f, "audio/wav")},
                 timeout=(10, STT_TIMEOUT),
             )

@@ -32,6 +32,8 @@ class ToolEventHost(Protocol):
     def _tool_navigate_browser(self, url: str) -> str: ...
     def _tool_launch_game(self, name: str) -> str: ...
     def _tool_manage_window(self, action: str) -> str: ...
+    def _tool_window_control(self, app: str, action: str) -> str: ...
+    def _tool_browser_history(self, action: str) -> str: ...
     def _tool_search_youtube(self, query: str, play_index: int | None = None) -> str: ...
     def _tool_configure_display(
         self, action: str, monitor: int, second_monitor: int | None = None
@@ -334,6 +336,43 @@ def crear_registro_herramientas(
         timeout_seconds=20,
     )
     registry.register(
+        "window_control",
+        (
+            "Minimiza, maximiza, restaura o trae al frente las ventanas de cualquier programa. "
+            "app es el programa (discord, spotify, explorador…), parte del título, «todo» para "
+            "todas las ventanas o «esta ventana» para la activa. Para Brave o Jarvis también sirve."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string"},
+                "action": {"type": "string",
+                           "enum": ["window_minimize", "window_maximize", "window_restore", "window_focus"]},
+            },
+            "required": ["app", "action"],
+            "additionalProperties": False,
+        },
+        host._tool_window_control,
+        argument_validators={"app": _trim_non_empty_text},
+        risk=ToolRisk.MEDIUM,
+        label="Controlar ventanas",
+        timeout_seconds=15,
+    )
+    registry.register(
+        "browser_history",
+        "En Brave: página anterior (back), página siguiente (forward) o recargar la página (reload, F5).",
+        {
+            "type": "object",
+            "properties": {"action": {"type": "string", "enum": ["back", "forward", "reload"]}},
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+        host._tool_browser_history,
+        risk=ToolRisk.LOW,
+        label="Navegar en Brave",
+        timeout_seconds=10,
+    )
+    registry.register(
         "fix_display_scaling",
         (
             "Arregla la barra de tareas mal dibujada de un monitor con escala alta: baja "
@@ -378,10 +417,30 @@ def crear_registro_herramientas(
         exposed=False,  # el modelo no puede hacer clics: solo la app, con confirmación
     )
     registry.register(
+        "open_app",
+        (
+            "Abre una aplicación instalada por su nombre, tal como aparece en el menú Inicio "
+            "(WhatsApp, Discord, Claude, Bloc de notas, Calculadora…), también las de la "
+            "Microsoft Store. Úsala para «abre X» cuando no tengas una ruta."
+        ),
+        {
+            "type": "object",
+            "properties": {"name": {"type": "string", "minLength": 2, "maxLength": 80}},
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        jarvis_system.abrir_app,
+        argument_validators={"name": _trim_non_empty_text},
+        risk=ToolRisk.MEDIUM,
+        label="Abrir aplicación",
+        timeout_seconds=30,
+    )
+    registry.register(
         "open_program",
         (
             "Abre un programa, acceso directo (.lnk), documento o carpeta indicado por "
-            "su ruta completa en el equipo (target)."
+            "su ruta completa en el equipo (target). Si no conoces la ruta exacta, no la "
+            "inventes: usa open_app con el nombre de la aplicación."
         ),
         {
             "type": "object",

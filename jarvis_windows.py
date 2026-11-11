@@ -63,7 +63,61 @@ def elegir(ventanas: list[Ventana], app: str, propio_pid: int) -> list[Ventana]:
     por_programa = [v for v in ajenas if v.programa in programas]
     if por_programa:
         return por_programa
-    return [v for v in ajenas if clave and clave in normalizar(v.titulo)]
+    por_titulo = [v for v in ajenas if clave and clave in normalizar(v.titulo)]
+    if por_titulo:
+        return por_titulo
+    parecido = programa_parecido(clave, {v.programa for v in ajenas if v.programa})
+    return [v for v in ajenas if v.programa == parecido] if parecido else []
+
+
+def clave_fonetica(texto: str) -> str:
+    """Forma simplificada para comparar nombres mal transcritos.
+
+    Whisper escribe en español lo que oye de un nombre en inglés: «Claude» →
+    «Cloudy», «clau de», «Clouder», «Cláudel». Sin espacios, con «ou/ow/aw» → «au»,
+    «y» → «i», letras que suenan igual unificadas y sin la terminación débil
+    (-e, -i, -er, -el), todas quedan «claud».
+    """
+    import re
+
+    clave = re.sub(r"[^a-z]", "", normalizar(texto))
+    for viejo, nuevo in (("gua", "wa"), ("hua", "wa"), ("ou", "au"), ("ow", "au"), ("aw", "au"), ("y", "i"),
+                         ("z", "s"), ("v", "b"),
+                         ("ck", "c"), ("k", "c"), ("qu", "c"), ("ph", "f"), ("h", "")):
+        clave = clave.replace(viejo, nuevo)
+    clave = re.sub(r"(.)\1+", r"\1", clave)  # letras dobles
+    return re.sub(r"(?:er|el|e|i)$", "", clave) if len(clave) > 4 else clave
+
+
+def programa_parecido(nombre: str, programas: set[str], minimo: float = 0.8) -> str | None:
+    """El programa abierto que más se parece a ``nombre`` (si hay uno claro), o None."""
+    from difflib import SequenceMatcher
+
+    buscado = clave_fonetica(nombre)
+    if len(buscado) < 3:
+        return None
+    puntajes = sorted(((SequenceMatcher(None, buscado, clave_fonetica(p)).ratio(), p) for p in programas),
+                      reverse=True)
+    if not puntajes or puntajes[0][0] < minimo:
+        return None
+    if len(puntajes) > 1 and puntajes[1][0] >= puntajes[0][0] - 0.05:
+        return None  # dos parecidos por igual: mejor no adivinar
+    logging.info("«%s» se tomó como la ventana de %s (nombre parecido).", nombre, puntajes[0][1])
+    return puntajes[0][1]
+
+
+def nombres_para_voz(ventanas: list[Ventana], propio_pid: int) -> list[str]:
+    """Nombres de los programas abiertos para la pista de Whisper («Claude», «Discord»…)."""
+    import jarvis_system_info
+
+    nombres = []
+    for ventana in ventanas:
+        if ventana.pid == propio_pid or not ventana.programa:
+            continue
+        nombre = jarvis_system_info.nombre_aplicacion(ventana.programa + ".exe", ventana.titulo)
+        if nombre and len(nombre) <= 24 and nombre not in nombres:
+            nombres.append(nombre)
+    return nombres
 
 
 def nuevo_rect(
@@ -251,3 +305,108 @@ def ventanas_en_monitor(app: str, monitor) -> tuple[int, int]:
     finally:
         if anterior:
             user32.SetThreadDpiAwarenessContext(anterior)
+
+
+# --- Minimizar, maximizar, restaurar y traer al frente («minimiza Discord») -------------
+
+SW_MINIMIZE = 6
+ACCIONES_ESTADO = {
+    "window_minimize": ("minimicé", SW_MINIMIZE),
+    "window_maximize": ("maximicé", SW_MAXIMIZE),
+    "window_restore": ("restauré", SW_RESTORE),
+    "window_focus": ("traje al frente", None),
+}
+VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
+
+
+def enfocar(hwnd: int, user32=None) -> bool:
+    """Trae una ventana al frente (la restaura si estaba minimizada).
+
+    Windows solo deja cambiar el foco a la app que lo tiene; pulsar y soltar Alt
+    antes de ``SetForegroundWindow`` es el truco habitual para que lo permita aunque
+    la orden llegue por voz con Jarvis de fondo.
+    """
+    user32 = user32 or _user32()
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+    user32.keybd_event(VK_MENU, 0, 0, 0)
+    user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+    return bool(user32.SetForegroundWindow(hwnd))
+
+
+def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = None,
+                   propio_pid: int | None = None, mostrar=None) -> tuple[int, list[str]]:
+    """Aplica ``accion`` a las ventanas de ``app``; devuelve (cuántas, programas).
+
+    «traer al frente» usa solo la primera (la de más arriba); el resto, todas.
+    """
+    if accion not in ACCIONES_ESTADO:
+        raise ErrorVentana(f"Acción de ventana no válida: {accion}.")
+    ventanas = listar_ventanas() if ventanas is None else ventanas
+    propio = os.getpid() if propio_pid is None else propio_pid
+    clave = normalizar(app)
+    if clave in ACTIVA:
+        elegidas = ventana_activa(ventanas, propio)
+    else:
+        elegidas = elegir(ventanas, app, propio)
+    if not elegidas:
+        raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
+    if accion == "window_focus":
+        elegidas = elegidas[:1]
+    if mostrar is None:
+        user32 = _user32()
+
+        def mostrar(ventana: Ventana, comando: int | None) -> bool:
+            if comando is None:
+                return enfocar(ventana.hwnd, user32)
+            user32.ShowWindow(ventana.hwnd, comando)
+            return True
+
+    hechas = 0
+    for ventana in elegidas:
+        try:
+            hechas += bool(mostrar(ventana, ACCIONES_ESTADO[accion][1]))
+        except Exception:
+            logging.exception("No se pudo cambiar la ventana de %s.", ventana.programa)
+    return hechas, sorted({v.programa or v.titulo for v in elegidas})
+
+
+# --- Página anterior, siguiente y recargar en Brave ------------------------------------
+
+TECLAS_NAVEGADOR = {
+    "back": (("tecla", 0x12, 0, 0), ("tecla", 0x25, 0, 0), ("tecla", 0x25, 0, 2), ("tecla", 0x12, 0, 2)),
+    "forward": (("tecla", 0x12, 0, 0), ("tecla", 0x27, 0, 0), ("tecla", 0x27, 0, 2), ("tecla", 0x12, 0, 2)),
+    "reload": (("tecla", 0x74, 0, 0), ("tecla", 0x74, 0, 2)),  # F5
+}
+
+
+def ventana_brave(ventanas: list[Ventana], activa: int | None) -> Ventana | None:
+    """La de Brave en primer plano o, si no, la última usada (la más arriba en orden Z)."""
+    de_brave = [v for v in ventanas if v.programa == "brave"]
+    for ventana in de_brave:
+        if ventana.hwnd == activa:
+            return ventana
+    return de_brave[0] if de_brave else None
+
+
+def navegar_historial(accion: str, *, enviar=None, esperar: float = 0.25) -> str:
+    """Alt+← (atrás), Alt+→ (adelante) o F5 (recargar) en la ventana de Brave."""
+    import time
+
+    if accion not in TECLAS_NAVEGADOR:
+        raise ErrorVentana(f"Acción del navegador no válida: {accion}.")
+    user32 = _user32()
+    ventana = ventana_brave(listar_ventanas(), user32.GetForegroundWindow())
+    if ventana is None:
+        raise ErrorVentana("No encontré ninguna ventana abierta de Brave.")
+    if ventana.hwnd != user32.GetForegroundWindow():
+        enfocar(ventana.hwnd, user32)
+        time.sleep(esperar)  # que Brave tenga el foco antes de las teclas
+    if enviar is None:
+        import jarvis_input
+
+        enviar = jarvis_input._send_input
+    enviar(list(TECLAS_NAVEGADOR[accion]))
+    return {"back": "Volví a la página anterior en Brave.",
+            "forward": "Fui a la página siguiente en Brave.",
+            "reload": "Recargué la página en Brave (F5)."}[accion]

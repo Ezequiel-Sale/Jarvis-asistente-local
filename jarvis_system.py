@@ -1,8 +1,10 @@
+import logging
 import os
 import re
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from jarvis_commands import normalizar_nombre_juego
@@ -11,6 +13,39 @@ GAME_DIRECTORIES = (
     Path(r"C:\Games"),
     Path(r"C:\Program Files (x86)\Steam\steamapps\common"),
 )
+# En cada disco (C:, D:, E:…) se buscan también estas carpetas de juegos.
+GAME_FOLDERS_PER_DISK = ("Games", "Epic Games", "XboxGames", r"SteamLibrary\steamapps\common")
+
+
+def carpetas_juegos(discos=None, steam=None) -> list[Path]:
+    """Carpetas de juegos que existen: las fijas, «Games», «Epic Games», «XboxGames» y
+    «SteamLibrary» en cada disco, Epic de Program Files y todas las bibliotecas de Steam.
+
+    La usan el lanzador («abre Elden Ring») y el modo juego. Antes el lanzador solo
+    miraba C:/Games y el Steam de C: (no veía D:/Games ni E:/Games).
+    """
+    if discos is None:
+        import jarvis_system_info
+
+        try:
+            discos = [Path(d.unidad + "\\") for d in jarvis_system_info.listar_discos()]
+        except Exception:
+            logging.debug("No se pudieron leer los discos para buscar juegos.", exc_info=True)
+            discos = []
+    if steam is None:
+        from jarvis_games_watch import bibliotecas_steam
+
+        steam = bibliotecas_steam()
+    programas = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    candidatas = [*GAME_DIRECTORIES, *steam, programas / "Epic Games"]
+    candidatas += [disco / sub for disco in discos for sub in GAME_FOLDERS_PER_DISK]
+    vistas, carpetas = set(), []
+    for carpeta in candidatas:
+        clave = str(carpeta).lower().rstrip("\\/")
+        if clave not in vistas and carpeta.is_dir():
+            vistas.add(clave)
+            carpetas.append(carpeta)
+    return carpetas
 
 GAME_EXECUTABLE_PREFERENCES = {
     "assassinscreedshadows": ("ACShadows.exe",),
@@ -88,7 +123,10 @@ GAME_EXECUTABLE_IGNORED_DIRECTORIES = {
 GAME_EXECUTABLE_IGNORED_NAME = re.compile(
     r"^(?:unins|setup|install|vc_redist|dxsetup|dxwebsetup)"
     r"|(?:crash|report|installer|service|broker|cleaner|attestation|"
-    r"downloader|repair|updater|rapidcrc|epicwebhelper)",
+    r"downloader|repair|updater|rapidcrc|epicwebhelper)"
+    # Paquetes de actualización («Red Dead Redemption 2 update 1311.23 - 1491.50.exe»):
+    # con ▶ JUGAR se habría ejecutado la actualización en vez del juego.
+    r"|\bupdate\b",
     re.IGNORECASE,
 )
 
@@ -310,6 +348,44 @@ def _buscar_ejecutables_juego(carpeta: Path) -> list[Path]:
             ejecutables.append(Path(directorio) / archivo)
     return ejecutables
 
+# Ejecutables que acompañan al juego pero no lo inician (guías, bandas sonoras, ajustes,
+# antitrampas, lanzadores intermedios, el «-Shipping» de Unreal…).
+GAME_EXECUTABLE_SECONDARY = re.compile(
+    r"guide|artbook|soundtrack|settings|config|generator|filelist|_eac|eac_|launcher|"
+    r"shipping|protected|editor|benchmark|server|tool|readme|manual",
+    re.IGNORECASE,
+)
+
+
+def _clave_ejecutable(texto: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", texto.lower())
+
+
+def _iniciales(nombre: str) -> str:
+    """«Pro Evolution Soccer 2018» → «pes2018» (los números van enteros)."""
+    partes = re.findall(r"[a-z]+|\d+", nombre.lower())
+    return "".join(p if p.isdigit() else p[0] for p in partes)
+
+
+def _ejecutable_principal(nombre_carpeta: str, candidatos: list[Path]) -> Path | None:
+    """Entre varios .exe, el que inicia el juego (o None si no hay uno claro)."""
+    from difflib import SequenceMatcher
+
+    principales = [c for c in candidatos if not GAME_EXECUTABLE_SECONDARY.search(c.stem)] or candidatos
+    if len(principales) == 1:
+        return principales[0]
+    carpeta = _clave_ejecutable(nombre_carpeta)
+    iniciales = _iniciales(nombre_carpeta)
+    for candidato in principales:
+        if _clave_ejecutable(candidato.stem) in (carpeta, iniciales):
+            return candidato
+    puntajes = sorted(((SequenceMatcher(None, carpeta, _clave_ejecutable(c.stem)).ratio(), c) for c in principales),
+                      key=lambda p: p[0], reverse=True)
+    if puntajes[0][0] >= 0.6 and (len(puntajes) == 1 or puntajes[0][0] - puntajes[1][0] >= 0.15):
+        return puntajes[0][1]
+    return None
+
+
 def _elegir_ejecutable_juego(carpeta: Path) -> Path:
     preferencias = GAME_EXECUTABLE_PREFERENCES.get(
         normalizar_nombre_juego(carpeta.name).replace(" ", ""),
@@ -332,6 +408,9 @@ def _elegir_ejecutable_juego(carpeta: Path) -> Path:
     if len(ejecutables_raiz) == 1:
         return ejecutables_raiz[0]
     candidatos = ejecutables_raiz or ejecutables
+    elegido = _ejecutable_principal(carpeta.name, candidatos)
+    if elegido is not None:
+        return elegido
     nombres = ", ".join(sorted(ejecutable.name for ejecutable in candidatos))
     raise ValueError(
         f"Encontré varios ejecutables posibles en «{carpeta.name}»: {nombres}."
@@ -340,8 +419,7 @@ def _elegir_ejecutable_juego(carpeta: Path) -> Path:
 def localizar_ejecutable_juego(nombre: str) -> tuple[str, Path]:
     coincidencias = [
         carpeta
-        for raiz in GAME_DIRECTORIES
-        if raiz.is_dir()
+        for raiz in carpetas_juegos()
         for carpeta in raiz.iterdir()
         if carpeta.is_dir() and _nombre_coincide_con_juego(nombre, carpeta.name)
     ]
@@ -357,6 +435,12 @@ def localizar_ejecutable_juego(nombre: str) -> tuple[str, Path]:
         raise FileNotFoundError(
             f"No encontré «{nombre}» en las carpetas de juegos configuradas."
         )
+    distintos = {normalizar_nombre_juego(c.name).replace(" ", "") for c in coincidencias}
+    if len(coincidencias) > 1 and len(distintos) == 1:
+        # El mismo juego en dos lugares (p. ej. el Steam de C: y una biblioteca vieja en
+        # D:): se usa el primero, que sigue el orden de ``carpetas_juegos`` (fijas y
+        # bibliotecas registradas en Steam antes que las de cada disco).
+        coincidencias = coincidencias[:1]
     if len(coincidencias) > 1:
         opciones = ", ".join(sorted(carpeta.name for carpeta in coincidencias))
         raise ValueError(f"El nombre «{nombre}» coincide con varios juegos: {opciones}.")
@@ -451,3 +535,112 @@ def abrir_programa(target: str) -> str:
         raise FileNotFoundError(f"No encuentro «{ruta}».")
     os.startfile(str(ruta))  # type: ignore[attr-defined]  # solo Windows
     return f"Abrí «{ruta.stem or ruta.name}»."
+
+
+# --- Abrir aplicaciones instaladas por su nombre («abre WhatsApp») ----------------------
+
+CACHE_APPS = 600.0
+_cache_apps: tuple[float, list[tuple[str, str]]] | None = None
+_NO_APPS = re.compile(r"^(?:desinstalar|uninstall|eliminar)\b|\b(?:help|ayuda|support|readme|léame)\b", re.IGNORECASE)
+
+
+def _leer_apps_inicio() -> list[tuple[str, str]]:
+    """(nombre, AppID) del menú Inicio con ``Get-StartApps`` (apps de la Tienda y de escritorio)."""
+    import json
+    import subprocess
+
+    salida = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        creationflags=0x08000000 if os.name == "nt" else 0,
+    ).stdout.strip()
+    datos = json.loads(salida) if salida else []
+    if isinstance(datos, dict):
+        datos = [datos]
+    return [(str(d.get("Name") or ""), str(d.get("AppID") or "")) for d in datos]
+
+
+def apps_instaladas(*, leer=None, ahora: float | None = None) -> list[tuple[str, str]]:
+    """Apps del menú Inicio (se guardan 10 minutos; sin enlaces web ni desinstaladores)."""
+    global _cache_apps
+    import time as _time
+
+    ahora = _time.monotonic() if ahora is None else ahora
+    if leer is None and _cache_apps is not None and ahora - _cache_apps[0] < CACHE_APPS:
+        return _cache_apps[1]
+    try:
+        apps = (leer or _leer_apps_inicio)()
+    except Exception:
+        logging.warning("No se pudo leer la lista de aplicaciones del menú Inicio.", exc_info=True)
+        apps = []
+    apps = [(n, i) for n, i in apps if n and i and "://" not in i and not _NO_APPS.search(n)]
+    if leer is None:
+        _cache_apps = (ahora, apps)
+    return apps
+
+
+def buscar_app(nombre: str, apps: list[tuple[str, str]]) -> tuple[str, str] | None:
+    """La app que corresponde a ``nombre``: igual, luego que empiece o contenga, luego parecida."""
+    import jarvis_windows
+
+    clave = jarvis_windows.normalizar(re.sub(
+        r"^(?:(?:la|el)\s+)?(?:app(?:licacion|licación)?|programa)\s+(?:de\s+)?", "", nombre.strip(), flags=re.I))
+    clave = clave.strip(" .¡!¿?")
+    if len(clave) < 2:
+        return None
+    por_nombre = {jarvis_windows.normalizar(n): (n, i) for n, i in apps}
+    if clave in por_nombre:
+        return por_nombre[clave]
+    empiezan = sorted((n for n in por_nombre if n.startswith(clave + " ") or (" " + clave + " ") in f" {n} "), key=len)
+    if empiezan:
+        return por_nombre[empiezan[0]]
+    parecido = jarvis_windows.programa_parecido(clave, set(por_nombre))
+    return por_nombre[parecido] if parecido else None
+
+
+def abrir_app(name: str) -> str:
+    """Abre una app instalada por su nombre del menú Inicio (Tienda o escritorio)."""
+    encontrada = buscar_app(name, apps_instaladas())
+    if encontrada is None:
+        raise FileNotFoundError(f"No encontré la aplicación «{name}» en el menú Inicio.")
+    nombre, app_id = encontrada
+    os.startfile("shell:AppsFolder\\" + app_id)
+    return f"Abrí {nombre}."
+
+
+# --- Lista de juegos reconocidos (página «Juegos») --------------------------------------
+
+# Carpetas dentro de las de juegos que no son juegos.
+CARPETAS_NO_JUEGO = {"__macosx", "save games", "savegames", "directxredist", "steamworks shared",
+                     "steam controller configs", "steamvr", "steamlinux runtime", "proton experimental",
+                     "wallpaper_engine", "launcher"}
+
+
+@dataclass(frozen=True)
+class JuegoEncontrado:
+    nombre: str  # nombre de la carpeta: es lo que se dice en «abre …»
+    carpeta: Path
+    ejecutable: Path | None
+    problema: str | None = None  # por qué no se puede abrir (sin .exe, varios posibles…)
+
+
+def listar_juegos(raices: list[Path] | None = None) -> list[JuegoEncontrado]:
+    """Juegos de ``carpetas_juegos()`` con el .exe que se abriría, en el mismo orden de
+    prioridad que el lanzador (un juego repetido en otro disco aparece una vez)."""
+    vistos: set[str] = set()
+    juegos: list[JuegoEncontrado] = []
+    for raiz in carpetas_juegos() if raices is None else raices:
+        try:
+            carpetas = sorted((c for c in raiz.iterdir() if c.is_dir()), key=lambda c: c.name.casefold())
+        except OSError:
+            continue
+        for carpeta in carpetas:
+            clave = normalizar_nombre_juego(carpeta.name).replace(" ", "")
+            if carpeta.name.lower() in CARPETAS_NO_JUEGO or clave in vistos:
+                continue
+            vistos.add(clave)
+            try:
+                juegos.append(JuegoEncontrado(carpeta.name, carpeta, _elegir_ejecutable_juego(carpeta)))
+            except (OSError, ValueError) as error:
+                juegos.append(JuegoEncontrado(carpeta.name, carpeta, None, str(error)))
+    return sorted(juegos, key=lambda j: (j.ejecutable is None, j.nombre.casefold()))

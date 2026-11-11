@@ -41,6 +41,12 @@ class _TestHost:
     def _tool_manage_window(self, action: str) -> str:
         return self._record(("window", action), "window changed")
 
+    def _tool_window_control(self, app: str, action: str) -> str:
+        return self._record(("window_control", app, action), "window state changed")
+
+    def _tool_browser_history(self, action: str) -> str:
+        return self._record(("browser_history", action), "browser navigated")
+
     def _tool_search_youtube(self, query: str, play_index: int | None = None) -> str:
         return self._record(("youtube", query, play_index), "YouTube opened")
 
@@ -93,7 +99,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 35)
+        self.assertEqual(len(tools), 38)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -114,6 +120,9 @@ class ToolRegistryTests(unittest.TestCase):
                 "lock_computer",
                 "set_output_device",
                 "set_jarvis_audio",
+                "window_control",
+                "open_app",
+                "browser_history",
                 "open_new_browser_tab",
                 "navigate_browser",
                 "launch_game",

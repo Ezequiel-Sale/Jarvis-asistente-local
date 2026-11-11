@@ -81,13 +81,14 @@ class JarvisUIMixin:
             pages.grid_rowconfigure(0, weight=1)
             pages.grid_columnconfigure(0, weight=1)
             self._pages: dict[str, tk.Frame] = {}
-            for nombre in ("inicio", "chat", "rutinas", "ajustes"):
+            for nombre in ("inicio", "chat", "rutinas", "juegos", "ajustes"):
                 pagina = tk.Frame(pages, bg=BG)
                 pagina.grid(row=0, column=0, sticky="nsew")
                 self._pages[nombre] = pagina
             self._build_chat_page(self._pages["chat"])
             self._build_settings_page(self._pages["ajustes"])
             self._build_home_page(self._pages["inicio"])
+            self._build_games_page(self._pages["juegos"])
             self._current_page = ""
             self._show_page("inicio")  # el panel de inicio es la primera página
             self._draw_orb()
@@ -129,7 +130,7 @@ class JarvisUIMixin:
 
             self._nav_buttons: dict[str, tk.Button] = {}
             for nombre, texto in (("inicio", "⌂   INICIO"), ("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"),
-                                  ("ajustes", "⚙   AJUSTES")):
+                                  ("juegos", "🎮   JUEGOS"), ("ajustes", "⚙   AJUSTES")):
                 boton = tk.Button(
                     sidebar, text=texto, anchor="w", command=lambda n=nombre: self._show_page(n),
                     bg=PANEL, fg=MUTED, activebackground=HOVER, activeforeground=TEXT,
@@ -145,7 +146,7 @@ class JarvisUIMixin:
             ).pack(side="bottom", anchor="w", padx=22, pady=18)
 
         _PAGE_TITLES = {"inicio": "INICIO", "chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES",
-                        "ajustes": "AJUSTES"}
+                        "juegos": "JUEGOS", "ajustes": "AJUSTES"}
 
         def _show_page(self, nombre: str) -> None:
             if nombre not in self._pages:
@@ -171,6 +172,8 @@ class JarvisUIMixin:
                 self._refresh_search_settings()
             if nombre == "inicio":
                 self._refresh_home_now()
+            if nombre == "juegos" and getattr(self, "_games", None) is None:
+                self._load_games_page()
 
         def _build_chat_page(self, page: tk.Frame) -> None:
             content = tk.Frame(page, bg=BG, padx=28, pady=16)
@@ -547,6 +550,98 @@ class JarvisUIMixin:
             cuerpo.pack(fill="both", expand=True, pady=(8, 0))
             marco.jarvis_cuerpo = cuerpo
             return marco
+
+        # --- Juegos que reconoce Jarvis --------------------------------------------------------
+
+        def _build_games_page(self, page: tk.Frame) -> None:
+            """Lista de juegos (los de ``jarvis_system.listar_juegos``) con ▶ JUGAR."""
+            self._games = None
+            cabecera = tk.Frame(page, bg=BG, padx=28, pady=(14))
+            cabecera.pack(fill="x")
+            self.games_summary = tk.Label(cabecera, text="Buscando juegos…", bg=BG, fg=MUTED,
+                                          font=("Segoe UI", 10), anchor="w", justify="left")
+            self.games_summary.pack(side="left")
+            self._ui_button(cabecera, "⟳  ACTUALIZAR", self._load_games_page, fg=MUTED).pack(side="right")
+            self.games_filter = tk.StringVar()
+            buscador = tk.Entry(cabecera, textvariable=self.games_filter, bg=PANEL_LIGHT, fg=TEXT,
+                                insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), width=26)
+            buscador.pack(side="right", padx=(0, 10), ipady=6)
+            self.games_filter.trace_add("write", lambda *_: self._render_games())
+            tk.Label(cabecera, text="Buscar:", bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(side="right", padx=(0, 6))
+
+            lienzo = tk.Canvas(page, bg=BG, highlightthickness=0, bd=0)
+            barra = ttk.Scrollbar(page, orient="vertical", command=lienzo.yview,
+                                  style="Jarvis.Vertical.TScrollbar")
+            lienzo.configure(yscrollcommand=barra.set)
+            barra.pack(side="right", fill="y", padx=(0, 6), pady=8)
+            lienzo.pack(side="left", fill="both", expand=True)
+            self.games_list = tk.Frame(lienzo, bg=BG, padx=28, pady=6)
+            ventana = lienzo.create_window((0, 0), window=self.games_list, anchor="nw")
+            self.games_list.bind("<Configure>", lambda _e: lienzo.configure(scrollregion=lienzo.bbox("all")))
+            lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana, width=e.width))
+            self.games_list.jarvis_scroll = lienzo
+            lienzo.jarvis_scroll = lienzo
+
+        def _load_games_page(self) -> None:
+            """Busca los juegos en otro hilo (un disco dormido puede tardar en responder)."""
+            import logging
+            import threading
+
+            import jarvis_system
+
+            self.games_summary.configure(text="Buscando juegos…")
+
+            def buscar() -> None:
+                try:
+                    juegos = jarvis_system.listar_juegos()
+                except Exception:
+                    logging.exception("No se pudieron listar los juegos.")
+                    juegos = []
+                self.events.put(("games_list", juegos))
+
+            threading.Thread(target=buscar, name="JarvisJuegosLista", daemon=True).start()
+
+        def _render_games(self, juegos=None) -> None:
+            if juegos is not None:
+                self._games = juegos
+            juegos = self._games or []
+            for fila in self.games_list.winfo_children():
+                fila.destroy()
+            filtro = self.games_filter.get().strip().casefold()
+            visibles = [j for j in juegos if not filtro or filtro in j.nombre.casefold()]
+            listos = [j for j in visibles if j.ejecutable is not None]
+            sin_exe = [j for j in visibles if j.ejecutable is None]
+            total = sum(1 for j in juegos if j.ejecutable is not None)
+            self.games_summary.configure(
+                text=f"{total} juegos reconocidos. Ábrelos con «abre …» o con ▶ JUGAR. "
+                     "Busca en «Games», «Epic Games» y «SteamLibrary» de cada disco y en Steam.")
+            for juego in listos:
+                fila = tk.Frame(self.games_list, bg=PANEL, padx=16, pady=10,
+                                highlightthickness=1, highlightbackground=BORDER)
+                fila.pack(fill="x", pady=4)
+                textos = tk.Frame(fila, bg=PANEL)
+                textos.pack(side="left", fill="x", expand=True)
+                tk.Label(textos, text=juego.nombre, bg=PANEL, fg=TEXT, font=("Segoe UI", 11, "bold"),
+                         anchor="w").pack(anchor="w")
+                tk.Label(textos, text=f"{juego.carpeta.parent}   ·   {juego.ejecutable.name}", bg=PANEL, fg=MUTED,
+                         font=("Consolas", 8), anchor="w").pack(anchor="w")
+                self._ui_button(fila, "▶  JUGAR", lambda n=juego.nombre: self._play_game(n)).pack(side="right")
+            if sin_exe:
+                tk.Label(self.games_list, text="CARPETAS SIN UN JUEGO CLARO (no se pueden abrir por nombre)",
+                         bg=BG, fg=MUTED, font=("Consolas", 9, "bold")).pack(anchor="w", pady=(16, 4))
+                for juego in sin_exe:
+                    tk.Label(self.games_list, text=f"•  {juego.nombre}  —  {juego.problema}", bg=BG, fg=MUTED,
+                             font=("Segoe UI", 9), anchor="w", justify="left", wraplength=900).pack(anchor="w")
+            if not visibles:
+                tk.Label(self.games_list, text="Ningún juego coincide con la búsqueda." if filtro else
+                         "No encontré juegos en las carpetas de juegos.", bg=BG, fg=MUTED,
+                         font=("Segoe UI", 10)).pack(anchor="w", pady=10)
+
+        def _play_game(self, nombre: str) -> None:
+            if self.busy:
+                self._set_status("ESPERA A QUE TERMINE LA ACCIÓN ACTUAL", ERROR)
+                return
+            self._start_direct_tool_action("launch_game", {"name": nombre}, f"abre {nombre}")
 
         def _build_home_page(self, page: tk.Frame) -> None:
             import jarvis_dashboard

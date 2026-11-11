@@ -32,6 +32,9 @@ ETIQUETAS_VALOR = {
     "set_primary": "hacer principal",
     "brave_minimize": "minimizar Brave", "brave_maximize": "maximizar Brave",
     "minimize": "minimizar Jarvis", "maximize": "maximizar Jarvis",
+    "window_minimize": "minimizar", "window_maximize": "maximizar", "window_restore": "restaurar",
+    "window_focus": "traer al frente",
+    "back": "página anterior", "forward": "página siguiente", "reload": "recargar la página (F5)",
     "date": "fecha", "time": "hora", "both": "fecha y hora",
     "today": "hoy", "tomorrow": "mañana", "memory": "memoria", "cpu": "procesador",
 }

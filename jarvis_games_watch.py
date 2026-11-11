@@ -44,17 +44,10 @@ def bibliotecas_steam(steam: Path = Path(r"C:\Program Files (x86)\Steam")) -> li
 
 
 def carpetas_de_juegos() -> list[Path]:
-    from jarvis_system import GAME_DIRECTORIES
+    """Las mismas carpetas que usa el lanzador (``jarvis_system.carpetas_juegos``)."""
+    from jarvis_system import carpetas_juegos
 
-    programas = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-    candidatas = [*GAME_DIRECTORIES, *bibliotecas_steam(), programas / "Epic Games", Path(r"C:\XboxGames")]
-    vistas, carpetas = set(), []
-    for carpeta in candidatas:
-        clave = str(carpeta).lower()
-        if clave not in vistas and carpeta.is_dir():
-            vistas.add(clave)
-            carpetas.append(carpeta)
-    return carpetas
+    return carpetas_juegos()
 
 
 def juego_de(ejecutable: str, raices: Iterable[Path]) -> str | None:
