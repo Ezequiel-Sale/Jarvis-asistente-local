@@ -126,14 +126,18 @@ class JarvisService : Service() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
-    private fun foregroundNotification(text: String): Notification =
-        Notification.Builder(this, CHANNEL_CONNECTION)
+    private fun foregroundNotification(text: String): Notification {
+        val builder = Notification.Builder(this, CHANNEL_CONNECTION)
             .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("Jarvis")
             .setContentText(text)
             .setContentIntent(openApp())
             .setOngoing(true)
-            .build()
+        if (!connected && Wake.saved(this) != null) {  // PC apagada o suspendida: encenderla desde aquí
+            builder.addAction(Notification.Action.Builder(null, "⚡ Encender PC", NotifyReceiver.wakeIntent(this)).build())
+        }
+        return builder.build()
+    }
 
     private fun foregroundText(): String = when {
         recorder != null -> "🎙 Grabando… pulsa otra vez el botón de los auriculares para enviar"
@@ -178,7 +182,10 @@ class JarvisService : Service() {
                 val reply = client.getJson("/api/events?since=$last&wait=${if (initial) 0 else 25}", 40000)
                 last = reply.getInt("last")
                 setConnected(true)
-                if (initial) continue  // lo anterior ya se vio
+                if (initial) {
+                    Wake.refresh(this, client)  // datos para encender la PC cuando esté apagada
+                    continue  // lo anterior ya se vio
+                }
                 val pending = if (reply.isNull("pending")) null else reply.optString("pending")
                 val events = reply.getJSONArray("events")
                 for (i in 0 until events.length()) handle(client, events.getJSONObject(i), pending)

@@ -17,6 +17,12 @@ class NotifyReceiver : BroadcastReceiver() {
         const val EXTRA_APPROVE = "aprobar"
         const val EXTRA_TEXT = "texto"
         const val ACTION_COPY = "com.jarvis.movil.COPIAR"
+        const val ACTION_WAKE = "com.jarvis.movil.ENCENDER"
+
+        fun wakeIntent(context: Context): PendingIntent =
+            PendingIntent.getBroadcast(context, 40,
+                Intent(context, NotifyReceiver::class.java).setAction(ACTION_WAKE),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         /** Botón «Copiar» del portapapeles que manda la PC (escribir el portapapeles sí se permite en segundo plano). */
         fun copyIntent(context: Context, text: String, code: Int): PendingIntent =
@@ -49,6 +55,17 @@ class NotifyReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_WAKE) {
+            val result = goAsync()
+            thread {
+                val message = Wake.send(context)
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+                    result.finish()
+                }
+            }
+            return
+        }
         if (intent.action == ACTION_COPY) {
             val text = intent.getStringExtra(EXTRA_TEXT) ?: return
             context.getSystemService(android.content.ClipboardManager::class.java)

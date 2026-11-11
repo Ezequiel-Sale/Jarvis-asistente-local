@@ -22,6 +22,7 @@ class SettingsActivity : JarvisActivity() {
     private val prefs by lazy { getSharedPreferences("jarvis", MODE_PRIVATE) }
     private lateinit var list: LinearLayout
     private lateinit var lockSwitch: Switch
+    private lateinit var wakeInfo: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,6 +73,23 @@ class SettingsActivity : JarvisActivity() {
                 onFail = { lockSwitch.isChecked = !on })
         }
 
+        val wake = section("ENCENDER LA PC")
+        wakeInfo = info("")
+        wake.addView(wakeInfo)
+        wake.addView(action("⚡  Encender la PC", R.color.cyan) {
+            thread {
+                val message = Wake.send(this)
+                ui.post { toast(message) }
+            }
+        })
+        refreshWake(Wake.saved(this))
+        jarvisApi()?.let { client ->
+            thread {
+                val data = Wake.refresh(this, client)
+                if (data != null) ui.post { refreshWake(data) }
+            }
+        }
+
         val app = section("APP")
         app.addView(info("Versión ${version()}  ·  PC ${prefs.getString("base", "")}"))
         app.addView(action("Buscar actualización", R.color.cyan) {
@@ -98,6 +116,23 @@ class SettingsActivity : JarvisActivity() {
                 .setNegativeButton("Cancelar", null)
                 .show()
         })
+    }
+
+    /** Datos guardados del encendido remoto y lo que falta configurar en la PC. */
+    private fun refreshWake(data: org.json.JSONObject?) {
+        if (data == null) {
+            wakeInfo.text = "Abre la app con la PC encendida para guardar sus datos de encendido."
+            return
+        }
+        val tips = data.optJSONArray("tips")
+        wakeInfo.text = buildString {
+            append("Solo en casa (mismo Wi-Fi que la PC). PC por ")
+            append(if (data.optBoolean("wifi")) "Wi-Fi: despierta desde «suspender», no desde apagado." else "cable.")
+            if (tips != null && tips.length() > 0) {
+                append("\n\nFalta en la PC:")
+                for (i in 0 until tips.length()) append("\n• ").append(tips.getString(i))
+            } else append("\nLa PC está lista para encenderse a distancia.")
+        }
     }
 
     private fun section(name: String): LinearLayout {

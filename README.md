@@ -134,6 +134,18 @@ Las integraciones se configuran en `integraciones.json`, que se crea solo al arr
 8. **Archivos y portapapeles:** «Compartir → Jarvis (PC)» desde cualquier app abre los links en la PC y guarda fotos y archivos en Descargas de la PC. Con **📁** (arriba en el chat) traes o mandas el portapapeles, envías archivos y bajas al celular lo que haya en Descargas, Documentos o los otros discos de la PC (no el del sistema) (queda en «Descargas/Jarvis»). También puedes pedir «manda este archivo al celular» o «manda lo que copié al celular».
 9. Para ver las pantallas de la PC, toca 🖥 en la app: elige el monitor y la calidad (AUTO usa vídeo a 60 cuadros por segundo con Wi-Fi y AHORRO con datos móviles; también hay 30 FPS y modos de imágenes), acerca con dos dedos y escribe o dicta órdenes abajo. Mientras miras, la PC muestra un aviso arriba; un clic en él (o «VER PANTALLA: NO» en Ajustes) lo corta.
 
+### Encender la PC desde el celular (solo en casa)
+
+La app guarda los datos de tu PC mientras está encendida y, con la PC apagada o suspendida, le manda la señal de encendido por el Wi-Fi de casa: **⚙ Ajustes → Encender la PC**, el botón **⚡ Encender PC** de la notificación «Sin conexión» o tocando «SIN CONEXIÓN» en el chat. En Ajustes ves qué falta configurar en tu PC. Una sola vez, en la PC:
+
+1. **Permitir que la placa de red despierte la PC.** En PowerShell como administrador (cambia el nombre por el de tu placa, que Ajustes muestra):
+   ```bash
+   powercfg /deviceenablewake "Realtek 8852CE WiFi 6E PCI-E NIC"
+   ```
+   O: Administrador de dispositivos → Adaptadores de red → tu placa → Administración de energía → «Permitir que este dispositivo reactive el equipo» y «Permitir solo un paquete mágico para reactivar el equipo».
+2. **Por Wi-Fi:** solo despierta desde **suspender**, no desde apagado (el Wi-Fi se apaga del todo). Dile a Jarvis «suspende el equipo» en vez de «apágalo».
+3. **Con cable de red** también enciende desde apagado: activa en la BIOS «Wake on LAN» (o «Power On by PCI-E») y desactiva el **inicio rápido** de Windows (Panel de control → Opciones de energía → Elegir el comportamiento de los botones de inicio/apagado → quitar «Activar inicio rápido»).
+
 ## Tests y compilación
 
 ```bash

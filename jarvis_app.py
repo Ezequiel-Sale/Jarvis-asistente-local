@@ -33,6 +33,7 @@ import jarvis_video_movil
 import jarvis_system_info
 import jarvis_fps
 import jarvis_archivos
+import jarvis_encendido
 import jarvis_input
 import jarvis_audio_movil
 import jarvis_media
@@ -257,6 +258,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             control_permitido=lambda: self._mobile_control_enabled,
             carpetas=jarvis_archivos.carpeta,
             raices=jarvis_archivos.raices,
+            encendido=jarvis_encendido.diagnostico,
             abrir_link=self._open_link_from_mobile,
             portapapeles=(jarvis_archivos.leer_portapapeles, jarvis_archivos.escribir_portapapeles),
         )

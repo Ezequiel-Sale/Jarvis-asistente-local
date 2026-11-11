@@ -47,6 +47,8 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
 - ``GET/POST /api/clipboard`` {text} → leer o escribir el portapapeles de la PC.
 - Eventos ``file`` {root, path, name, size} y ``clipboard`` {text}: lo que Jarvis
   le manda al celular (herramientas ``send_file_to_phone`` y ``send_clipboard_to_phone``).
+- ``GET  /api/wol`` → MAC de las placas, IP, difusión de la red de casa y qué falta
+  configurar (jarvis_encendido); el celular lo guarda para encender la PC sin Jarvis.
 - ``GET  /api/app`` → {versionCode, versionName, size, sha256} de la última app
   compilada (``movil/Jarvis.apk`` y ``Jarvis.apk.json`` junto a Jarvis); 404 si no hay.
 - ``GET  /api/app/apk`` → el APK, para que la app se actualice sola.
@@ -273,6 +275,7 @@ class ServidorMovil:
         raices: Callable[[], list[dict]] | None = None,
         abrir_link: Callable[[str], str] | None = None,
         portapapeles: tuple[Callable[[], str], Callable[[str], None]] | None = None,
+        encendido: Callable[[], dict] | None = None,
         tts: Callable[[str], bytes] | None = None,
         musica: Callable[[], dict] | None = None,
         portada: Callable[[], bytes | None] | None = None,
@@ -307,6 +310,7 @@ class ServidorMovil:
                                           {"key": "documentos", "name": "Documentos"}])
         self.abrir_link = abrir_link  # url → texto (por tool_registry.execute)
         self.portapapeles = portapapeles  # (leer, escribir)
+        self.encendido = encendido  # diagnóstico de Wake-on-LAN
         self._control = False
         self._ultimo_control = 0.0
         self.carpeta_app = carpeta_app  # donde están Jarvis.apk y Jarvis.apk.json
@@ -726,6 +730,10 @@ class ServidorMovil:
             logging.info("«¿Qué es esto?» desde el celular sobre el monitor %s.", monitor)
             self.eventos_app.put(("mobile_vision", monitor, (x, y, min(w, 1 - x), min(h, 1 - y)), pregunta))
             return self._json({"ok": True})
+        if metodo == "GET" and ruta == "/api/wol":
+            if self.encendido is None:
+                raise _Error(501, "El encendido remoto no está disponible.")
+            return self._json(self.encendido())
         if metodo == "POST" and ruta == "/api/share":
             texto = str(self._cuerpo_json(cuerpo).get("text", "")).strip()[:MAX_TEXTO]
             if not texto:

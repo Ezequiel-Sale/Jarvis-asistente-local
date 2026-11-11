@@ -88,6 +88,20 @@ class MainActivity : Activity() {
             startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
         }
         findViewById<View>(R.id.screen).setOnClickListener { openScreen() }
+        status.setOnClickListener {
+            if (!connected && api() != null) {
+                AlertDialog.Builder(this)
+                    .setMessage("No hay conexión con la PC. ¿Intento encenderla? (solo funciona en casa)")
+                    .setPositiveButton("⚡ Encender") { _, _ ->
+                        thread {
+                            val message = Wake.send(this)
+                            ui.post { toast(message) }
+                        }
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+        }
         findViewById<View>(R.id.files).setOnClickListener {
             startActivity(Intent(this, FilesActivity::class.java))
         }
