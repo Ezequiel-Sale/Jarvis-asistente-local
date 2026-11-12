@@ -1,3 +1,4 @@
+import logging
 import math
 import time
 import tkinter as tk
@@ -74,6 +75,10 @@ class JarvisUIMixin:
             )
             self.compact_button = self._ui_button(self.header_actions, "▣  COMPACTO", self._enter_compact_mode)
             self.compact_button.pack(side="right", padx=(8, 0))
+            # Guía de comandos de voz: visible en todas las secciones.
+            self.commands_button = self._ui_button(self.header_actions, "?  COMANDOS", self._show_commands_help,
+                                                   fg=MUTED)
+            self.commands_button.pack(side="right", padx=(8, 0))
             tk.Frame(content, bg=BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=28)
 
             pages = tk.Frame(content, bg=BG)
@@ -100,6 +105,97 @@ class JarvisUIMixin:
                 activebackground=HOVER, activeforeground=TEXT, relief="flat",
                 padx=12, pady=8, font=("Consolas", 8, "bold"), cursor="hand2",
             )
+
+        def _show_commands_help(self) -> None:
+            """Ventana con todos los comandos de voz (los de Jarvis y las frases de tus rutinas)."""
+            import jarvis_comandos
+            import jarvis_routines
+
+            ventana = getattr(self, "_commands_window", None)
+            if ventana is not None and ventana.winfo_exists():
+                ventana.deiconify()
+                ventana.lift()
+                ventana.focus_force()
+                return
+            secciones = list(jarvis_comandos.CATALOGO)
+            try:
+                propias = jarvis_comandos.tus_comandos(jarvis_routines.listar_automatizaciones())
+            except Exception:
+                logging.exception("No se pudieron leer las rutinas para la guía de comandos.")
+                propias = None
+            if propias is not None:
+                secciones.insert(0, propias)
+
+            ventana = tk.Toplevel(self.root)
+            self._commands_window = ventana
+            ventana.title("Comandos de voz — J.A.R.V.I.S.")
+            ventana.configure(bg=BG)
+            ventana.geometry("780x680")
+            ventana.minsize(560, 420)
+            ventana.transient(self.root)
+            ventana.bind("<Escape>", lambda _e: ventana.destroy())
+
+            arriba = tk.Frame(ventana, bg=BG, padx=24, pady=16)
+            arriba.pack(fill="x")
+            tk.Label(arriba, text="COMANDOS DE VOZ", bg=BG, fg=CYAN,
+                     font=("Segoe UI", 15, "bold")).pack(anchor="w")
+            tk.Label(arriba, text="Di «Hey Jarvis» y una de estas frases (o escríbela en el chat). "
+                     "No hace falta decirlas exactas.", bg=BG, fg=MUTED,
+                     font=("Segoe UI", 9), wraplength=700, justify="left").pack(anchor="w", pady=(2, 10))
+            fila = tk.Frame(arriba, bg=BG)
+            fila.pack(fill="x")
+            tk.Label(fila, text="🔎", bg=BG, fg=MUTED, font=("Segoe UI", 10)).pack(side="left", padx=(0, 6))
+            busqueda = tk.StringVar()
+            entrada = tk.Entry(fila, textvariable=busqueda, bg=PANEL_LIGHT, fg=TEXT, insertbackground=CYAN,
+                               relief="flat", font=("Segoe UI", 10),
+                               highlightthickness=1, highlightbackground=BORDER, highlightcolor=CYAN)
+            entrada.pack(side="left", fill="x", expand=True, ipady=5)
+            tk.Frame(ventana, bg=BORDER, height=1).pack(fill="x", padx=24)
+
+            marco = tk.Frame(ventana, bg=BG)
+            marco.pack(fill="both", expand=True)
+            lienzo = tk.Canvas(marco, bg=BG, highlightthickness=0, bd=0)
+            barra = ttk.Scrollbar(marco, orient="vertical", command=lienzo.yview,
+                                  style="Jarvis.Vertical.TScrollbar")
+            lienzo.configure(yscrollcommand=barra.set)
+            barra.pack(side="right", fill="y", padx=(0, 6), pady=8)
+            lienzo.pack(side="left", fill="both", expand=True)
+            cuerpo = tk.Frame(lienzo, bg=BG, padx=24, pady=14)
+            item = lienzo.create_window((0, 0), window=cuerpo, anchor="nw")
+            cuerpo.bind("<Configure>", lambda _e: lienzo.configure(scrollregion=lienzo.bbox("all")))
+            lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(item, width=e.width))
+            cuerpo.jarvis_scroll = lienzo  # rueda del ratón (ver _on_mousewheel)
+            lienzo.jarvis_scroll = lienzo
+
+            def dibujar(*_args) -> None:
+                for hijo in cuerpo.winfo_children():
+                    hijo.destroy()
+                visibles = jarvis_comandos.filtrar(secciones, busqueda.get())
+                if not visibles:
+                    tk.Label(cuerpo, text="No hay comandos con esas palabras. Igual puedes pedírselo a Jarvis: "
+                             "lo que no está en la lista lo resuelve la IA.", bg=BG, fg=MUTED,
+                             font=("Segoe UI", 10), wraplength=680, justify="left").pack(anchor="w", pady=10)
+                for seccion in visibles:
+                    tarjeta = tk.Frame(cuerpo, bg=PANEL, padx=16, pady=12,
+                                       highlightthickness=1, highlightbackground=BORDER)
+                    tarjeta.pack(fill="x", pady=(0, 10))
+                    tk.Label(tarjeta, text=f"{seccion.icono}  {seccion.titulo}", bg=PANEL, fg=CYAN,
+                             font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 6))
+                    for comando in seccion.comandos:
+                        linea = tk.Frame(tarjeta, bg=PANEL)
+                        linea.pack(fill="x", pady=3)
+                        tk.Label(linea, text=f"«{comando.frase}»", bg=PANEL, fg=TEXT, anchor="w",
+                                 font=("Segoe UI", 10, "bold"), wraplength=680, justify="left").pack(anchor="w")
+                        tk.Label(linea, text=comando.para_que, bg=PANEL, fg=MUTED, anchor="w",
+                                 font=("Segoe UI", 9), wraplength=680, justify="left").pack(anchor="w")
+                if not busqueda.get().strip():
+                    tk.Label(cuerpo, text="💡  " + jarvis_comandos.AYUDA_IA, bg=BG, fg=MUTED,
+                             font=("Segoe UI", 9, "italic"), wraplength=680, justify="left").pack(anchor="w", pady=(4, 8))
+                lienzo.yview_moveto(0)
+
+            busqueda.trace_add("write", dibujar)
+            dibujar()
+            entrada.focus_set()
 
         def _build_sidebar(self) -> None:
             sidebar = tk.Frame(self.root, bg=PANEL, width=250)
