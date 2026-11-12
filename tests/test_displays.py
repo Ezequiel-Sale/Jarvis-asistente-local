@@ -214,6 +214,8 @@ class KeepOrRevertTests(unittest.TestCase):
         host = Mock()
         host.DISPLAY_KEEP_SECONDS = 0
         host.events = queue.Queue()
+        host._display_batch = None
+        host._ask_display_keep = lambda descripcion: JarvisApp._ask_display_keep(host, descripcion)
 
         def responder() -> None:
             evento = host.events.get(timeout=2)
@@ -252,6 +254,52 @@ class KeepOrRevertTests(unittest.TestCase):
             JarvisApp._tool_configure_display(host, "extend", 3)
         restaurar.assert_called_once_with("previa")
 
+
+class RoutineBatchTests(unittest.TestCase):
+    """En una rutina, los cambios de monitores se confirman una sola vez al final."""
+
+    def _host(self, respuestas):
+        host = Mock()
+        host._display_batch = None
+        preguntas = []
+
+        def preguntar(descripcion):
+            preguntas.append(descripcion)
+            return respuestas.pop(0)
+
+        host._ask_display_keep = preguntar
+        return host, preguntas
+
+    def _rutina(self, host, nombre="Modo gaming 4K"):
+        lote = JarvisApp._start_display_batch(host)
+        pasos = [("Monitor 3 principal.", "previa-original"), ("Desactivé el 2.", "previa-2"),
+                 ("Desactivé el 1.", "previa-3")]
+        with patch("jarvis_app.core.guardar_preferencia"),                 patch("jarvis_app.core.obtener_preferencia", return_value=None),                 patch("jarvis_app.jarvis_displays.listar_pantallas", return_value=([], {})),                 patch("jarvis_app.jarvis_displays.aplicar", side_effect=[(d, p, {}) for d, p in pasos]):
+            for _ in pasos:
+                JarvisApp._tool_configure_display(host, "disable", 1)
+        with patch("jarvis_app.jarvis_displays.restaurar_configuracion") as restaurar:
+            resultado = JarvisApp._confirm_display_batch(host, lote, nombre)
+        return resultado, restaurar
+
+    def test_one_question_for_the_whole_routine(self) -> None:
+        host, preguntas = self._host([True])
+        resultado, restaurar = self._rutina(host)
+        self.assertIsNone(resultado)
+        self.assertEqual(preguntas, ["Modo gaming 4K: Monitor 3 principal. Desactivé el 2. Desactivé el 1."])
+        restaurar.assert_not_called()
+        self.assertIsNone(host._display_batch)
+
+    def test_not_keeping_restores_the_config_before_the_first_change(self) -> None:
+        host, _ = self._host([False])
+        resultado, restaurar = self._rutina(host)
+        restaurar.assert_called_once_with("previa-original")
+        self.assertIn("restauré la configuración anterior", resultado)
+
+    def test_routine_without_display_changes_asks_nothing(self) -> None:
+        host, preguntas = self._host([])
+        lote = JarvisApp._start_display_batch(host)
+        self.assertIsNone(JarvisApp._confirm_display_batch(host, lote, "Otra"))
+        self.assertEqual(preguntas, [])
 
 
 class StableNumberingTests(unittest.TestCase):

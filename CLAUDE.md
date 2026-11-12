@@ -15,7 +15,7 @@ Usa `.venv313` (Python 3.13); `.venv` está incompleto.
 
 ## Reglas clave
 
-- Las herramientas de riesgo HIGH siempre requieren confirmación; los planes de varios pasos se aprueban completos antes de ejecutarse.
+- Las herramientas de riesgo HIGH siempre requieren confirmación; los planes de varios pasos se aprueban completos antes de ejecutarse. Aprobar el plan completo (que muestra cada paso y su riesgo) cuenta como esa confirmación, salvo para `CONFIRMACION_PROPIA` de `jarvis_agent` (energía, liberar disco, clics en pantalla, control remoto del celular) y las acciones destructivas MCP, que siempre preguntan aparte.
 - Toda acción se ejecuta con `tool_registry.execute` (tiempo máximo, cancelación, verificación y registro). Cada herramienta nueva lleva `label`, `timeout_seconds` y, si se puede, un verificador en `jarvis_verifiers.py`.
 - No toques widgets Tk desde hilos secundarios: publica eventos en `self.events`.
 - Un comando nuevo se enruta en `_send_text` **y** en `_voice_worker` (`jarvis_app.py`).

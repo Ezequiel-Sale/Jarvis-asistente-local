@@ -137,6 +137,10 @@ class ErrorPantalla(Exception):
     """Error al leer o cambiar la configuración de monitores."""
 
 
+class YaEstaAsi(ErrorPantalla):
+    """El monitor ya está como se pide: no es un fallo (un plan o una rutina siguen)."""
+
+
 @dataclass(frozen=True)
 class Pantalla:
     clave: str  # identificador estable del monitor físico (ruta del dispositivo)
@@ -392,7 +396,7 @@ def planificar(accion: str, numeros: tuple[int, ...], pantallas: list[Pantalla])
     if accion == "disable":
         objetivo = _buscar(pantallas, numeros[0])
         if not objetivo.activa:
-            raise ErrorPantalla(f"El {objetivo.descripcion} ya está desactivado.")
+            raise YaEstaAsi(f"El {objetivo.descripcion} ya está desactivado.")
         if len(deseado) <= 1:
             raise ErrorPantalla("No puedo desactivar el único monitor activo.")
         # Si estaba duplicado, el otro monitor sigue mostrando esa misma imagen.
@@ -404,7 +408,7 @@ def planificar(accion: str, numeros: tuple[int, ...], pantallas: list[Pantalla])
         fuente = objetivo.source_id
         duplicado = fuente is not None and sum(1 for s in deseado.values() if s == fuente) > 1
         if objetivo.activa and not duplicado:
-            raise ErrorPantalla(f"El {objetivo.descripcion} ya está extendido.")
+            raise YaEstaAsi(f"El {objetivo.descripcion} ya está extendido.")
         deseado[clave] = None  # se le asigna una fuente propia
         return deseado, f"Extendí el escritorio al {objetivo.descripcion}."
     if accion == "duplicate":
@@ -414,7 +418,7 @@ def planificar(accion: str, numeros: tuple[int, ...], pantallas: list[Pantalla])
         if primero.adapter != segundo.adapter:
             raise ErrorPantalla("Solo puedo duplicar monitores conectados a la misma tarjeta de video.")
         if primero.activa and segundo.activa and primero.source_id == segundo.source_id:
-            raise ErrorPantalla(
+            raise YaEstaAsi(
                 f"El {primero.descripcion} y el {segundo.descripcion} ya están duplicados."
             )
         # El duplicado se arma con modos explícitos (ver _config_duplicado); aquí solo
@@ -539,7 +543,7 @@ def _config_principal(nuevo: Pantalla) -> tuple[list[PATH_INFO], list[MODE_INFO]
     origen = SOURCE_MODE.from_buffer(modes[path.sourceInfo.modeInfoIdx].data)
     dx, dy = origen.x, origen.y
     if dx == 0 and dy == 0:
-        raise ErrorPantalla(f"El {nuevo.descripcion} ya es el monitor principal.")
+        raise YaEstaAsi(f"El {nuevo.descripcion} ya es el monitor principal.")
     for modo in modes:
         if modo.infoType == MODE_INFO_TYPE_SOURCE:
             fuente = SOURCE_MODE.from_buffer(modo.data)
@@ -600,6 +604,88 @@ def aplicar(
         _aplicar(deseado)
     logging.info("Configuración de pantallas aplicada: %s %s", accion, numeros)
     return descripcion, previa, mapa
+
+
+# --- Volver a como estaba antes de una rutina («desactiva el modo gaming 2K») ------
+#
+# Al confirmar los cambios de monitores de una rutina se guarda la configuración de
+# antes (exacta, y también qué monitores estaban activos y cuál era el principal, por
+# si tras reiniciar Windows ya no acepta la copia exacta). Si se encadenan rutinas
+# («modo gaming 4K» y luego «2K»), se conserva la de antes de la primera.
+
+PREFERENCIA_BASE = "pantallas_antes_de_rutina"
+
+
+def numero_principal(mapa: dict[str, int] | None = None) -> int | None:
+    """Número fijo del monitor principal (el que empieza en el origen del escritorio)."""
+    pantallas, _ = listar_pantallas(mapa)
+    paths, modes = _consultar(QDC_ONLY_ACTIVE_PATHS)
+    for path in paths:
+        origen = SOURCE_MODE.from_buffer_copy(bytes(modes[path.sourceInfo.modeInfoIdx].data))
+        if origen.x == 0 and origen.y == 0:
+            for pantalla in pantallas:
+                if pantalla.adapter == _clave_adapter(path.targetInfo.adapterId) \
+                        and pantalla.target_id == path.targetInfo.id:
+                    return pantalla.numero
+    return None
+
+
+def base_a_texto(previa: ConfiguracionGuardada, rutina: str, activos: list[int], principal: int | None) -> str:
+    import base64
+
+    return json.dumps({
+        "rutina": rutina,
+        "paths": base64.b64encode(previa.paths).decode("ascii"),
+        "modes": base64.b64encode(previa.modes).decode("ascii"),
+        "num_paths": previa.num_paths,
+        "num_modes": previa.num_modes,
+        "activos": sorted(activos),
+        "principal": principal,
+    }, ensure_ascii=False)
+
+
+def base_desde_texto(texto: str | None) -> dict | None:
+    import base64
+
+    try:
+        datos = json.loads(texto or "")
+        datos["configuracion"] = ConfiguracionGuardada(
+            paths=base64.b64decode(datos["paths"]), modes=base64.b64decode(datos["modes"]),
+            num_paths=int(datos["num_paths"]), num_modes=int(datos["num_modes"]),
+        )
+        datos["activos"] = [int(n) for n in datos.get("activos", [])]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return datos
+
+
+def volver_a_base(datos: dict, mapa: dict[str, int] | None = None) -> tuple[str, ConfiguracionGuardada]:
+    """Restaura la configuración guardada antes de la rutina; devuelve (descripción, previa).
+
+    Primero la copia exacta; si Windows ya no la acepta (los identificadores de la
+    tarjeta cambian al reiniciar), activa los monitores que estaban activos y pone
+    el principal que había."""
+    previa = guardar_configuracion()
+    restaurar_configuracion(previa, solo_validar=True)  # la red de seguridad funciona
+    descripcion = f"Volví los monitores a como estaban antes de «{datos.get('rutina', 'la rutina')}»."
+    try:
+        restaurar_configuracion(datos["configuracion"], solo_validar=True)
+        restaurar_configuracion(datos["configuracion"])
+        return descripcion, previa
+    except ErrorPantalla:
+        logging.info("La copia exacta ya no vale; se reactivan los monitores uno a uno.")
+    pantallas, mapa = listar_pantallas(mapa)
+    for numero in datos["activos"]:
+        pantalla = next((p for p in pantallas if p.numero == numero), None)
+        if pantalla is not None and not pantalla.activa:
+            aplicar("extend", (numero,), mapa)
+    principal = datos.get("principal")
+    if isinstance(principal, int):
+        try:
+            aplicar("set_primary", (principal,), mapa)
+        except YaEstaAsi:
+            pass
+    return descripcion, previa
 
 
 def cargar_mapa(obtener: Callable[[str], str | None]) -> dict[str, int]:

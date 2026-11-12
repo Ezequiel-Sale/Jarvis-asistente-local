@@ -117,6 +117,7 @@ class OpenProgramTests(unittest.TestCase):
 class PhraseExecutionTests(unittest.TestCase):
     def _host(self, aprueba_energia: bool = True) -> Mock:
         host = Mock()
+        host._confirm_display_batch.return_value = None  # sin cambios de monitores
         host.tool_registry = Mock()
         host.tool_registry.execute.side_effect = lambda tool, args, **_k: f"{tool} hecho."
         host.tool_registry.get.return_value.display_name = "Acción"

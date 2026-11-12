@@ -35,6 +35,24 @@ ConfirmationCallback = Callable[
     bool,
 ]
 PlanApprovalCallback = Callable[[str, Sequence["PlannedAction"]], bool]
+# Envuelve la ejecución de un plan aprobado (p. ej. una sola pregunta «¿Mantener?» para
+# todos los cambios de monitores); lo que deja en la lista son avisos para la respuesta.
+PlanScope = Callable[[Sequence["PlannedAction"]], Any]
+
+# Al aprobar un plan completo (con cada paso a la vista), los pasos de riesgo alto no
+# vuelven a preguntar uno por uno, salvo estos, que siempre piden su propia confirmación.
+CONFIRMACION_PROPIA = frozenset({"power_control", "clean_disk", "mobile_remote_control", "screen_click"})
+
+
+def plan_cubre(definition: "ToolDefinition") -> bool:
+    """Si aprobar el plan basta para ejecutar este paso sin volver a preguntar."""
+    if definition.risk is ToolRisk.MEDIUM:
+        return True
+    return (
+        definition.risk is ToolRisk.HIGH
+        and definition.name not in CONFIRMACION_PROPIA
+        and not definition.name.startswith("mcp_")  # acciones destructivas de integraciones
+    )
 
 _ACTION_VERBS = re.compile(
     r"\b(?:sube|subir|baja|bajar|reduce|reducir|ajusta|ajustar|establece|"
@@ -321,6 +339,7 @@ def procesar_con_herramientas(
     confirm: ConfirmationCallback,
     *,
     approve_plan: PlanApprovalCallback | None = None,
+    plan_scope: PlanScope | None = None,
     max_tool_rounds: int = 3,
     max_tool_calls: int = 5,
     cancel_token: CancellationToken | None = None,
@@ -342,6 +361,7 @@ def procesar_con_herramientas(
             registry,
             confirm,
             approve_plan=approve_plan,
+            plan_scope=plan_scope,
             max_tool_rounds=max_tool_rounds,
             max_tool_calls=max_tool_calls,
             cancel_token=cancel_token,
@@ -411,6 +431,7 @@ def _procesar_con_herramientas(
     *,
     approve_plan: PlanApprovalCallback | None,
     max_tool_rounds: int,
+    plan_scope: PlanScope | None = None,
     max_tool_calls: int,
     cancel_token: CancellationToken | None,
     deadline: float,
@@ -677,91 +698,97 @@ def _procesar_con_herramientas(
                 continue
             plan_approved = True
 
-        for index, (name, definition, arguments) in enumerate(validated_steps):
-            try:
+        alcance = plan_scope(plan) if plan_approved and plan_scope is not None else None
+        avisos_plan = alcance.__enter__() if alcance is not None else None
+        try:
+            for index, (name, definition, arguments) in enumerate(validated_steps):
                 try:
-                    result = registry.execute(
-                        name,
-                        arguments,
-                        confirmed=(
-                            plan_approved and definition.risk is ToolRisk.MEDIUM
-                        ),
-                        cancel_token=cancel_token,
-                    )
-                except ToolConfirmationRequired:
-                    if not confirm(definition, arguments):
-                        messages.append(
-                            _tool_message(
-                                name,
-                                False,
-                                error="El usuario rechazó la confirmación.",
-                                cancelled=True,
-                            )
+                    try:
+                        result = registry.execute(
+                            name,
+                            arguments,
+                            # Aprobar el plan completo cubre sus pasos (ver plan_cubre).
+                            confirmed=plan_approved and plan_cubre(definition),
+                            cancel_token=cancel_token,
                         )
-                        if len(prepared) > 1:
-                            for skipped_name, _, _ in validated_steps[index + 1 :]:
-                                messages.append(
-                                    _tool_message(
-                                        skipped_name,
-                                        False,
-                                        error="Este paso no se ejecutó porque se canceló el paso anterior.",
-                                        cancelled=True,
-                                    )
+                    except ToolConfirmationRequired:
+                        if not confirm(definition, arguments):
+                            messages.append(
+                                _tool_message(
+                                    name,
+                                    False,
+                                    error="El usuario rechazó la confirmación.",
+                                    cancelled=True,
                                 )
-                            plan_stopped = True
-                            break
-                        continue
-                    result = registry.execute(
-                        name,
-                        arguments,
-                        confirmed=True,
-                        cancel_token=cancel_token,
-                    )
-            except ToolCancelledError:
-                logging.info("Plan cancelado por el usuario en el paso %s.", name)
-                return "Cancelé la operación. " + _resumen_completadas(completadas)
-            except ToolError as error:
-                fallos.append(f"«{definition.display_name}» no se completó: {error}")
-                messages.append(_tool_message(name, False, error=str(error)))
-                if len(prepared) > 1:
-                    for skipped_name, _, _ in validated_steps[index + 1 :]:
-                        messages.append(
-                            _tool_message(
-                                skipped_name,
-                                False,
-                                error="Este paso no se ejecutó porque falló el paso anterior.",
-                                cancelled=True,
                             )
+                            if len(prepared) > 1:
+                                for skipped_name, _, _ in validated_steps[index + 1 :]:
+                                    messages.append(
+                                        _tool_message(
+                                            skipped_name,
+                                            False,
+                                            error="Este paso no se ejecutó porque se canceló el paso anterior.",
+                                            cancelled=True,
+                                        )
+                                    )
+                                plan_stopped = True
+                                break
+                            continue
+                        result = registry.execute(
+                            name,
+                            arguments,
+                            confirmed=True,
+                            cancel_token=cancel_token,
                         )
-                    plan_stopped = True
-                    break
-            except Exception as error:
-                logging.exception("Falló la ejecución de la herramienta %s.", name)
-                fallos.append(
-                    f"«{definition.display_name}» falló: {error or type(error).__name__}"
-                )
-                messages.append(
-                    _tool_message(
-                        name,
-                        False,
-                        error=f"Falló la ejecución: {type(error).__name__}: {error}",
-                    )
-                )
-                if len(prepared) > 1:
-                    for skipped_name, _, _ in validated_steps[index + 1 :]:
-                        messages.append(
-                            _tool_message(
-                                skipped_name,
-                                False,
-                                error="Este paso no se ejecutó porque falló el paso anterior.",
-                                cancelled=True,
+                except ToolCancelledError:
+                    logging.info("Plan cancelado por el usuario en el paso %s.", name)
+                    return "Cancelé la operación. " + _resumen_completadas(completadas)
+                except ToolError as error:
+                    fallos.append(f"«{definition.display_name}» no se completó: {error}")
+                    messages.append(_tool_message(name, False, error=str(error)))
+                    if len(prepared) > 1:
+                        for skipped_name, _, _ in validated_steps[index + 1 :]:
+                            messages.append(
+                                _tool_message(
+                                    skipped_name,
+                                    False,
+                                    error="Este paso no se ejecutó porque falló el paso anterior.",
+                                    cancelled=True,
+                                )
                             )
+                        plan_stopped = True
+                        break
+                except Exception as error:
+                    logging.exception("Falló la ejecución de la herramienta %s.", name)
+                    fallos.append(
+                        f"«{definition.display_name}» falló: {error or type(error).__name__}"
+                    )
+                    messages.append(
+                        _tool_message(
+                            name,
+                            False,
+                            error=f"Falló la ejecución: {type(error).__name__}: {error}",
                         )
-                    plan_stopped = True
-                    break
-            else:
-                completadas.append(definition.display_name)
-                messages.append(_tool_message(name, True, result=result))
+                    )
+                    if len(prepared) > 1:
+                        for skipped_name, _, _ in validated_steps[index + 1 :]:
+                            messages.append(
+                                _tool_message(
+                                    skipped_name,
+                                    False,
+                                    error="Este paso no se ejecutó porque falló el paso anterior.",
+                                    cancelled=True,
+                                )
+                            )
+                        plan_stopped = True
+                        break
+                else:
+                    completadas.append(definition.display_name)
+                    messages.append(_tool_message(name, True, result=result))
+        finally:
+            if alcance is not None:
+                alcance.__exit__(None, None, None)
+                fallos.extend(avisos_plan or [])
         if len(prepared) > 1:
             plan_stopped = True
 

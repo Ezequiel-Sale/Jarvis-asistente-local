@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from tkinter import messagebox
 from urllib.parse import quote_plus
 
 import jarvis_actions
+import jarvis_cards
 import jarvis_core as core
 import jarvis_health
 import jarvis_displays
@@ -1136,6 +1138,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             self.tool_registry,
                             self._request_tool_confirmation,
                             approve_plan=self._request_plan_confirmation,
+                            plan_scope=self._plan_display_scope,
                             cancel_token=cancel_token,
                             on_text=self._live_text_callback(hablador),
                         )
@@ -1648,10 +1651,30 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     def _find_phrase_routine(self, texto: str) -> "jarvis_routines.Routine | None":
         try:
-            return jarvis_routines.buscar_rutina_por_frase(texto)
+            rutina = jarvis_routines.buscar_rutina_por_frase(texto)
+            if rutina is None:
+                rutina = self._find_undo_routine(texto)
+            return rutina
         except Exception:
             logging.exception("No se pudieron buscar los comandos personalizados.")
             return None
+
+    def _find_undo_routine(self, texto: str) -> "jarvis_routines.Routine | None":
+        """«Desactiva el modo gaming 2K»: si esa rutina cambió los monitores y hay una
+        configuración guardada de antes, se vuelve a ella (comando directo, sin la IA)."""
+        resto = jarvis_routines.frase_a_deshacer(texto)
+        if resto is None:
+            return None
+        rutina = jarvis_routines.buscar_rutina_por_frase(resto)
+        if rutina is None or not any(p.tool == "configure_display" for p in rutina.steps):
+            return None
+        if jarvis_displays.base_desde_texto(core.obtener_preferencia(jarvis_displays.PREFERENCIA_BASE)) is None:
+            return None
+        return jarvis_routines.Routine(
+            -rutina.identifier, f"Desactivar {rutina.name}", "", (),
+            (jarvis_routines.RoutineStep("restore_display_config", {"routine": rutina.name}),),
+            jarvis_routines.DISPARADOR_FRASE,
+        )
 
     def _start_phrase_routine(self, rutina: "jarvis_routines.Routine", command: str) -> None:
         self._start_busy(f"COMANDO: {rutina.name.upper()}")
@@ -1673,6 +1696,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         aprobar el plan; solo apagar/reiniciar/suspender pide confirmación."""
         started = time.perf_counter()
         resultados: list[str] = []
+        lote = self._start_display_batch()
         for paso in rutina.steps:
             nombre = paso.tool
             try:
@@ -1698,6 +1722,12 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     logging.exception("Falló un paso del comando %s.", rutina.name)
                 resultados.append(f"«{nombre}» falló: {error}")
                 break
+        try:
+            if (revertido := self._confirm_display_batch(lote, rutina.name)) is not None:
+                resultados.append(revertido)
+        except Exception:
+            logging.exception("No se pudo confirmar o restaurar la configuración de monitores.")
+            resultados.append("No pude restaurar la configuración de monitores anterior.")
         respuesta = f"{rutina.name}: " + " ".join(r for r in resultados if r) if resultados else rutina.name
         try:
             core.guardar_turno(conversation_id, command, respuesta)
@@ -1805,39 +1835,47 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 return
 
             results: list[str] = []
-            for action in actions:
-                try:
-                    result = self.tool_registry.execute(
-                        action.tool.name,
-                        action.arguments,
-                        # La cuenta atrás ya fue el aviso de la acción de energía.
-                        confirmed=action.tool.risk is ToolRisk.MEDIUM
-                        or (cuenta_atras and action.tool.name == "power_control"),
-                        origin="rutina",
-                        cancel_token=cancel_token,
-                    )
-                except ToolConfirmationRequired:
-                    if not self._request_tool_confirmation(
-                        action.tool,
-                        action.arguments,
-                    ):
-                        self.events.put(
-                            (
-                                "routine_result",
-                                routine,
-                                False,
-                                "La rutina se detuvo porque rechazaste una acción de riesgo alto.",
-                            )
+            lote = self._start_display_batch()
+            try:
+                for action in actions:
+                    try:
+                        result = self.tool_registry.execute(
+                            action.tool.name,
+                            action.arguments,
+                            # La cuenta atrás ya fue el aviso de la acción de energía.
+                            confirmed=action.tool.risk is ToolRisk.MEDIUM
+                            or (cuenta_atras and action.tool.name == "power_control"),
+                            origin="rutina",
+                            cancel_token=cancel_token,
                         )
-                        return
-                    result = self.tool_registry.execute(
-                        action.tool.name,
-                        action.arguments,
-                        confirmed=True,
-                        origin="rutina",
-                        cancel_token=cancel_token,
-                    )
-                results.append(str(result))
+                    except ToolConfirmationRequired:
+                        if not self._request_tool_confirmation(
+                            action.tool,
+                            action.arguments,
+                        ):
+                            self.events.put(
+                                (
+                                    "routine_result",
+                                    routine,
+                                    False,
+                                    "La rutina se detuvo porque rechazaste una acción de riesgo alto.",
+                                )
+                            )
+                            return
+                        result = self.tool_registry.execute(
+                            action.tool.name,
+                            action.arguments,
+                            confirmed=True,
+                            origin="rutina",
+                            cancel_token=cancel_token,
+                        )
+                    results.append(str(result))
+            finally:
+                # Una sola confirmación para todos los cambios de monitores de la rutina.
+                revertido = self._confirm_display_batch(lote, routine.name)
+            if revertido is not None:
+                self.events.put(("routine_result", routine, False, "\n".join([*results, revertido])))
+                return
         except ToolError as error:
             logging.exception("No se pudo ejecutar la rutina %s.", routine.name)
             self.events.put(("routine_result", routine, False, str(error)))
@@ -2000,16 +2038,36 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     f"   Pasos:\n{step_details}"
                 )
             else:
-                step = (
-                    f"{index}. {action.tool.description}\n"
-                    f"   Herramienta: {action.tool.name} | Riesgo: {action.tool.risk.value}\n"
-                    f"   Parámetros: {json.dumps(action.arguments, ensure_ascii=False)}"
-                )
+                self._plan_step_row(cuerpo, index, action)
+                continue
             tk.Label(
                 cuerpo, text=step, bg=PANEL, fg=TEXT, padx=12, pady=9, font=("Consolas", 9),
                 justify="left", wraplength=660, anchor="w",
             ).pack(fill="x", pady=3)
         self._set_plan_voice_controls(recording=False)
+
+    def _plan_step_row(self, cuerpo: tk.Widget, index: int | None, action: PlannedAction) -> None:
+        """Un paso del plan en lenguaje llano: «2  🖥 Configurar monitores · RIESGO ALTO»
+        y debajo «Desactivar el monitor 3» (sin JSON ni la descripción para el modelo)."""
+        colores = {"MUTED": MUTED, "VIOLET": VIOLET, "ERROR": ERROR, "CYAN": CYAN}
+        fila = tk.Frame(cuerpo, bg=PANEL, padx=12, pady=8)
+        fila.pack(fill="x", pady=3)
+        cabecera = tk.Frame(fila, bg=PANEL)
+        cabecera.pack(fill="x")
+        if index is not None:
+            tk.Label(cabecera, text=f"{index}", bg=PANEL, fg=CYAN, font=("Consolas", 11, "bold"),
+                     width=2, anchor="w").pack(side="left")
+        tk.Label(
+            cabecera, text=f"{jarvis_cards.icono(action.tool.name)}  {action.tool.display_name}",
+            bg=PANEL, fg=TEXT, font=("Segoe UI", 10, "bold"), anchor="w",
+        ).pack(side="left")
+        texto_riesgo, color = jarvis_cards.riesgo(action.tool.risk.value)
+        tk.Label(cabecera, text=texto_riesgo, bg=PANEL, fg=colores.get(color, MUTED),
+                 font=("Consolas", 8, "bold")).pack(side="right")
+        detalle = jarvis_cards.describir_paso(action.tool.name, dict(action.arguments))
+        if detalle:
+            tk.Label(fila, text=detalle, bg=PANEL, fg=TEXT, font=("Segoe UI", 10), justify="left",
+                     anchor="w", wraplength=620).pack(fill="x", padx=(26, 0), pady=(3, 0))
 
     def _show_power_countdown(self, routine_name: str, action: str, reply: queue.Queue[bool]) -> None:
         """«Apagaré el equipo en 60 s» con CANCELAR; si nadie responde, se ejecuta."""
@@ -2073,14 +2131,19 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             pista="Di «sí» o «no», sin «Hey Jarvis». ENTER autoriza · ESC rechaza.",
         )
         self._plan_dialog = tarjeta
+        # En lenguaje llano: qué se va a hacer y qué implica (sin la descripción
+        # pensada para el modelo ni los parámetros en JSON).
         try:
-            etiqueta = self.tool_registry.get(name).display_name
+            definicion = self.tool_registry.get(name)
         except ToolError:
-            etiqueta = name
-        tk.Label(cuerpo, text=f"{etiqueta} · riesgo {risk}\n{description}", bg=PANEL_LIGHT, fg=TEXT,
-                 font=("Segoe UI", 10), wraplength=680, justify="left").pack(anchor="w")
-        tk.Label(cuerpo, text=json.dumps(arguments, ensure_ascii=False, indent=2), bg=PANEL, fg=MUTED,
-                 font=("Consolas", 9), justify="left", padx=10, pady=8, anchor="w").pack(fill="x", pady=(6, 0))
+            definicion = None
+        if definicion is not None:
+            self._plan_step_row(cuerpo, None, PlannedAction(tool=definicion, arguments=arguments))
+        else:
+            tk.Label(cuerpo, text=jarvis_cards.describir_paso(name, dict(arguments)) or name, bg=PANEL,
+                     fg=TEXT, font=("Segoe UI", 10), wraplength=620, justify="left").pack(fill="x")
+        tk.Label(cuerpo, text=jarvis_cards.aviso(name, risk), bg=PANEL_LIGHT, fg=MUTED,
+                 font=("Segoe UI", 9), wraplength=620, justify="left").pack(anchor="w", pady=(6, 0))
         self._set_plan_voice_controls(recording=False)
         self._set_status(self._approval_hint("tool"), CYAN)
 
@@ -2727,12 +2790,35 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     ) -> str:
         numeros = (monitor,) if second_monitor is None else (monitor, second_monitor)
         mapa = jarvis_displays.cargar_mapa(core.obtener_preferencia)
-        descripcion, previa, mapa = jarvis_displays.aplicar(action, numeros, mapa)
+        lote = getattr(self, "_display_batch", None)
+        if lote is not None and lote["previa"] is None:
+            lote["antes"] = self._estado_monitores(mapa)
+        try:
+            descripcion, previa, mapa = jarvis_displays.aplicar(action, numeros, mapa)
+        except jarvis_displays.YaEstaAsi as ya:
+            return str(ya)  # «El monitor 2 ya está desactivado.»: nada que confirmar
         try:
             _pantallas, mapa = jarvis_displays.listar_pantallas(mapa)
             jarvis_displays.guardar_mapa(core.guardar_preferencia, mapa)
         except Exception:
             logging.exception("No se pudo actualizar el mapa de monitores tras el cambio.")
+        lote = getattr(self, "_display_batch", None)
+        if lote is not None:
+            # Dentro de una rutina: se pregunta una sola vez al final (_confirm_display_batch)
+            # y, si no se confirma, se vuelve a la configuración de antes del primer cambio.
+            if lote["previa"] is None:
+                lote["previa"] = previa
+            lote["descripciones"].append(descripcion)
+            return descripcion
+        if self._ask_display_keep(descripcion):
+            return descripcion
+        jarvis_displays.restaurar_configuracion(previa)
+        raise RuntimeError(
+            "No confirmaste el cambio de monitores, así que restauré la configuración anterior."
+        )
+
+    def _ask_display_keep(self, descripcion: str) -> bool:
+        """«¿Mantener esta configuración de pantallas?» (sin respuesta: no)."""
         reply: queue.Queue[bool] = queue.Queue(maxsize=1)
         self.events.put(("display_keep", descripcion, reply))
         try:
@@ -2743,11 +2829,112 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             watcher = getattr(self, "taskbar_watcher", None)
             if watcher is not None:
                 watcher.despertar()  # tras cambiar monitores, revisar la barra enseguida
+        return mantener
+
+    def _estado_monitores(self, mapa=None) -> tuple[list[int], int | None] | None:
+        """(monitores activos, principal) para saber si se encadenan rutinas."""
+        try:
+            pantallas, _ = jarvis_displays.listar_pantallas(mapa)
+            activos = sorted(p.numero for p in pantallas if p.activa and p.numero is not None)
+            return activos, jarvis_displays.numero_principal(mapa)
+        except Exception:
+            logging.debug("No se pudo leer el estado de los monitores.", exc_info=True)
+            return None
+
+    def _recordar_base_monitores(self, lote: dict, nombre: str) -> None:
+        """Guarda cómo estaban los monitores antes de la rutina («desactiva <rutina>»).
+
+        Si los monitores estaban como los dejó otra rutina (p. ej. «modo gaming 4K» y
+        luego «2K»), se conserva la configuración de antes de la primera."""
+        try:
+            anterior = jarvis_displays.base_desde_texto(
+                core.obtener_preferencia(jarvis_displays.PREFERENCIA_BASE))
+            antes = lote.get("antes")
+            if anterior is not None and antes is not None and anterior.get("despues") == list(antes):
+                texto = json.loads(core.obtener_preferencia(jarvis_displays.PREFERENCIA_BASE))
+            else:
+                activos, principal = antes if antes is not None else ([], None)
+                texto = json.loads(jarvis_displays.base_a_texto(lote["previa"], nombre, activos, principal))
+            despues = self._estado_monitores()
+            texto["despues"] = list(despues) if despues is not None else None
+            core.guardar_preferencia(jarvis_displays.PREFERENCIA_BASE, json.dumps(texto, ensure_ascii=False))
+        except Exception:
+            logging.exception("No se pudo guardar la configuración de monitores anterior a la rutina.")
+
+    def _tool_restore_display(self, routine: str = "") -> str:
+        """Vuelve los monitores a como estaban antes de la rutina que los cambió."""
+        datos = jarvis_displays.base_desde_texto(core.obtener_preferencia(jarvis_displays.PREFERENCIA_BASE))
+        if datos is None:
+            raise RuntimeError(
+                "No tengo guardada la configuración de monitores de antes de una rutina; "
+                "dime qué monitores activar."
+            )
+        if routine.strip():
+            datos["rutina"] = routine.strip()
+        mapa = jarvis_displays.cargar_mapa(core.obtener_preferencia)
+        descripcion, previa = jarvis_displays.volver_a_base(datos, mapa)
+        try:
+            _pantallas, mapa = jarvis_displays.listar_pantallas(mapa)
+            jarvis_displays.guardar_mapa(core.guardar_preferencia, mapa)
+        except Exception:
+            logging.exception("No se pudo actualizar el mapa de monitores tras restaurar.")
+        lote = getattr(self, "_display_batch", None)
+        if lote is not None:
+            if lote["previa"] is None:
+                lote["previa"] = previa
+            lote["descripciones"].append(descripcion)
+            lote["restaurando"] = True
+            return descripcion
+        if self._ask_display_keep(descripcion):
+            core.guardar_preferencia(jarvis_displays.PREFERENCIA_BASE, "")
             return descripcion
         jarvis_displays.restaurar_configuracion(previa)
         raise RuntimeError(
-            "No confirmaste el cambio de monitores, así que restauré la configuración anterior."
+            "No confirmaste el cambio de monitores, así que dejé la configuración como estaba."
         )
+
+    def _start_display_batch(self) -> dict:
+        """Los cambios de monitores de una rutina se confirman juntos al final."""
+        lote = {"previa": None, "descripciones": []}
+        self._display_batch = lote
+        return lote
+
+    @contextlib.contextmanager
+    def _plan_display_scope(self, _plan):
+        """Plan aprobado de la IA: sus cambios de monitores se confirman juntos al final,
+        igual que en las rutinas. Lo que se deja en ``avisos`` va a la respuesta."""
+        avisos: list[str] = []
+        lote = self._start_display_batch()
+        try:
+            yield avisos
+        finally:
+            try:
+                revertido = self._confirm_display_batch(lote, "Cambios del plan", recordar=False)
+            except Exception:
+                logging.exception("No se pudo confirmar o restaurar la configuración de monitores.")
+                revertido = "No pude restaurar la configuración de monitores anterior."
+            if revertido is not None:
+                avisos.append(revertido)
+
+    def _confirm_display_batch(self, lote: dict, nombre: str, recordar: bool = True) -> str | None:
+        """Una sola pregunta para todos los cambios de monitores de la rutina.
+
+        Devuelve None si no hubo cambios o se mantuvieron; si no, restaura la
+        configuración de antes del primer cambio y devuelve el aviso."""
+        if getattr(self, "_display_batch", None) is lote:
+            self._display_batch = None
+        if lote["previa"] is None:
+            return None
+        cambios = lote["descripciones"]
+        descripcion = f"{nombre}: " + " ".join(cambios) if len(cambios) > 1 else cambios[0]
+        if self._ask_display_keep(descripcion):
+            if lote.get("restaurando"):
+                core.guardar_preferencia(jarvis_displays.PREFERENCIA_BASE, "")
+            elif recordar:  # solo las rutinas («desactiva <rutina>»), no los planes de la IA
+                self._recordar_base_monitores(lote, nombre)
+            return None
+        jarvis_displays.restaurar_configuracion(lote["previa"])
+        return "No confirmaste los cambios de monitores, así que restauré la configuración anterior."
 
     def _tool_move_window(
         self, app: str, monitor: int | None = None, screen_name: str | None = None
@@ -2780,6 +2967,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except Exception:
             logging.debug("No se pudieron leer las ventanas para la transcripción.", exc_info=True)
         try:
+            # Las frases con que se activan («Modo gaming 2K») y los nombres de las rutinas.
+            nombres += jarvis_routines.frases_de_rutinas()[:15]
             nombres += [rutina[1] for rutina in jarvis_routines.listar_rutinas()][:15]
         except Exception:
             logging.debug("No se pudieron leer las rutinas para la transcripción.", exc_info=True)
@@ -3917,6 +4106,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         "list_top_processes": "MIDIENDO PROCESOS…",
         "get_system_status": "REVISANDO EL EQUIPO…",
         "configure_display": "CAMBIANDO LA CONFIGURACIÓN DE MONITORES…",
+        "restore_display_config": "VOLVIENDO A LA CONFIGURACIÓN DE MONITORES…",
         "fix_display_scaling": "REAJUSTANDO EL ESCALADO…",
         "set_theme": "CAMBIANDO EL TEMA…",
         "set_compact_mode": "CAMBIANDO EL MODO DE VENTANA…",

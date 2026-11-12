@@ -853,10 +853,76 @@ def _leer_frases(valor: object) -> tuple[str, ...]:
     return tuple(str(f) for f in datos if isinstance(f, str)) if isinstance(datos, list) else ()
 
 
-def buscar_rutina_por_frase(texto: str) -> Routine | None:
-    """Rutina activa cuya frase coincide exactamente con lo dicho o escrito."""
+_NUMEROS_VOZ = {
+    "0": "cero", "1": "uno", "2": "dos", "3": "tres", "4": "cuatro", "5": "cinco",
+    "6": "seis", "7": "siete", "8": "ocho", "9": "nueve", "10": "diez",
+}
+# Grafías que suenan igual en español: el STT escribe «dosca» por «2K» o junta palabras
+# («Modulgaming» por «modo gaming»).
+_MISMO_SONIDO = (("qu", "k"), ("c", "k"), ("ka", "k"), ("z", "s"), ("v", "b"), ("h", ""), ("ll", "y"))
+PARECIDO_MINIMO = 0.85
+MARGEN_PARECIDO = 0.05
+
+
+def clave_sonido(texto: str) -> str:
+    """Forma «por sonido» de una frase: números en letras, sin espacios y con las
+    letras que suenan igual unificadas («Modo gaming 2K» ≈ «Modulgaming dosca»)."""
+    partes = []
+    for palabra in normalizar_frase(texto).split():
+        m = re.fullmatch(r"(\d+)([a-z]*)", palabra)
+        if m and m.group(1) in _NUMEROS_VOZ:
+            palabra = _NUMEROS_VOZ[m.group(1)] + m.group(2)
+        partes.append(palabra)
+    clave = "".join(partes)
+    for antes, despues in _MISMO_SONIDO:
+        clave = clave.replace(antes, despues)
+    return clave
+
+
+def elegir_por_frase(texto: str, candidatas: list[tuple[object, tuple[str, ...]]]):
+    """La candidata cuya frase coincide con lo dicho: exacta o, si no hay, la única
+    que se le parece mucho por sonido (el STT a veces escribe mal la frase)."""
+    from difflib import SequenceMatcher
+
     clave = normalizar_frase(texto)
     if len(clave) < 3:
+        return None
+    for candidata, frases in candidatas:
+        if clave in {normalizar_frase(f) for f in frases}:
+            return candidata
+    sonido = clave_sonido(texto)
+    if len(sonido) < 6:
+        return None
+    puntajes = []
+    for candidata, frases in candidatas:
+        mejor = max((SequenceMatcher(None, sonido, clave_sonido(f)).ratio()
+                     for f in frases if len(clave_sonido(f)) >= 6), default=0.0)
+        puntajes.append((mejor, candidata))
+    puntajes.sort(key=lambda par: par[0], reverse=True)
+    if not puntajes or puntajes[0][0] < PARECIDO_MINIMO:
+        return None
+    if len(puntajes) > 1 and puntajes[0][0] - puntajes[1][0] < MARGEN_PARECIDO:
+        return None  # dos rutinas se parecen igual: mejor no adivinar
+    logging.info("Frase de rutina reconocida por parecido (%.2f).", puntajes[0][0])
+    return puntajes[0][1]
+
+
+_DESHACER = re.compile(
+    r"^(?:desactiva|desactivar|desactivame|quita|quitar|quitame|sal|salir|salte|sali|apaga|apagar"
+    r"|deshaz|deshacer|termina|terminar|cierra|cerrar|cancela|cancelar|anula|anular)"
+    r"\s+(?:(?:de|del|el|la)\s+)?(?P<resto>.+)$"
+)
+
+
+def frase_a_deshacer(texto: str) -> str | None:
+    """«Desactiva el modo gaming 2K» → «modo gaming 2k»; None si no es una orden así."""
+    m = _DESHACER.fullmatch(normalizar_frase(texto))
+    return m.group("resto") if m else None
+
+
+def buscar_rutina_por_frase(texto: str) -> Routine | None:
+    """Rutina activa cuya frase coincide con lo dicho o escrito (ver ``elegir_por_frase``)."""
+    if len(normalizar_frase(texto)) < 3:
         return None
     with core.conexion_db() as connection:
         filas = connection.execute(
@@ -864,16 +930,27 @@ def buscar_rutina_por_frase(texto: str) -> Routine | None:
             "FROM rutinas WHERE activa = 1 AND disparador = ? ORDER BY id",
             (DISPARADOR_FRASE,),
         ).fetchall()
-        for fila in filas:
-            frases = _leer_frases(fila[7])
-            if clave in {normalizar_frase(f) for f in frases}:
-                rutina = _routine_from_row(connection, fila[:7])
-                if rutina is not None:
-                    return Routine(
-                        rutina.identifier, rutina.name, rutina.time, rutina.days,
-                        rutina.steps, rutina.trigger, rutina.permission, frases,
-                    )
-    return None
+        fila = elegir_por_frase(texto, [(f, _leer_frases(f[7])) for f in filas])
+        if fila is None:
+            return None
+        frases = _leer_frases(fila[7])
+        rutina = _routine_from_row(connection, fila[:7])
+        if rutina is None:
+            return None
+        return Routine(
+            rutina.identifier, rutina.name, rutina.time, rutina.days,
+            rutina.steps, rutina.trigger, rutina.permission, frases,
+        )
+
+
+def frases_de_rutinas() -> list[str]:
+    """Las frases de las rutinas activas (pista de vocabulario para el STT)."""
+    with core.conexion_db() as connection:
+        filas = connection.execute(
+            "SELECT frases FROM rutinas WHERE activa = 1 AND disparador = ? ORDER BY id",
+            (DISPARADOR_FRASE,),
+        ).fetchall()
+    return [frase for (valor,) in filas for frase in _leer_frases(valor)]
 
 
 def _routine_from_row(connection, row) -> Routine | None:

@@ -831,6 +831,39 @@ def _clic_derecho(x: int, y: int) -> None:
     user32.SetCursorPos(anterior.x, anterior.y)
 
 
+ESPERA_MENU = 3.0  # s; la primera consulta de accesibilidad de Jarvis puede tardar
+
+
+def _buscar_opcion_menu(auto, ventana, mute: bool, espera: float = ESPERA_MENU):
+    """La opción «Silenciar pestaña» / «Activar sonido de la pestaña» del menú contextual.
+
+    El menú aparece dentro de la ventana del navegador de la pestaña: se mira ahí
+    primero (rápido) y, si no, en el resto de ventanas Chromium. Antes se recorrían
+    todas (también la app de Claude, enorme) con solo 1,5 s de margen, y la primera
+    orden tras arrancar Jarvis no llegaba a ver el menú (monitor 3, 12/11/2026).
+    Siempre se hace al menos una búsqueda completa aunque se pase el tiempo.
+    """
+    def en(raiz):
+        for control, _ in auto.WalkControl(raiz, maxDepth=8):
+            if control.ControlTypeName == "MenuItemControl" and _opcion_menu(control.Name, mute):
+                return control
+        return None
+
+    limite = time.monotonic() + espera
+    while True:
+        time.sleep(0.15)
+        if (opcion := en(ventana)) is not None:
+            return opcion
+        for otra in auto.GetRootControl().GetChildren():
+            if otra.ClassName == "Chrome_WidgetWin_1" and otra.Name != ventana.Name:
+                if (opcion := en(otra)) is not None:
+                    return opcion
+        if time.monotonic() >= limite:
+            logging.warning("No apareció la opción del menú de la pestaña (%s).",
+                            "silenciar" if mute else "activar sonido")
+            return None
+
+
 def silenciar_pestana(mute: bool = True, monitor: int | None = None, match: str = "") -> str:
     """Silencia (o devuelve el sonido a) las pestañas de Brave/Chrome que suenan
     (o están silenciadas), opcionalmente solo las de un monitor o cuyo título
@@ -865,25 +898,13 @@ def silenciar_pestana(mute: bool = True, monitor: int | None = None, match: str 
                 # Su nombre no cambia al silenciar: el estado se lee del menú.
                 if indicador is None or indicador.BoundingRectangle.width() <= 0:
                     continue
-                pestanas.append(control)
-        elegidas = elegir_pestanas([p.Name for p in pestanas], mute, match)
+                pestanas.append((ventana, control))
+        elegidas = elegir_pestanas([p.Name for _, p in pestanas], mute, match)
         pestanas = [pestanas[i] for i in elegidas]
-        for pestana in pestanas[:MAX_PESTANAS]:
+        for ventana, pestana in pestanas[:MAX_PESTANAS]:
             caja = pestana.BoundingRectangle
             _clic_derecho((caja.left + caja.right) // 2, (caja.top + caja.bottom) // 2)
-            opcion = None
-            limite = time.monotonic() + 1.5
-            while opcion is None and time.monotonic() < limite:
-                time.sleep(0.15)
-                for ventana in auto.GetRootControl().GetChildren():
-                    if ventana.ClassName != "Chrome_WidgetWin_1":
-                        continue
-                    for control, _ in auto.WalkControl(ventana, maxDepth=8):
-                        if control.ControlTypeName == "MenuItemControl" and _opcion_menu(control.Name, mute):
-                            opcion = control
-                            break
-                    if opcion is not None:
-                        break
+            opcion = _buscar_opcion_menu(auto, ventana, mute)
             if opcion is None:
                 auto.SendKeys("{Esc}")  # ya estaba como se pide (o no hay menú)
                 continue
@@ -1029,12 +1050,14 @@ _COSA = (
 )
 _PAUSA = re.compile(
     rf"^(?:pausa|pausar|pausalo|pausala|pon(?:le)?\s+(?:en\s+)?pausa|deja\s+en\s+pausa|deten|detener"
-    rf"|detenlo|detenla|para|parar|paralo|parala|frena|frenalo|frenala|stop)(?:\s+la)?{_COSA}$"
+    rf"|detenlo|detenla|para|parar|paralo|parala|frena|frenalo|frenala|stop"
+    rf"|pause|pausen|detenga|pare|frene)(?:\s+la)?{_COSA}$"  # también de usted: «pause el vídeo»
 )
 _REANUDA = re.compile(
     rf"^(?:reanuda|reanudar|reanudalo|reanudala|continua|continuar|sigue|seguir|play"
     rf"|dale\s+(?:al\s+)?play|pon(?:le)?\s+play|quita(?:le)?\s+(?:la\s+)?pausa|reproduce|reproducir"
-    rf"|despausa|despausalo|despausala|vuelve\s+a\s+(?:reproducir|poner)|resume){_COSA}$"
+    rf"|despausa|despausalo|despausala|vuelve\s+a\s+(?:reproducir|poner)|resume"
+    rf"|reproduzca|reproduzcan|reanude|continue|siga|despause|vuelva\s+a\s+reproducir){_COSA}$"
 )
 _SIGUIENTE = re.compile(
     r"^(?:siguiente|la\s+siguiente|pasa|salta|saltea|cambia|otra|proxima)"
@@ -1078,17 +1101,19 @@ _NUMEROS_MONITOR = {
 _PESTANA = r"(?:la\s+|las\s+|esta\s+|esa\s+|una\s+)?(?:pestana|pestanas|tab|tabs)"
 # «el vídeo», «YouTube»: la pestaña donde está (no el volumen de toda la app).
 _VIDEO = r"(?:(?:el\s+|este\s+|ese\s+)?video|youtube)"
-_DE_PESTANA = r"(?:\s+(?:de|del)\s+(?P<match>[a-z0-9 ]+?))?"
+# El nombre de la pestaña nunca incluye otro monitor ni otra orden («… del monitor 3 y
+# reproduzca el vídeo del monitor 1» no es la pestaña «monitor 3 y reproduzca el vídeo»).
+_DE_PESTANA = r"(?:\s+(?:de|del)\s+(?P<match>(?![a-z0-9 ]*\b(?:monitor|pantalla|y)\b)[a-z0-9 ]+?))?"
 _QUE_SUENA_PESTANA = r"(?:\s+que\s+(?:suena|esta\s+sonando|tiene\s+sonido|hace\s+ruido|tiene\s+audio))?"
 _VERBO_SILENCIAR = (
-    r"(?:silencia|silenciar|silenciame|mutea|mutear|muteame|calla|callar|callame"
+    r"(?:silencia|silenciar|silenciame|silencie|mutea|mutear|muteame|mutee|calla|callar|callame|calle"
     r"|pon(?:le)?\s+(?:en\s+)?silencio(?:\s+al?)?|pon(?:le)?\s+mute(?:\s+al?)?"
     r"|quita(?:le|r)?\s+el\s+(?:sonido|audio)\s+(?:a|al|de|del))"
 )
 _VERBO_ACTIVAR = (
     r"(?:(?:quita|quitale|quitar)\s+el\s+(?:silencio|mute)\s+(?:a|al|de|del)"
     r"|(?:activa|activar|activale|devuelve|devuelvele|reactiva|dale|ponle|vuelve\s+a\s+activar)"
-    r"\s+el\s+(?:sonido|audio)\s+(?:a|al|de|del)|desmutea|desmutear|desmuteame|desilencia|desilenciar)"
+    r"\s+el\s+(?:sonido|audio)\s+(?:a|al|de|del)|desmutea|desmutear|desmuteame|desmutee|desilencia|desilenciar|desilencie)"
 )
 _SILENCIAR_PESTANA = re.compile(
     rf"^{_VERBO_SILENCIAR}\s+{_PESTANA}{_DE_PESTANA}{_QUE_SUENA_PESTANA}$"
@@ -1113,6 +1138,21 @@ _QUITAR_PANTALLA_COMPLETA = re.compile(
     rf"|^(?:achica|achicar|reduce|reducir|minimiza|minimizar)\s+{_VIDEO}$"
     rf"|^(?:vuelve|volve|deja|pon)\s+{_VIDEO}\s+(?:a|al|en)\s+(?:tamano\s+normal|modo\s+normal|normal)$"
 )
+
+# «mutea el monitor 3», «desmutea la pantalla 2», «silencia el segundo monitor»:
+# las pestañas que suenan (o están silenciadas) en ese monitor, sin decir «pestaña».
+_MONITOR_SOLO = (
+    r"(?:(?:el|la|al|a\s+la|lo\s+del|lo\s+de\s+la)\s+)?"
+    r"(?:(?:monitor|pantalla)\s+(?:numero\s+)?(?P<n>\d|uno|dos|tres|cuatro)"
+    r"|(?P<ord>primer|primera|segundo|segunda|tercer|tercera|cuarto|cuarta)\s+(?:monitor|pantalla))"
+)
+_SILENCIAR_MONITOR = re.compile(rf"^{_VERBO_SILENCIAR}\s+{_MONITOR_SOLO}$")
+_ACTIVAR_MONITOR = re.compile(rf"^{_VERBO_ACTIVAR}\s+{_MONITOR_SOLO}$")
+
+
+def _numero_monitor(m: re.Match) -> int:
+    valor = m.group("n") or m.group("ord")
+    return int(valor) if valor.isdigit() else _NUMEROS_MONITOR[valor]
 
 
 def _separar_monitor(consulta: str) -> tuple[str, int | None]:
@@ -1186,6 +1226,10 @@ def detectar_comando(consulta: str) -> tuple[str, dict[str, object]] | None:
 
 
 def _detectar_uno(consulta: str) -> tuple[str, dict[str, object]] | None:
+    if (m := _SILENCIAR_MONITOR.fullmatch(consulta)) is not None:
+        return "mute_browser_tab", {"mute": True, "monitor": _numero_monitor(m)}
+    if (m := _ACTIVAR_MONITOR.fullmatch(consulta)) is not None:
+        return "mute_browser_tab", {"mute": False, "monitor": _numero_monitor(m)}
     sin_monitor, monitor = _separar_monitor(consulta)
     extra = {"monitor": monitor} if monitor is not None else {}
     if monitor is not None:
@@ -1270,7 +1314,8 @@ def registrar_herramientas(registry, verificadores=None) -> None:
         (
             "Controla lo que se reproduce en Windows (Spotify, YouTube en el navegador…): "
             "play, pause, toggle, next, previous o stop. monitor (opcional): actuar sobre "
-            "lo que se reproduce en ese monitor."
+            "lo que se reproduce en ese monitor. «Reproduce / reanuda / dale play al vídeo del "
+            "monitor N» es action=play con monitor=N (no pantalla completa)."
         ),
         {
             "type": "object",
@@ -1290,7 +1335,9 @@ def registrar_herramientas(registry, verificadores=None) -> None:
         "video_fullscreen",
         (
             "Pone en pantalla completa (enabled=true) o saca de ella (enabled=false) el vídeo "
-            "de YouTube u otro reproductor de la pestaña activa de Brave/Chrome; monitor opcional."
+            "de YouTube u otro reproductor de la pestaña activa de Brave/Chrome; monitor opcional. "
+            "Solo si se pide «pantalla completa» (o agrandar el vídeo); para reproducir o pausar "
+            "usa media_control."
         ),
         {
             "type": "object",

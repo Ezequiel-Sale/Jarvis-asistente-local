@@ -379,6 +379,7 @@ class JarvisRoutineTests(unittest.TestCase):
             ),
         )
         host = Mock()
+        host._confirm_display_batch.return_value = None  # sin cambios de monitores
         host.tool_registry = registry
         host.events = queue.Queue()
         host._request_plan_confirmation.return_value = True
@@ -417,6 +418,7 @@ class JarvisRoutineTests(unittest.TestCase):
             (jarvis_routines.RoutineStep("high_risk_step", {}),),
         )
         host = Mock()
+        host._confirm_display_batch.return_value = None  # sin cambios de monitores
         host.tool_registry = registry
         host.events = queue.Queue()
         host._request_plan_confirmation.return_value = True

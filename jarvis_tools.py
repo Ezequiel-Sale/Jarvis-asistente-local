@@ -313,6 +313,26 @@ def crear_registro_herramientas(
         timeout_seconds=60,
     )
     registry.register(
+        "restore_display_config",
+        (
+            "Vuelve los monitores a como estaban antes de la rutina que los cambió "
+            "(«desactiva el modo gaming 2K», «vuelve los monitores a la normalidad»). "
+            "routine: nombre de esa rutina (opcional). Úsala en vez de desactivar monitores "
+            "uno por uno; tras el cambio el usuario debe confirmarlo o se revierte."
+        ),
+        {
+            "type": "object",
+            "properties": {"routine": {"type": "string", "maxLength": 80}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        host._tool_restore_display,
+        risk=ToolRisk.HIGH,
+        requires_confirmation=True,
+        label="Volver a la configuración de monitores",
+        timeout_seconds=90,
+    )
+    registry.register(
         "move_window",
         (
             "Mueve ventanas a otro monitor. app es el programa (brave, discord, spotify…), "

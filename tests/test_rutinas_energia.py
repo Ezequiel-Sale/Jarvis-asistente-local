@@ -170,6 +170,7 @@ class CountdownExecutionTests(unittest.TestCase):
 
     def _host(self, registry: ToolRegistry, cuenta_atras: bool) -> Mock:
         host = Mock()
+        host._confirm_display_batch.return_value = None  # sin cambios de monitores
         host.tool_registry = registry
         host.events = queue.Queue()
         host._request_power_countdown.return_value = cuenta_atras

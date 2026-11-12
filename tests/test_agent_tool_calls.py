@@ -497,7 +497,7 @@ class AgentToolCallTests(unittest.TestCase):
     @patch("jarvis_agent.core.cargar_contexto_db", return_value="System context.")
     @patch("jarvis_agent.core.obtener_historial", return_value=[])
     @patch("jarvis_agent.requests.post")
-    def test_approved_plan_still_confirms_high_risk_steps_individually(
+    def test_approved_plan_covers_its_high_risk_steps(
         self,
         post: Mock,
         _history: Mock,
@@ -548,11 +548,83 @@ class AgentToolCallTests(unittest.TestCase):
             approve_plan=Mock(return_value=True),
         )
         self.assertEqual(answer, "Plan completado.")
-        confirmation.assert_called_once()
+        # Aprobar el plan completo ya autoriza sus pasos (antes se volvía a preguntar).
+        confirmation.assert_not_called()
         self.assertEqual(
             self.executed,
             [{"high_risk_action": True}, {"percentage": 30}],
         )
+
+    @patch("jarvis_agent.core.cargar_contexto_db", return_value="System context.")
+    @patch("jarvis_agent.core.obtener_historial", return_value=[])
+    @patch("jarvis_agent.requests.post")
+    def test_power_and_similar_steps_still_ask_inside_an_approved_plan(
+        self, post: Mock, _historial: Mock, _contexto: Mock
+    ) -> None:
+        self.registry.register(
+            "power_control",
+            "Apaga el equipo.",
+            {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            lambda: self.executed.append({"power": True}) or "Apagando.",
+            risk=ToolRisk.HIGH,
+            requires_confirmation=True,
+        )
+        post.side_effect = [
+            _response({"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "set_volume", "arguments": {"percentage": 30}}},
+                {"function": {"name": "power_control", "arguments": {}}},
+            ]}),
+            _response({"role": "assistant", "content": "Listo."}),
+        ]
+        confirmation = Mock(return_value=True)
+        procesar_con_herramientas("Baja el volumen y apaga", "conversation-1", self.registry,
+                                  confirmation, approve_plan=Mock(return_value=True))
+        confirmation.assert_called_once()
+
+    @patch("jarvis_agent.core.cargar_contexto_db", return_value="System context.")
+    @patch("jarvis_agent.core.obtener_historial", return_value=[])
+    @patch("jarvis_agent.requests.post")
+    def test_plan_scope_wraps_the_approved_plan_and_adds_its_notices(
+        self, post: Mock, _historial: Mock, _contexto: Mock
+    ) -> None:
+        import contextlib
+
+        eventos = []
+
+        @contextlib.contextmanager
+        def alcance(plan):
+            eventos.append(("inicio", len(plan)))
+            avisos = []
+            yield avisos
+            eventos.append(("fin", list(self.executed)))
+            avisos.append("No confirmaste los cambios de monitores")
+
+        post.side_effect = [
+            _response({"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "set_volume", "arguments": {"percentage": 30}}},
+                {"function": {"name": "set_volume", "arguments": {"percentage": 40}}},
+            ]}),
+            _response({"role": "assistant", "content": "Listo."}),
+        ]
+        answer = procesar_con_herramientas("Sube y baja", "conversation-1", self.registry, Mock(return_value=True),
+                                           approve_plan=Mock(return_value=True), plan_scope=alcance)
+        self.assertEqual(eventos, [("inicio", 2), ("fin", [{"percentage": 30}, {"percentage": 40}])])
+        self.assertIn("No confirmaste los cambios de monitores", answer)
+
+    def test_plan_covers_rule(self) -> None:
+        from jarvis_agent import plan_cubre
+
+        def definicion(nombre, riesgo):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(name=nombre, risk=riesgo)
+
+        self.assertTrue(plan_cubre(definicion("configure_display", ToolRisk.HIGH)))
+        self.assertTrue(plan_cubre(definicion("set_volume", ToolRisk.MEDIUM)))
+        for nombre in ("power_control", "clean_disk", "mobile_remote_control", "screen_click", "mcp_borrar"):
+            with self.subTest(nombre=nombre):
+                self.assertFalse(plan_cubre(definicion(nombre, ToolRisk.HIGH)))
+
 
     @patch("jarvis_agent.core.cargar_contexto_db", return_value="System context.")
     @patch("jarvis_agent.core.obtener_historial", return_value=[])

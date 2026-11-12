@@ -240,6 +240,7 @@ class AppAutomationTests(unittest.TestCase):
 
     def _host(self, registry: ToolRegistry) -> Mock:
         host = Mock()
+        host._confirm_display_batch.return_value = None  # sin cambios de monitores
         host.tool_registry = registry
         host.events = queue.Queue()
         host._request_plan_confirmation.return_value = False
