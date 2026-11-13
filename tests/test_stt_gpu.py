@@ -144,9 +144,9 @@ class FallbackTests(unittest.TestCase):
                 self.target()
 
         host = Mock()
-        with patch("jarvis_app.threading.Thread", _HiloEnElActo), \
+        with patch("threading.Thread", _HiloEnElActo), \
                 patch.object(g, "liberar") as liberar, patch.object(g, "reanudar") as reanudar, \
-                patch("jarvis_app.jarvis_agent.descargar_modelo") as descargar:
+                patch("jarvis_agent.descargar_modelo") as descargar:
             JarvisApp._free_gpu_for_game(host)
             liberar.assert_called_once()
             descargar.assert_called_once()

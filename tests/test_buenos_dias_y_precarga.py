@@ -77,10 +77,10 @@ class AutomaticTests(unittest.TestCase):
         host._MORNING_BRIEF_MS = 60000
         return host
 
-    @patch("jarvis_app.jarvis_buenos_dias.segundos_inactivo", return_value=2.0)
-    @patch("jarvis_app.jarvis_buenos_dias.toca_automatico", return_value=True)
-    @patch("jarvis_app.core.guardar_preferencia")
-    @patch("jarvis_app.core.obtener_preferencia", return_value=None)
+    @patch("jarvis_buenos_dias.segundos_inactivo", return_value=2.0)
+    @patch("jarvis_buenos_dias.toca_automatico", return_value=True)
+    @patch("jarvis_core.guardar_preferencia")
+    @patch("jarvis_core.obtener_preferencia", return_value=None)
     def test_app_runs_it_and_remembers_the_day(self, _obtener, guardar, _toca, _inactivo) -> None:
         host = self._host()
         JarvisApp._check_morning_brief(host)
@@ -88,7 +88,7 @@ class AutomaticTests(unittest.TestCase):
             "morning_briefing", {}, "(resumen automático de la mañana)")
         self.assertEqual(guardar.call_args.args[0], b.PREFERENCIA_ULTIMO)
 
-    @patch("jarvis_app.jarvis_buenos_dias.toca_automatico", return_value=True)
+    @patch("jarvis_buenos_dias.toca_automatico", return_value=True)
     def test_not_while_playing_or_busy(self, _toca) -> None:
         host = self._host()
         host.games_watcher.jugando = {"Elden Ring"}
@@ -98,7 +98,7 @@ class AutomaticTests(unittest.TestCase):
         JarvisApp._check_morning_brief(host)
         host._start_direct_tool_action.assert_not_called()
 
-    @patch("jarvis_app.core.guardar_preferencia")
+    @patch("jarvis_core.guardar_preferencia")
     def test_voice_toggle_saves_the_preference(self, guardar) -> None:
         texto = JarvisApp._tool_morning_briefing(Mock(), automatic=False)
         guardar.assert_called_once_with(b.PREFERENCIA_ACTIVO, "0")
@@ -133,7 +133,7 @@ class PreloadTests(unittest.TestCase):
         self.assertTrue(agent.modelo_cargado("qwen2.5-coder:14b"))
         self.assertFalse(agent.modelo_cargado("otro"))
 
-    @patch("jarvis_app.threading.Thread")
+    @patch("threading.Thread")
     def test_app_throttles_and_skips_while_playing(self, hilo) -> None:
         host = Mock(PRECARGA_INTERVALO=60.0)
         host.games_watcher.jugando = set()
@@ -155,7 +155,7 @@ class PreloadTests(unittest.TestCase):
 
         vigilante = jarvis_games_watch.VigilanteJuegos(queue.Queue())  # antes del patch: crea su hilo
         host = SimpleNamespace(PRECARGA_INTERVALO=60.0, games_watcher=vigilante)
-        with patch("jarvis_app.threading.Thread") as hilo:
+        with patch("threading.Thread") as hilo:
             JarvisApp._preload_llm(host, "palabra de activación")
             self.assertEqual(hilo.call_count, 1)
             vigilante._confirmado = {"Elden Ring"}
@@ -163,7 +163,7 @@ class PreloadTests(unittest.TestCase):
             JarvisApp._preload_llm(host, "palabra de activación")
             self.assertEqual(hilo.call_count, 1)
         host2 = self._real_host_for_brief(vigilante)
-        with patch("jarvis_app.jarvis_buenos_dias.toca_automatico", return_value=True):
+        with patch("jarvis_buenos_dias.toca_automatico", return_value=True):
             JarvisApp._check_morning_brief(host2)  # jugando: no sale, y no falla
         host2._start_direct_tool_action.assert_not_called()
 

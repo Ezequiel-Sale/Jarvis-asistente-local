@@ -18,7 +18,7 @@ class CloseRequestTests(unittest.TestCase):
             solicitud = Path(carpeta) / JarvisApp.SOLICITUD_CIERRE
             solicitud.write_text("")
             host = self._host()
-            with patch("jarvis_app.core.APP_DIR", Path(carpeta)):
+            with patch("jarvis_core.APP_DIR", Path(carpeta)):
                 JarvisApp._check_close_request(host)
             host._close.assert_called_once()
             host.root.after.assert_not_called()
@@ -27,7 +27,7 @@ class CloseRequestTests(unittest.TestCase):
     def test_without_file_keeps_checking(self) -> None:
         with tempfile.TemporaryDirectory() as carpeta:
             host = self._host()
-            with patch("jarvis_app.core.APP_DIR", Path(carpeta)):
+            with patch("jarvis_core.APP_DIR", Path(carpeta)):
                 JarvisApp._check_close_request(host)
             host._close.assert_not_called()
             host.root.after.assert_called_once()

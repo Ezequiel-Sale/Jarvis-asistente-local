@@ -222,11 +222,11 @@ class JarvisRoutineTests(unittest.TestCase):
                 "borra mis archivos"
             )
 
-    @patch("jarvis_app.jarvis_memory.procesar_comando", return_value=None)
-    @patch("jarvis_app.procesar_con_herramientas")
-    @patch("jarvis_app.core.guardar_turno")
-    @patch("jarvis_app.core.guardar_respuesta", return_value="response-id")
-    @patch("jarvis_app.core.generar_audio_tts", return_value="response.wav")
+    @patch("jarvis_memory.procesar_comando", return_value=None)
+    @patch("jarvis_app_ordenes.procesar_con_herramientas")
+    @patch("jarvis_core.guardar_turno")
+    @patch("jarvis_core.guardar_respuesta", return_value="response-id")
+    @patch("jarvis_core.generar_audio_tts", return_value="response.wav")
     def test_natural_routine_request_saves_as_routine_without_running_its_actions(
         self,
         _tts: Mock,
@@ -283,11 +283,11 @@ class JarvisRoutineTests(unittest.TestCase):
             "Rutina guardada.",
         )
 
-    @patch("jarvis_app.jarvis_memory.procesar_comando", return_value=None)
-    @patch("jarvis_app.procesar_con_herramientas")
-    @patch("jarvis_app.core.guardar_turno")
-    @patch("jarvis_app.core.guardar_respuesta", return_value="response-id")
-    @patch("jarvis_app.core.generar_audio_tts", return_value="response.wav")
+    @patch("jarvis_memory.procesar_comando", return_value=None)
+    @patch("jarvis_app_ordenes.procesar_con_herramientas")
+    @patch("jarvis_core.guardar_turno")
+    @patch("jarvis_core.guardar_respuesta", return_value="response-id")
+    @patch("jarvis_core.generar_audio_tts", return_value="response.wav")
     def test_declining_routine_creation_does_not_save_or_run_any_actions(
         self,
         _tts: Mock,

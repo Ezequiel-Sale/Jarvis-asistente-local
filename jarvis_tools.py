@@ -430,6 +430,63 @@ def crear_registro_herramientas(
         record_result=False,
     )
     registry.register(
+        "undo_last_action",
+        (
+            "Deshace la última acción reversible («deshaz lo último», «déjalo como estaba»): "
+            "volumen, salida de audio, silencio de pestañas, pausa, pantalla completa, modo teatro, "
+            "tema, minimizar/maximizar ventanas o cambios de monitores de la última media hora."
+        ),
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        host._tool_undo_last_action,
+        risk=ToolRisk.MEDIUM,
+        label="Deshacer lo último",
+        timeout_seconds=40,
+    )
+    registry.register(
+        "find_files",
+        (
+            "Solo lectura. Busca archivos del usuario por nombre en Escritorio, Documentos, Descargas, "
+            "Imágenes, Vídeos y Música («¿dónde está el PDF del DNI?», «busca las fotos de ayer»). "
+            "query: palabras del nombre; kind: any, pdf, document, spreadsheet, presentation, image, video "
+            "o audio; days: solo los modificados en los últimos N días; open_best=true para abrir el "
+            "resultado si es claro («abre el PDF de…»)."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "maxLength": 120},
+                "kind": {"type": "string", "enum": ["any", "pdf", "document", "spreadsheet", "presentation",
+                                                    "image", "video", "audio"]},
+                "days": {"type": "integer", "minimum": 0, "maximum": 3650},
+                "open_best": {"type": "boolean"},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        host._tool_find_files,
+        label="Buscar archivos",
+        timeout_seconds=40,
+        record_result=False,  # nombres de archivos personales
+    )
+    registry.register(
+        "open_file",
+        (
+            "Abre un archivo con su programa predeterminado (path: ruta completa, normalmente de "
+            "find_files). Nunca abre programas, scripts ni accesos directos."
+        ),
+        {
+            "type": "object",
+            "properties": {"path": {"type": "string", "minLength": 3, "maxLength": 1000}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        host._tool_open_file,
+        risk=ToolRisk.MEDIUM,
+        label="Abrir archivo",
+        timeout_seconds=15,
+        record_result=False,
+    )
+    registry.register(
         "show_commands_help",
         (
             "Solo lectura. Qué puede hacer Jarvis («¿qué puedes hacer?», «¿qué comandos tienes?»): "

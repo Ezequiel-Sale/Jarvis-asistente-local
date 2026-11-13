@@ -151,7 +151,7 @@ class DirectPowerConfirmationTests(unittest.TestCase):
 
     def test_direct_shutdown_runs_when_approved(self) -> None:
         host = self._host(True)
-        with patch("jarvis_app.core.guardar_turno"):
+        with patch("jarvis_core.guardar_turno"):
             JarvisApp._direct_tool_worker(
                 host, "power_control", {"action": "shutdown"}, "apaga el equipo", "c1", None
             )
@@ -160,7 +160,7 @@ class DirectPowerConfirmationTests(unittest.TestCase):
 
     def test_lock_does_not_ask(self) -> None:
         host = self._host(False)
-        with patch("jarvis_app.core.guardar_turno"):
+        with patch("jarvis_core.guardar_turno"):
             JarvisApp._direct_tool_worker(host, "lock_computer", {}, "bloquea la pc", "c1", None)
         host._request_power_confirmation.assert_not_called()
         host.tool_registry.execute.assert_called_once()

@@ -225,11 +225,11 @@ class KeepOrRevertTests(unittest.TestCase):
         threading.Thread(target=responder, daemon=True).start()
         return host
 
-    @patch("jarvis_app.core.guardar_preferencia")
-    @patch("jarvis_app.core.obtener_preferencia", return_value=None)
-    @patch("jarvis_app.jarvis_displays.listar_pantallas", return_value=([], {}))
-    @patch("jarvis_app.jarvis_displays.restaurar_configuracion")
-    @patch("jarvis_app.jarvis_displays.aplicar", return_value=("Desactivé el monitor 3.", "previa", {}))
+    @patch("jarvis_core.guardar_preferencia")
+    @patch("jarvis_core.obtener_preferencia", return_value=None)
+    @patch("jarvis_displays.listar_pantallas", return_value=([], {}))
+    @patch("jarvis_displays.restaurar_configuracion")
+    @patch("jarvis_displays.aplicar", return_value=("Desactivé el monitor 3.", "previa", {}))
     def test_keep_and_revert(self, aplicar, restaurar, *_mocks) -> None:
         self.assertEqual(
             JarvisApp._tool_configure_display(self._host(True), "disable", 3), "Desactivé el monitor 3."
@@ -242,11 +242,11 @@ class KeepOrRevertTests(unittest.TestCase):
         restaurar.assert_called_once_with("previa")
         self.assertIn("restauré la configuración anterior", str(context.exception))
 
-    @patch("jarvis_app.core.guardar_preferencia")
-    @patch("jarvis_app.core.obtener_preferencia", return_value=None)
-    @patch("jarvis_app.jarvis_displays.listar_pantallas", return_value=([], {}))
-    @patch("jarvis_app.jarvis_displays.restaurar_configuracion")
-    @patch("jarvis_app.jarvis_displays.aplicar", return_value=("Cambio.", "previa", {}))
+    @patch("jarvis_core.guardar_preferencia")
+    @patch("jarvis_core.obtener_preferencia", return_value=None)
+    @patch("jarvis_displays.listar_pantallas", return_value=([], {}))
+    @patch("jarvis_displays.restaurar_configuracion")
+    @patch("jarvis_displays.aplicar", return_value=("Cambio.", "previa", {}))
     def test_no_answer_reverts(self, _aplicar, restaurar, *_mocks) -> None:
         host = self._host(None)  # nadie responde al diálogo
         host.DISPLAY_KEEP_SECONDS = -9.9  # espera total de 0,1 s
@@ -274,10 +274,10 @@ class RoutineBatchTests(unittest.TestCase):
         lote = JarvisApp._start_display_batch(host)
         pasos = [("Monitor 3 principal.", "previa-original"), ("Desactivé el 2.", "previa-2"),
                  ("Desactivé el 1.", "previa-3")]
-        with patch("jarvis_app.core.guardar_preferencia"),                 patch("jarvis_app.core.obtener_preferencia", return_value=None),                 patch("jarvis_app.jarvis_displays.listar_pantallas", return_value=([], {})),                 patch("jarvis_app.jarvis_displays.aplicar", side_effect=[(d, p, {}) for d, p in pasos]):
+        with patch("jarvis_core.guardar_preferencia"),                 patch("jarvis_core.obtener_preferencia", return_value=None),                 patch("jarvis_displays.listar_pantallas", return_value=([], {})),                 patch("jarvis_displays.aplicar", side_effect=[(d, p, {}) for d, p in pasos]):
             for _ in pasos:
                 JarvisApp._tool_configure_display(host, "disable", 1)
-        with patch("jarvis_app.jarvis_displays.restaurar_configuracion") as restaurar:
+        with patch("jarvis_displays.restaurar_configuracion") as restaurar:
             resultado = JarvisApp._confirm_display_batch(host, lote, nombre)
         return resultado, restaurar
 

@@ -46,7 +46,7 @@ class HelpPhraseTests(unittest.TestCase):
 
 
 class HelpToolTests(unittest.TestCase):
-    @patch("jarvis_app.jarvis_routines.listar_automatizaciones", return_value=[])
+    @patch("jarvis_routines.listar_automatizaciones", return_value=[])
     def test_tool_opens_the_window_and_answers(self, _rutinas) -> None:
         host = Mock()
         texto = JarvisApp._tool_show_commands_help(host, "monitores")

@@ -207,7 +207,7 @@ class WatcherTests(unittest.TestCase):
 
 
 class AnnounceTests(unittest.TestCase):
-    @patch("jarvis_app.threading.Thread")
+    @patch("threading.Thread")
     def test_announce_does_not_touch_busy_state(self, thread: Mock) -> None:
         host = Mock()
         JarvisApp._announce(host, "Recordatorio: sacar la ropa.", alarm=True)

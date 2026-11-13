@@ -129,7 +129,7 @@ class PhraseExecutionTests(unittest.TestCase):
     def _rutina(self, *pasos) -> routines.Routine:
         return routines.Routine(1, "Modo noche", "", (1,), tuple(routines.RoutineStep(t, a) for t, a in pasos))
 
-    @patch("jarvis_app.core.guardar_turno")
+    @patch("jarvis_core.guardar_turno")
     def test_runs_all_steps_directly(self, _guardar: Mock) -> None:
         host = self._host()
         rutina = self._rutina(("media_control", {"action": "pause"}), ("lock_computer", {}))
@@ -141,7 +141,7 @@ class PhraseExecutionTests(unittest.TestCase):
         self.assertEqual(evento[0], "answer")
         self.assertIn("Modo noche:", evento[1])
 
-    @patch("jarvis_app.core.guardar_turno")
+    @patch("jarvis_core.guardar_turno")
     def test_power_step_still_asks(self, _guardar: Mock) -> None:
         host = self._host(aprueba_energia=False)
         rutina = self._rutina(("media_control", {"action": "pause"}), ("power_control", {"action": "shutdown"}))

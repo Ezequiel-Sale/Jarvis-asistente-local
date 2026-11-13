@@ -143,8 +143,8 @@ class ToggleTests(unittest.TestCase):
         host._PREFERENCIA_INICIO_WINDOWS = JarvisApp._PREFERENCIA_INICIO_WINDOWS
         return host
 
-    @patch("jarvis_app.core")
-    @patch("jarvis_app.jarvis_autostart")
+    @patch("jarvis_app_ajustes.core")
+    @patch("jarvis_app_ajustes.jarvis_autostart")
     def test_disable_saves_preference(self, autostart_mock, core_mock) -> None:
         autostart_mock.desactivar.return_value = "Listo: Jarvis ya no se iniciará con Windows."
         host = self._host(True)
@@ -153,8 +153,8 @@ class ToggleTests(unittest.TestCase):
         core_mock.guardar_preferencia.assert_called_once_with("inicio_windows", "0")
         host._add_message.assert_called_once_with("assistant", "Listo: Jarvis ya no se iniciará con Windows.")
 
-    @patch("jarvis_app.core")
-    @patch("jarvis_app.jarvis_autostart")
+    @patch("jarvis_app_ajustes.core")
+    @patch("jarvis_app_ajustes.jarvis_autostart")
     def test_failure_keeps_state(self, autostart_mock, core_mock) -> None:
         autostart_mock.activar.side_effect = OSError("solo desde Jarvis.exe")
         host = self._host(False)

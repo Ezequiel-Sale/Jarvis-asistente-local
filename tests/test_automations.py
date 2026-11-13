@@ -269,7 +269,7 @@ class AppAutomationTests(unittest.TestCase):
         host._request_plan_confirmation.assert_called_once()
         self.assertEqual(executed, [])
 
-    @patch("jarvis_app.jarvis_routines.rutinas_para_evento")
+    @patch("jarvis_routines.rutinas_para_evento")
     def test_device_event_queues_matching_routines(self, for_event: Mock) -> None:
         routine = routines.Routine(1, "R", "", (1,), (), CONNECTED)
         for_event.return_value = [routine]

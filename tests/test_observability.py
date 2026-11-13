@@ -179,8 +179,8 @@ class HistoryDeletionTests(unittest.TestCase):
 
 
 class VoiceCancellationTests(unittest.TestCase):
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.core.procesar_stt", side_effect=lambda _path: time.sleep(2) or "hola")
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", side_effect=lambda _path: time.sleep(2) or "hola")
     def test_cancel_during_transcription(self, _stt: Mock, _clean: Mock) -> None:
         host = Mock()
         host.events = __import__("queue").Queue()

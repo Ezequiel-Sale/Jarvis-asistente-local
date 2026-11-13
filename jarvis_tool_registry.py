@@ -94,6 +94,11 @@ class ToolRegistry:
         self._recorder = recorder
         # Las integraciones (MCP) registran herramientas desde otro hilo.
         self._lock = threading.Lock()
+        # «Deshaz lo último» (jarvis_deshacer): antes de ejecutar se anota cómo volver atrás
+        # (antes_de_ejecutar(nombre, argumentos, origen) → contexto) y, si salió bien, se
+        # guarda (tras_exito(contexto)). Un fallo de los ganchos nunca impide la acción.
+        self.antes_de_ejecutar: Callable[[str, dict[str, object], str], object] | None = None
+        self.tras_exito: Callable[[object], None] | None = None
 
     def register(
         self,
@@ -313,6 +318,12 @@ class ToolRegistry:
                 f"La herramienta {name!r} requiere confirmación explícita."
             )
 
+        contexto = None
+        if self.antes_de_ejecutar is not None:
+            try:
+                contexto = self.antes_de_ejecutar(name, dict(validated), origin)
+            except Exception:
+                logging.debug("Falló el gancho previo de %s.", name, exc_info=True)
         started = time.perf_counter()
         try:
             result = ejecutar_con_limites(
@@ -357,6 +368,11 @@ class ToolRegistry:
             tool, origin, EstadoAccion.EXITO, validated, duration,
             result=result, verification=verification,
         )
+        if self.tras_exito is not None and contexto is not None:
+            try:
+                self.tras_exito(contexto)
+            except Exception:
+                logging.debug("Falló el gancho posterior de %s.", name, exc_info=True)
         return result
 
     @staticmethod

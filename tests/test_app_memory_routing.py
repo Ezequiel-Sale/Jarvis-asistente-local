@@ -15,11 +15,11 @@ class _AppWorkerHost:
 
 
 class AppMemoryRoutingTests(unittest.TestCase):
-    @patch("jarvis_app.jarvis_memory.procesar_comando", return_value="Lo recordaré.")
-    @patch("jarvis_app.procesar_con_herramientas")
-    @patch("jarvis_app.core.guardar_turno")
-    @patch("jarvis_app.core.guardar_respuesta", return_value="response-id")
-    @patch("jarvis_app.core.generar_audio_tts", return_value="response.wav")
+    @patch("jarvis_memory.procesar_comando", return_value="Lo recordaré.")
+    @patch("jarvis_app_ordenes.procesar_con_herramientas")
+    @patch("jarvis_core.guardar_turno")
+    @patch("jarvis_core.guardar_respuesta", return_value="response-id")
+    @patch("jarvis_core.generar_audio_tts", return_value="response.wav")
     def test_memory_command_bypasses_model_and_is_saved_as_conversation(
         self,
         _tts: Mock,
@@ -43,11 +43,11 @@ class AppMemoryRoutingTests(unittest.TestCase):
         )
         agent.assert_not_called()
 
-    @patch("jarvis_app.jarvis_memory.procesar_comando", return_value=None)
-    @patch("jarvis_app.procesar_con_herramientas", return_value="Plan completado.")
-    @patch("jarvis_app.core.guardar_turno")
-    @patch("jarvis_app.core.guardar_respuesta", return_value="response-id")
-    @patch("jarvis_app.core.generar_audio_tts", return_value="response.wav")
+    @patch("jarvis_memory.procesar_comando", return_value=None)
+    @patch("jarvis_app_ordenes.procesar_con_herramientas", return_value="Plan completado.")
+    @patch("jarvis_core.guardar_turno")
+    @patch("jarvis_core.guardar_respuesta", return_value="response-id")
+    @patch("jarvis_core.generar_audio_tts", return_value="response.wav")
     def test_agent_receives_plan_approval_callback(
         self,
         _tts: Mock,
@@ -70,12 +70,12 @@ class AppMemoryRoutingTests(unittest.TestCase):
             host._request_plan_confirmation,
         )
 
-    @patch("jarvis_app.jarvis_memory.procesar_comando", return_value=None)
-    @patch("jarvis_app.jarvis_routines.procesar_comando", return_value="Rutina pausada.")
-    @patch("jarvis_app.procesar_con_herramientas")
-    @patch("jarvis_app.core.guardar_turno")
-    @patch("jarvis_app.core.guardar_respuesta", return_value="response-id")
-    @patch("jarvis_app.core.generar_audio_tts", return_value="response.wav")
+    @patch("jarvis_memory.procesar_comando", return_value=None)
+    @patch("jarvis_routines.procesar_comando", return_value="Rutina pausada.")
+    @patch("jarvis_app_ordenes.procesar_con_herramientas")
+    @patch("jarvis_core.guardar_turno")
+    @patch("jarvis_core.guardar_respuesta", return_value="response-id")
+    @patch("jarvis_core.generar_audio_tts", return_value="response.wav")
     def test_routine_management_command_bypasses_model(
         self,
         _tts: Mock,

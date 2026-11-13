@@ -73,8 +73,8 @@ class AlreadyAppliedTests(unittest.TestCase):
         with self.assertRaises(d.YaEstaAsi):
             d.planificar("disable", (2,), pantallas)
 
-    @patch("jarvis_app.core.obtener_preferencia", return_value=None)
-    @patch("jarvis_app.jarvis_displays.aplicar", side_effect=d.YaEstaAsi("El monitor 2 (VX) ya está desactivado."))
+    @patch("jarvis_core.obtener_preferencia", return_value=None)
+    @patch("jarvis_displays.aplicar", side_effect=d.YaEstaAsi("El monitor 2 (VX) ya está desactivado."))
     def test_tool_returns_the_message_without_asking(self, _aplicar, _pref) -> None:
         host = Mock()
         host._display_batch = None
@@ -91,8 +91,8 @@ class RememberBaseTests(unittest.TestCase):
 
     def _recordar(self, guardado: dict, lote: dict, nombre: str, despues=([1], 1)) -> dict:
         host = self._host(guardado, despues)
-        with patch("jarvis_app.core.obtener_preferencia", side_effect=guardado.get), \
-                patch("jarvis_app.core.guardar_preferencia", side_effect=guardado.__setitem__):
+        with patch("jarvis_core.obtener_preferencia", side_effect=guardado.get), \
+                patch("jarvis_core.guardar_preferencia", side_effect=guardado.__setitem__):
             JarvisApp._recordar_base_monitores(host, lote, nombre)
         return json.loads(guardado[d.PREFERENCIA_BASE])
 
@@ -125,7 +125,7 @@ class UndoRoutineTests(unittest.TestCase):
     def _buscar(self, texto, rutina, base="{}"):
         host = Mock()
         with patch.object(r, "buscar_rutina_por_frase", side_effect=lambda t: rutina if t == "modo gaming 2k" else None), \
-                patch("jarvis_app.core.obtener_preferencia", return_value=base), \
+                patch("jarvis_core.obtener_preferencia", return_value=base), \
                 patch.object(d, "base_desde_texto", return_value={"rutina": "x"} if base else None):
             return JarvisApp._find_undo_routine(host, texto)
 

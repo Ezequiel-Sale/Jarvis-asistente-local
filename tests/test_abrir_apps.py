@@ -55,7 +55,7 @@ class PhraseTests(unittest.TestCase):
 
         def decidir(es_juego, nombre="WhatsApp"):
             host = SimpleNamespace(events=queue.Queue())
-            with patch("jarvis_app.localizar_ejecutable_juego",
+            with patch("jarvis_app_ordenes.localizar_ejecutable_juego",
                        side_effect=None if es_juego else FileNotFoundError("no es juego")), \
                     patch.object(s, "apps_instaladas", return_value=APPS), \
                     patch("threading.Thread", side_effect=lambda target, **_k: SimpleNamespace(start=target)):

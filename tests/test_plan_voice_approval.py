@@ -62,8 +62,8 @@ class PlanVoiceApprovalTests(unittest.TestCase):
         self.assertIsNone(detectar_decision_guardar_rutina("Ejecutar plan"))
         self.assertIsNone(detectar_decision_aprobacion_plan("Guardar rutina"))
 
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.core.procesar_stt", return_value="Ejecutar plan")
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="Ejecutar plan")
     def test_voice_worker_routes_approval_phrase_without_running_commands(
         self,
         _stt: Mock,
@@ -77,8 +77,8 @@ class PlanVoiceApprovalTests(unittest.TestCase):
             ("plan_voice_decision", True, "Ejecutar plan"),
         )
 
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.core.procesar_stt", return_value="No guardar rutina")
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="No guardar rutina")
     def test_voice_worker_routes_routine_save_rejection_without_running_commands(
         self,
         _stt: Mock,
@@ -99,8 +99,8 @@ class PlanVoiceApprovalTests(unittest.TestCase):
             ("plan_voice_decision", False, "No guardar rutina"),
         )
 
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.core.procesar_stt", return_value="Guardar rutina")
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="Guardar rutina")
     def test_voice_worker_routes_routine_save_approval_without_running_commands(
         self,
         _stt: Mock,

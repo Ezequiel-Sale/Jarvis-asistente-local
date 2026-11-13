@@ -108,16 +108,16 @@ class VisionWorkerTests(unittest.TestCase):
         host, datos = self._host(), self._datos()
         reply: queue.Queue[bool] = queue.Queue()
         reply.put(False)
-        with patch("jarvis_app.jarvis_vision.analizar_imagen") as analizar:
+        with patch("jarvis_vision.analizar_imagen") as analizar:
             JarvisApp._vision_worker(host, reply, datos)
         analizar.assert_not_called()
         self.assertIsNone(datos["imagen"])
         self.assertEqual(host.events.get_nowait(), ("vision_cancelled",))
 
-    @patch("jarvis_app.core.generar_audio_tts", return_value=None)
-    @patch("jarvis_app.core.guardar_respuesta", return_value="respuesta_1")
-    @patch("jarvis_app.core.guardar_turno")
-    @patch("jarvis_app.jarvis_vision.analizar_imagen", return_value="Veo un error.")
+    @patch("jarvis_core.generar_audio_tts", return_value=None)
+    @patch("jarvis_core.guardar_respuesta", return_value="respuesta_1")
+    @patch("jarvis_core.guardar_turno")
+    @patch("jarvis_vision.analizar_imagen", return_value="Veo un error.")
     def test_approved_capture_is_analysed_saved_and_recorded(
         self, analizar: Mock, guardar_turno: Mock, _respuesta: Mock, _tts: Mock
     ) -> None:
@@ -134,8 +134,8 @@ class VisionWorkerTests(unittest.TestCase):
         evento = host.events.get_nowait()
         self.assertEqual(evento[:2], ("answer", "Veo un error."))
 
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.core.procesar_stt", return_value="analizar")
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="analizar")
     def test_voice_approval_uses_vision_phrases(self, _stt: Mock, _clean: Mock) -> None:
         host = self._host()
         JarvisApp._voice_worker(host, "a.wav", 0.0, "conv-1", True, "vision")

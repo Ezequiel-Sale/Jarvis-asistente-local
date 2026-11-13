@@ -85,15 +85,15 @@ class FreeListeningTests(unittest.TestCase):
             with self.subTest(estado=list(estado)):
                 self.assertFalse(JarvisApp._free_approval_listening(_host(**estado)))
 
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.threading.Thread")
+    @patch("audio_capture.limpiar_audio")
+    @patch("threading.Thread")
     def test_utterance_is_ignored_while_another_is_being_read(self, thread: Mock, limpiar: Mock) -> None:
         JarvisApp._on_approval_utterance(_host(_free_approval_busy=True), "r.wav")
         thread.assert_not_called()
         limpiar.assert_called_once_with("r.wav")
 
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.core.procesar_stt", return_value="Sí")
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="Sí")
     def test_worker_sends_decision_for_that_confirmation(self, _stt: Mock, _limpiar: Mock) -> None:
         host = _host()
         reply = host._pending_plan_reply

@@ -28,6 +28,12 @@ LIMITE_GPU = 90.0
 LIMITE_GPU_PUNTO_CALIENTE = 105.0
 PAUSA_AVISOS = 15 * 60
 LIMITE_DISCO = 90.0
+LIMITE_DISCO_CRITICO = 97.0  # se avisa otra vez aunque ya se haya avisado ese día al 90 %
+# Avisos antes de llegar al límite: calor o memoria altos durante un rato seguido.
+LIMITE_SOSTENIDO_CPU = 85.0
+LIMITE_SOSTENIDO_GPU = 85.0
+LIMITE_SOSTENIDO_RAM = 92.0
+VENTANA_SOSTENIDA = 120.0  # segundos
 PAUSA_AVISOS_DISCO = 24 * 60 * 60
 INTERVALO_DISCOS = 10 * 60
 INTERVALO_SENSORES = 3.0
@@ -190,6 +196,27 @@ def alertas(t: Temperaturas) -> list[str]:
     return avisos
 
 
+def alertas_sostenidas(historial, ahora: float, ventana: float = VENTANA_SOSTENIDA) -> list[str]:
+    """Calor o memoria por encima de lo normal durante toda la ``ventana`` (lecturas de
+    ``VigilanteSalud.historial``: (momento, Temperaturas, % de RAM)). Hace falta que las
+    lecturas cubran la ventana entera, para no avisar por un pico."""
+    recientes = [(m, t, ram) for m, t, ram in historial if ahora - m <= ventana]
+    if len(recientes) < 3 or ahora - recientes[0][0] < ventana * 0.9:
+        return []
+    avisos = []
+    for nombre, valor, limite in (("la CPU", lambda t: t.cpu, LIMITE_SOSTENIDO_CPU),
+                                  ("la GPU", lambda t: t.gpu, LIMITE_SOSTENIDO_GPU)):
+        valores = [valor(t) for _m, t, _r in recientes]
+        if all(v is not None and v >= limite for v in valores):
+            avisos.append(f"{nombre} lleva {ventana / 60:.0f} minutos por encima de {limite:.0f} °C "
+                          f"(ahora {valores[-1]:.0f} °C)")
+    rams = [ram for _m, _t, ram in recientes]
+    if all(r >= LIMITE_SOSTENIDO_RAM for r in rams):
+        avisos.append(f"la memoria lleva {ventana / 60:.0f} minutos al {rams[-1]:.0f} % "
+                      "(di «qué consume más memoria» para ver qué la ocupa)")
+    return avisos
+
+
 class VigilanteSalud:
     """Lee los sensores cada ``intervalo`` s, guarda la última lectura y avisa si se calienta."""
 
@@ -236,6 +263,7 @@ class VigilanteSalud:
         except Exception:
             ram = 0.0
         self.historial.append((self._reloj(), self.ultimo, ram))
+        self._revisar_sostenidas()
         avisos = alertas(self.ultimo)
         if not avisos:
             self._sospecha = False
@@ -251,8 +279,22 @@ class VigilanteSalud:
         logging.warning("Aviso de temperatura: %s", texto)
         self._eventos.put(("health_alert", texto))
 
+    def _revisar_sostenidas(self) -> None:
+        """Aviso anticipado (no urgente): calor o memoria altos 2 minutos seguidos."""
+        ahora = self._reloj()
+        if ahora - getattr(self, "_ultimo_aviso_sostenido", -float("inf")) < PAUSA_AVISOS:
+            return
+        avisos = alertas_sostenidas(self.historial, ahora)
+        if not avisos:
+            return
+        self._ultimo_aviso_sostenido = ahora
+        texto = "Ojo: " + " y ".join(avisos) + "."
+        logging.warning("Aviso anticipado: %s", texto)
+        self._eventos.put(("health_notice", texto))
+
     def revisar_discos(self) -> None:
-        """Avisa de cada disco al 90 % o más, como mucho una vez al día por disco."""
+        """Avisa de cada disco al 90 % o más, como mucho una vez al día por disco y nivel
+        (90 % y 97 %); la app recuerda el día entre reinicios (``disk_alert`` lleva la clave)."""
         if self._discos is None:
             return
         ahora = self._reloj()
@@ -265,14 +307,17 @@ class VigilanteSalud:
         for disco in discos:
             if disco.usado_pct < LIMITE_DISCO:
                 continue
-            if ahora - self._avisos_disco.get(disco.unidad, -float("inf")) < PAUSA_AVISOS_DISCO:
+            nivel = "critico" if disco.usado_pct >= LIMITE_DISCO_CRITICO else "lleno"
+            clave = f"{disco.unidad}:{nivel}"
+            if ahora - self._avisos_disco.get(clave, -float("inf")) < PAUSA_AVISOS_DISCO:
                 continue
-            self._avisos_disco[disco.unidad] = ahora
+            self._avisos_disco[clave] = ahora
             libres = disco.libre / 1024**3
-            texto = (f"El disco {disco.titulo} está al {disco.usado_pct:.0f} % (quedan {libres:.0f} GB). "
+            urgencia = "casi sin espacio: " if nivel == "critico" else ""
+            texto = (f"El disco {disco.titulo} está {urgencia}al {disco.usado_pct:.0f} % (quedan {libres:.0f} GB). "
                      "Di «libera espacio» si quieres que haga limpieza.")
             logging.warning("Aviso de disco casi lleno: %s %.0f %%.", disco.unidad, disco.usado_pct)
-            self._eventos.put(("disk_alert", texto))
+            self._eventos.put(("disk_alert", texto, clave))
 
     def _bucle(self) -> None:
         while not self._parar.is_set():

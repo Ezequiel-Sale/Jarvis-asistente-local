@@ -200,8 +200,8 @@ class DiskAlertTests(unittest.TestCase):
         vigilante = hw.VigilanteSalud(eventos, leer=lambda: hw.Temperaturas(), reloj=lambda: reloj["t"],
                                       discos=lambda: discos)
         vigilante.revisar_discos()
-        tipo, texto = eventos.get_nowait()
-        self.assertEqual(tipo, "disk_alert")
+        tipo, texto, clave = eventos.get_nowait()
+        self.assertEqual((tipo, clave), ("disk_alert", "C::lleno"))
         self.assertIn("El disco C: está al 94 %", texto)
         self.assertTrue(eventos.empty())  # D: está al 36 %
         reloj["t"] = 3600

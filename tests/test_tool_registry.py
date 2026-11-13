@@ -58,6 +58,15 @@ class _TestHost:
     def _tool_restore_display(self, routine: str = "") -> str:
         return self._record(("restore_display", routine), "display restored")
 
+    def _tool_undo_last_action(self) -> str:
+        return self._record(("undo",), "undo")
+
+    def _tool_find_files(self, query: str = "", kind: str = "any", days: int = 0, open_best: bool = False) -> str:
+        return self._record(("find", query, kind, days, open_best), "found")
+
+    def _tool_open_file(self, path: str) -> str:
+        return self._record(("open_file", path), "opened")
+
     def _tool_show_commands_help(self, topic: str = "") -> str:
         return self._record(("help", topic), "help")
 
@@ -108,7 +117,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 42)
+        self.assertEqual(len(tools), 45)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -118,6 +127,9 @@ class ToolRegistryTests(unittest.TestCase):
                 "get_current_datetime",
                 "morning_briefing",
                 "show_commands_help",
+                "undo_last_action",
+                "find_files",
+                "open_file",
                 "set_reminder",
                 "list_reminders",
                 "cancel_reminder",

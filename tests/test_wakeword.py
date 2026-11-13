@@ -217,14 +217,14 @@ class InterruptTests(unittest.TestCase):
         host = _host(busy=True, _live_speaker=hablador)
         host._interrupt_speech = lambda: JarvisApp._interrupt_speech(host)
         host.INTERRUPCION_ESPERA = JarvisApp.INTERRUPCION_ESPERA
-        with patch("jarvis_app.jarvis_wakeword.reproducir_pitido"):
+        with patch("jarvis_wakeword.reproducir_pitido"):
             JarvisApp._on_wakeword_detected(host)
         host._stop_player.assert_called_once()
         hablador.cancelar.assert_called_once()
         host.cancel_token.cancel.assert_called_once()
         self.assertGreater(host._interrupt_deadline, 0)
 
-    @patch("jarvis_app.limpiar_audio")
+    @patch("audio_capture.limpiar_audio")
     def test_command_after_interrupt_waits_for_cancellation(self, limpiar: Mock) -> None:
         import time as _time
 
@@ -235,7 +235,7 @@ class InterruptTests(unittest.TestCase):
 
 
 class WakewordCommandRoutingTests(unittest.TestCase):
-    @patch("jarvis_app.threading.Thread")
+    @patch("threading.Thread")
     def test_command_goes_to_voice_pipeline(self, thread: Mock) -> None:
         host = _host()
         JarvisApp._on_wakeword_command(host, "orden.wav")
@@ -245,7 +245,7 @@ class WakewordCommandRoutingTests(unittest.TestCase):
         self.assertFalse(argumentos[3])  # no es una aprobación
         thread.return_value.start.assert_called_once()
 
-    @patch("jarvis_app.threading.Thread")
+    @patch("threading.Thread")
     def test_command_answers_pending_confirmation(self, thread: Mock) -> None:
         host = _host(busy=True, _pending_plan_reply=object(), _pending_approval_kind="power")
         JarvisApp._on_wakeword_command(host, "orden.wav")
@@ -254,8 +254,8 @@ class WakewordCommandRoutingTests(unittest.TestCase):
         self.assertTrue(argumentos[3])
         self.assertEqual(argumentos[4], "power")
 
-    @patch("jarvis_app.limpiar_audio")
-    @patch("jarvis_app.threading.Thread")
+    @patch("audio_capture.limpiar_audio")
+    @patch("threading.Thread")
     def test_command_is_discarded_while_busy(self, thread: Mock, limpiar: Mock) -> None:
         JarvisApp._on_wakeword_command(_host(busy=True), "orden.wav")
         thread.assert_not_called()

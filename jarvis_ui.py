@@ -556,6 +556,7 @@ class JarvisUIMixin:
                  "Documentos) y lo reaplica si se perdió tras un reinicio o un pantallazo. Si se pierde 3 veces "
                  "en una hora deja de hacerlo y te avisa.",
                  "gpu_profile_button", "⚡  UNDERVOLT …", self._toggle_gpu_profile)
+            self._build_game_mode_settings(cuerpo)
             fila("Resumen de la mañana",
                  "La primera vez que usas la PC por la mañana, Jarvis te dice el clima, tus avisos y rutinas "
                  "de hoy y cómo está el equipo. Se pide cuando quieras con «buenos días».",
@@ -934,6 +935,37 @@ class JarvisUIMixin:
                 f"Sensores   {'LibreHardwareMonitor' if not hw.sensores.error else 'no disponibles'}"
             ))
 
+        def _build_game_mode_settings(self, cuerpo: tk.Frame) -> None:
+            """Modo juego: silencio de Jarvis y programas que se cierran mientras juegas."""
+            marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
+                             highlightthickness=1, highlightbackground=BORDER)
+            marco.pack(fill="x", pady=(0, 10))
+            marco.grid_columnconfigure(0, weight=1)
+            tk.Label(marco, text="Modo juego", bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+            tk.Label(marco, text="Al abrir un juego, Jarvis libera la memoria de la tarjeta (la recupera al "
+                     "cerrarlo). Con el silencio activado, los avisos no urgentes solo quedan en el chat y "
+                     "te los resume al terminar; las alarmas y los de temperatura suenan igual.",
+                     bg=PANEL, fg=MUTED, justify="left", wraplength=540,
+                     font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
+            self.game_quiet_button = self._ui_button(marco, "🔕  SILENCIO AL JUGAR …", self._toggle_game_quiet,
+                                                     fg=MUTED)
+            self.game_quiet_button.configure(width=30)
+            self.game_quiet_button.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
+            tk.Label(marco, text="Programas que se cierran al jugar y se vuelven a abrir al terminar "
+                     "(separados por comas, p. ej. «Discord, Brave»). Primero se cierran como con la X; "
+                     "si a los 5 s siguen abiertos, a la fuerza.",
+                     bg=PANEL, fg=MUTED, justify="left", wraplength=540,
+                     font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=2, sticky="w", pady=(12, 4))
+            fila = tk.Frame(marco, bg=PANEL)
+            fila.grid(row=3, column=0, columnspan=2, sticky="ew")
+            self.game_close_entry = tk.Entry(fila, bg=PANEL_LIGHT, fg=TEXT, insertbackground=CYAN, relief="flat",
+                                             font=("Segoe UI", 10), highlightthickness=1,
+                                             highlightbackground=BORDER, highlightcolor=CYAN)
+            self.game_close_entry.pack(side="left", fill="x", expand=True, ipady=5)
+            self._ui_button(fila, "GUARDAR", self._save_game_close_list).pack(side="left", padx=(8, 0))
+            self._refresh_game_mode_settings()
+
         def _build_mobile_settings(self, cuerpo: tk.Frame) -> None:
             marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
             marco.pack(fill="x", pady=(0, 10))
@@ -1288,7 +1320,7 @@ class JarvisUIMixin:
             return qid
 
         def _notify_floating(self, role: str, text: str) -> None:
-            if not self._floating_active():
+            if not self._floating_active() or getattr(self, "_floating_muted", False) is True:
                 return
             if role == "user":
                 self.floating.usuario(text)

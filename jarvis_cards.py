@@ -27,7 +27,8 @@ ICONOS = {
     "screen_click": "🖱", "screen_vision": "👁", "set_theme": "🎨",
     "get_weather": "☁", "web_search": "🔎", "get_headset_battery": "🔋", "get_system_status": "📊",
     "list_top_processes": "📊", "list_open_applications": "🗂",
-    "get_current_datetime": "🕒", "morning_briefing": "☀", "get_jarvis_diagnostics": "🩺",
+    "get_current_datetime": "🕒", "morning_briefing": "☀", "undo_last_action": "↶",
+    "show_commands_help": "?", "find_files": "🔎", "open_file": "📄", "get_jarvis_diagnostics": "🩺",
 }
 ORIGENES = {"directo": "directo", "agente": "IA", "rutina": "rutina", "frase": "frase", "pantalla": "pantalla"}
 
