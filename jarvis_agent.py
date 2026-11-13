@@ -204,6 +204,68 @@ MAX_TOKENS_RESPUESTA = 1024
 AVISO_CORTADA = "…\n\n(La respuesta era muy larga y se cortó; dime «cuéntame más» para continuar.)"
 
 
+# Cuánto queda cargado el modelo en la GPU tras usarlo. Cargarlo desde cero tarda ~11 s
+# (medido 2026-11-13 con la RX 9070 XT) y con el modelo cargado responde en ~0,2 s; al
+# abrir un juego se descarga igual (``descargar_modelo``), así que puede quedar más tiempo.
+KEEP_ALIVE = "2h"
+# Igual en todas las peticiones: con otro num_ctx Ollama recarga el modelo entero.
+NUM_CTX = 8192
+
+
+def _url_ollama(ruta: str) -> str:
+    return core.LLM_URL.rsplit("/api/", 1)[0] + ruta
+
+
+def modelo_cargado(modelo: str | None = None) -> bool:
+    """¿Está el modelo en memoria? (``/api/ps``; ante cualquier error, False)."""
+    modelo = modelo or core.MODEL_LLM
+    try:
+        respuesta = requests.get(_url_ollama("/api/ps"), timeout=2)
+        respuesta.raise_for_status()
+        return any(m.get("name") == modelo or m.get("model") == modelo
+                   for m in respuesta.json().get("models", []))
+    except (requests.RequestException, ValueError, AttributeError):
+        return False
+
+
+def precargar_modelo(timeout: float = 90) -> bool:
+    """Carga el modelo de chat en la GPU sin generar nada (con el mismo num_ctx que el chat),
+    para que la primera pregunta no espere los ~11 s de carga."""
+    if modelo_cargado():
+        return True
+    inicio = time.perf_counter()
+    try:
+        respuesta = requests.post(
+            _url_ollama("/api/generate"),
+            json={"model": core.MODEL_LLM, "keep_alive": KEEP_ALIVE, "options": {"num_ctx": NUM_CTX}},
+            timeout=(3, timeout),
+        )
+        respuesta.raise_for_status()
+    except requests.RequestException as error:
+        logging.warning("No pude precargar el modelo de lenguaje: %s", error)
+        return False
+    logging.info("Modelo de lenguaje precargado en %.2fs.", time.perf_counter() - inicio)
+    return True
+
+
+def descargar_modelo(modelos: Sequence[str] | None = None) -> list[str]:
+    """Saca de la GPU los modelos cargados (al abrir un juego). Devuelve los que descargó."""
+    modelos = list(modelos or (core.MODEL_LLM, core.MODEL_VISION))
+    descargados = []
+    for modelo in modelos:
+        if not modelo_cargado(modelo):
+            continue
+        try:
+            requests.post(_url_ollama("/api/generate"), json={"model": modelo, "keep_alive": 0},
+                          timeout=(3, 15)).raise_for_status()
+            descargados.append(modelo)
+        except requests.RequestException as error:
+            logging.warning("No pude descargar %s de la GPU: %s", modelo, error)
+    if descargados:
+        logging.info("Modelos descargados de la GPU: %s.", ", ".join(descargados))
+    return descargados
+
+
 def _request_chat(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
@@ -216,11 +278,11 @@ def _request_chat(
         "model": core.MODEL_LLM,
         "messages": messages,
         "stream": on_text is not None,
-        "keep_alive": "30m",
+        "keep_alive": KEEP_ALIVE,
         "options": {
             # Las ~19 herramientas ocupan ~1.700 tokens; con instrucciones, historial
             # y el contenido de un archivo leído, 4096 se desbordaba (medido 2026-11-05).
-            "num_ctx": 8192,
+            "num_ctx": NUM_CTX,
             "num_predict": MAX_TOKENS_RESPUESTA,
             "temperature": 0.2,
         },

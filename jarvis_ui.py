@@ -266,6 +266,7 @@ class JarvisUIMixin:
             if nombre == "ajustes":
                 self._refresh_monitor_map()
                 self._refresh_search_settings()
+                self._refresh_morning_brief_button()  # pudo cambiar por voz
             if nombre == "inicio":
                 self._refresh_home_now()
             if nombre == "juegos" and getattr(self, "_games", None) is None:
@@ -418,6 +419,8 @@ class JarvisUIMixin:
             self.input.grid(row=0, column=0, sticky="nsew")
             self.input.bind("<Return>", self._on_enter)
             self.input.bind("<Shift-Return>", self._on_shift_enter)
+            # Precarga el modelo de lenguaje mientras escribes (como al decir «Hey Jarvis»).
+            self.input.bind("<KeyPress>", lambda _e: self._preload_llm("escribiendo"), add="+")
             actions = tk.Frame(input_panel, bg=PANEL, padx=10, pady=8)
             actions.grid(row=0, column=1, sticky="se")
             self.cancel_button = tk.Button(
@@ -549,6 +552,10 @@ class JarvisUIMixin:
                  "Documentos) y lo reaplica si se perdió tras un reinicio o un pantallazo. Si se pierde 3 veces "
                  "en una hora deja de hacerlo y te avisa.",
                  "gpu_profile_button", "⚡  UNDERVOLT …", self._toggle_gpu_profile)
+            fila("Resumen de la mañana",
+                 "La primera vez que usas la PC por la mañana, Jarvis te dice el clima, tus avisos y rutinas "
+                 "de hoy y cómo está el equipo. Se pide cuando quieras con «buenos días».",
+                 "morning_brief_button", "☀  RESUMEN …", self._toggle_morning_brief)
             fila("Animaciones",
                  "Los mensajes, tarjetas y secciones aparecen con un fundido corto.",
                  "animations_button", "✦  ANIMACIONES …", self._toggle_animations)

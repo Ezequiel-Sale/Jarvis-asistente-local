@@ -527,8 +527,21 @@ def prompt_stt() -> str:
     return pista + "."
 
 
+CARPETA_STT_GPU = APP_DIR / "whisper-onnx"  # Whisper turbo en ONNX (ver jarvis_stt_gpu)
+
+
 def procesar_stt(ruta_audio: str) -> str:
     inicio = time.perf_counter()
+    try:
+        import jarvis_stt_gpu
+
+        texto = jarvis_stt_gpu.transcribir(ruta_audio, prompt_stt(), CARPETA_STT_GPU)
+    except ImportError:  # sin onnxruntime/tokenizers: el servidor de voz de siempre
+        texto = None
+    if texto is not None:
+        logging.info("⏱️ STT (GPU): %.2fs", time.perf_counter() - inicio)
+        registrar_latencia("stt", time.perf_counter() - inicio)
+        return texto
     try:
         with open(ruta_audio, 'rb') as f:
             res = requests.post(

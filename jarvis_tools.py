@@ -411,6 +411,24 @@ def crear_registro_herramientas(
         verifier=verificadores.get("fix_display_scaling"),
     )
     _registrar_consultas_sistema(registry)
+    registry.register(
+        "morning_briefing",
+        (
+            "Resumen del día («buenos días», «¿cómo viene el día?»): clima, recordatorios y "
+            "rutinas de hoy, avisos del equipo y batería de los auriculares. Con automatic=true/false "
+            "activa o desactiva el resumen que sale solo cada mañana."
+        ),
+        {
+            "type": "object",
+            "properties": {"automatic": {"type": "boolean"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        host._tool_morning_briefing,
+        label="Resumen del día",
+        timeout_seconds=30,
+        record_result=False,
+    )
     _registrar_energia(registry)
     registry.register(
         "screen_click",

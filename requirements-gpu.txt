@@ -1,0 +1,9 @@
+# Voz a texto en la tarjeta gráfica (jarvis_stt_gpu; cualquier GPU con DirectML, también AMD).
+# onnxruntime-directml REEMPLAZA a onnxruntime (lo trae openwakeword): ocupan la misma carpeta
+# y no pueden convivir. Incluye el modo procesador, así que «Hey Jarvis» sigue funcionando.
+# Se instala aparte porque el CI (sin GPU) usa el onnxruntime normal:
+#   .venv313/Scripts/python.exe -m pip uninstall -y onnxruntime
+#   .venv313/Scripts/python.exe -m pip install -r requirements-gpu.txt
+# Sin esto, o sin el modelo en la carpeta whisper-onnx, Jarvis usa el servidor de voz de Docker.
+onnxruntime-directml==1.24.4
+tokenizers==0.23.3

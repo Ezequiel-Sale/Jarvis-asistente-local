@@ -23,6 +23,7 @@ import jarvis_displays
 import jarvis_ollama_gpu
 import jarvis_power
 import jarvis_aprendizaje
+import jarvis_buenos_dias
 import jarvis_autostart
 import jarvis_reminders
 import jarvis_screen_actions
@@ -65,6 +66,7 @@ from audio_capture import GrabadorAudio, limpiar_audio
 import pystray
 from PIL import Image, ImageTk
 
+import jarvis_agent
 from jarvis_agent import PlannedAction, procesar_con_herramientas
 from jarvis_commands import (
     detectar_accion_ventana,
@@ -240,7 +242,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._configure_styles()
         self._build_layout()
         self._refresh_animations_button()
-        self.floating = jarvis_floating.AvisoFlotante(self.root, self._show_from_tray)
+        self._refresh_morning_brief_button()
+        self.floating =jarvis_floating.AvisoFlotante(self.root, self._show_from_tray)
         self._mobile_callbacks: dict[str, tuple] = {}
         self.mobile = jarvis_mobile.ServidorMovil(
             self.events,
@@ -391,6 +394,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self._learning_running = False
         self._vectors_synced = False
         self.root.after(30000, self._check_learning)
+        self.root.after(20000, self._check_morning_brief)
         try:
             # Un aviso de cierre que quedó de antes (Jarvis ya estaba cerrado) no cuenta.
             (core.APP_DIR / self.SOLICITUD_CIERRE).unlink(missing_ok=True)
@@ -595,6 +599,46 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
         threading.Thread(target=sonar_y_hablar, name="JarvisAviso", daemon=True).start()
 
+    # --- Resumen «Buenos días» ----------------------------------------------
+
+    _MORNING_BRIEF_MS = 60000
+
+    def _tool_morning_briefing(self, automatic: bool | None = None) -> str:
+        """Resumen del día, o activa/desactiva el que sale solo por la mañana."""
+        if automatic is not None:
+            core.guardar_preferencia(jarvis_buenos_dias.PREFERENCIA_ACTIVO, "1" if automatic else "0")
+            if automatic:
+                return "Listo: cada mañana, la primera vez que uses la PC, te daré el resumen del día."
+            return "Listo: ya no daré el resumen del día solo. Puedes pedirlo con «buenos días»."
+        vigilante = getattr(self, "health_watcher", None)
+        return jarvis_buenos_dias.generar(vigilante.ultimo if vigilante is not None else None)
+
+    def _check_morning_brief(self) -> None:
+        """Cada minuto: la primera vez que usas la PC por la mañana, da el resumen del día."""
+        if self._closing:
+            return
+        self.root.after(self._MORNING_BRIEF_MS, self._check_morning_brief)
+        if self.busy or self.recorder is not None or self._pending_plan_reply is not None:
+            return
+        vigilante = getattr(self, "games_watcher", None)
+        if vigilante is not None and vigilante.jugando:
+            return
+        try:
+            toca = jarvis_buenos_dias.toca_automatico(
+                datetime.now(),
+                core.obtener_preferencia(jarvis_buenos_dias.PREFERENCIA_ULTIMO),
+                core.obtener_preferencia(jarvis_buenos_dias.PREFERENCIA_ACTIVO),
+                jarvis_buenos_dias.segundos_inactivo(),
+            )
+            if not toca:
+                return
+            core.guardar_preferencia(jarvis_buenos_dias.PREFERENCIA_ULTIMO, datetime.now().date().isoformat())
+        except Exception:
+            logging.exception("No se pudo revisar el resumen de la mañana.")
+            return
+        logging.info("Resumen automático de la mañana.")
+        self._start_direct_tool_action("morning_briefing", {}, "(resumen automático de la mañana)")
+
     # --- Aprendizaje automático ---------------------------------------------
 
     _LEARNING_INTERVAL_MS = 60000
@@ -644,7 +688,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self.events.put(("docker_services_error", str(error)))
         else:
             self.events.put(("docker_services_ready",))
-            core.precalentar_stt()
+            core.precalentar_stt()  # respaldo si la voz en la GPU no está disponible
         finally:
             self._docker_start_finished.set()
 
@@ -655,8 +699,21 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             if not ollama.ok:
                 logging.warning("Ollama no disponible al iniciar: %s", ollama.detalle)
                 self.events.put(("ollama_unavailable", ollama.detalle))
+            else:
+                self._preload_llm("arranque")
         except Exception:
             logging.exception("No se pudo comprobar Ollama al iniciar.")
+        try:
+            import jarvis_stt_gpu
+
+            if jarvis_games_watch.juegos_abiertos(jarvis_games_watch.carpetas_de_juegos()):
+                # Jarvis arrancó con un juego abierto (el vigilante no avisa «al abrir»): la
+                # memoria de video queda para el juego hasta que se cierre.
+                jarvis_stt_gpu.liberar()
+            else:
+                jarvis_stt_gpu.cargar(core.CARPETA_STT_GPU)  # ~3 s; así la primera orden no espera
+        except Exception:
+            logging.exception("No se pudo preparar la voz a texto en la GPU.")
         try:
             core.limpiar_respuestas()
         except Exception:
@@ -668,6 +725,53 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except Exception:
             logging.exception("No se pudo actualizar el mapa de monitores.")
         jarvis_vision.configurar_numeracion(_numeracion_fija_monitores)
+
+    # Entre dos precargas pedidas (al decir «Hey Jarvis», pulsar el micrófono o escribir).
+    PRECARGA_INTERVALO = 60.0
+
+    def _preload_llm(self, motivo: str) -> None:
+        """Carga el modelo de lenguaje en segundo plano antes de que haga falta.
+
+        Cargarlo tarda ~11 s; así se hace mientras hablas o escribes. No se precarga con
+        un juego abierto (ocuparía ~10 GB de la GPU): si hace falta, se carga al preguntar.
+        Nunca lanza: se llama al detectar «Hey Jarvis» y no puede cortar ese manejo."""
+        try:
+            ahora = time.monotonic()
+            if ahora - getattr(self, "_last_llm_preload", -1e9) < self.PRECARGA_INTERVALO:
+                return
+            vigilante = getattr(self, "games_watcher", None)
+            if vigilante is not None and vigilante.jugando:  # propiedad: conjunto de juegos abiertos
+                return
+            self._last_llm_preload = ahora
+            logging.debug("Precarga del modelo de lenguaje (%s).", motivo)
+            threading.Thread(target=jarvis_agent.precargar_modelo, name="JarvisPrecargaLLM", daemon=True).start()
+        except Exception:
+            logging.exception("No se pudo precargar el modelo de lenguaje.")
+
+    def _free_gpu_for_game(self) -> None:
+        """Al abrir un juego, saca de la tarjeta los modelos de Ollama (~10 GB) y la voz a texto
+        (~1,5 GB). Mientras dura, la voz usa el servidor de siempre en el procesador."""
+        self._last_llm_preload = -1e9
+
+        def liberar() -> None:
+            import jarvis_stt_gpu
+
+            jarvis_stt_gpu.liberar()
+            jarvis_agent.descargar_modelo()
+
+        threading.Thread(target=liberar, name="JarvisLiberaGPU", daemon=True).start()
+
+    def _restore_gpu_after_game(self) -> None:
+        """Al cerrar el último juego, vuelve a cargar la voz a texto y el modelo de lenguaje."""
+
+        def recargar() -> None:
+            import jarvis_stt_gpu
+
+            jarvis_stt_gpu.reanudar(core.CARPETA_STT_GPU)
+
+        threading.Thread(target=recargar, name="JarvisRecargaGPU", daemon=True).start()
+        self._last_llm_preload = -1e9
+        self._preload_llm("fin del juego")
 
     def _on_mcp_connected(self, servidor: str, herramientas: list[HerramientaMCP]) -> None:
         """Se llama desde el hilo MCP; el registro de herramientas es seguro entre hilos."""
@@ -758,7 +862,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._start_cleanup(text, limpieza["solo"])
             return
         system_query = (
-            detectar_consulta_fecha_hora(text)
+            jarvis_buenos_dias.detectar(text)
+            or detectar_consulta_fecha_hora(text)
             or jarvis_reminders.detectar_comando(text)
             or detectar_consulta_bateria(text)
             or detectar_comando_multimedia(text)
@@ -837,6 +942,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             return
 
         self._recording_for_plan_approval = self._pending_plan_reply is not None
+        if not self._recording_for_plan_approval:
+            self._preload_llm("micrófono")  # carga mientras hablas
         if self._recording_for_plan_approval:
             self._set_plan_voice_controls(recording=True)
         self.mic_button.configure(text="■  DETENER", fg=ERROR)
@@ -980,7 +1087,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 self.events.put(("cleanup_start", transcript, limpieza["solo"]))
                 return
             system_query = (
-                detectar_consulta_fecha_hora(transcript)
+                jarvis_buenos_dias.detectar(transcript)
+                or detectar_consulta_fecha_hora(transcript)
                 or jarvis_reminders.detectar_comando(transcript)
                 or detectar_consulta_bateria(transcript)
                 or detectar_comando_multimedia(transcript)
@@ -2342,6 +2450,10 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     elif event[0] == "device_event":
                         self._handle_device_event(event[1])
                     elif event[0] in ("game_started", "game_stopped"):
+                        if event[0] == "game_started":
+                            self._free_gpu_for_game()
+                        else:
+                            self._restore_gpu_after_game()
                         self._handle_device_event(
                             jarvis_routines.DISPARADOR_JUEGO_ABIERTO if event[0] == "game_started"
                             else jarvis_routines.DISPARADOR_JUEGO_CERRADO,
@@ -3864,6 +3976,24 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 fg=CYAN if activas else MUTED,
             )
 
+    def _refresh_morning_brief_button(self) -> None:
+        boton = getattr(self, "morning_brief_button", None)
+        if boton is None:
+            return
+        try:
+            activo = core.obtener_preferencia(jarvis_buenos_dias.PREFERENCIA_ACTIVO) != "0"
+        except Exception:
+            activo = True
+        boton.configure(text="☀  RESUMEN: SÍ" if activo else "☀  RESUMEN: NO", fg=CYAN if activo else MUTED)
+
+    def _toggle_morning_brief(self) -> None:
+        try:
+            activo = core.obtener_preferencia(jarvis_buenos_dias.PREFERENCIA_ACTIVO) != "0"
+            core.guardar_preferencia(jarvis_buenos_dias.PREFERENCIA_ACTIVO, "0" if activo else "1")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia del resumen de la mañana.")
+        self._refresh_morning_brief_button()
+
     def _toggle_animations(self) -> None:
         self._animations = not self._animations_enabled()
         try:
@@ -4037,6 +4167,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         logging.info("Jarvis interrumpido con «Hey Jarvis».")
 
     def _on_wakeword_detected(self) -> None:
+        self._preload_llm("palabra de activación")  # carga mientras hablas
         if self._jarvis_speaking():
             self._interrupt_speech()
         try:
@@ -4085,6 +4216,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
     _DIRECT_SPOKEN_TOOLS = frozenset(
         {
             "get_current_datetime",
+            "morning_briefing",
             "get_headset_battery",
             "get_now_playing",
             "set_reminder",
@@ -4095,6 +4227,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
 
     _DIRECT_ACTION_BUSY = {
         "set_system_volume": "AJUSTANDO VOLUMEN…",
+        "morning_briefing": "PREPARANDO EL RESUMEN DEL DÍA…",
         "set_output_device": "CAMBIANDO SALIDA DE AUDIO…",
         "launch_game": "BUSCANDO EL JUEGO…",
         "open_new_browser_tab": "ABRIENDO PESTAÑA EN BRAVE…",

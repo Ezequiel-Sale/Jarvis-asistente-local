@@ -14,6 +14,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
 | **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» (incluye temperaturas de la GPU y la CPU; avisa solo si algo se calienta demasiado) |
 | **Limpieza** | «Libera espacio», «vacía la papelera», «borra los archivos temporales»: muestra cuánto ocupa cada cosa (temporales, papelera, caché de Brave, Docker, modelos de Ollama sin usar) y borra solo lo que marques tras confirmar |
+| **Buenos días** | «Buenos días», «resumen del día», «¿cómo viene el día?»: clima, avisos y rutinas de hoy, cómo está el equipo y la batería de los auriculares. Sale solo la primera vez que usas la PC por la mañana (se apaga en **⚙ Ajustes** o con «desactiva el resumen de la mañana») |
 | **Panel de inicio** | Primera página: hora, clima, salud del equipo (con el espacio de cada disco), próximos recordatorios y rutinas, lo que suena, batería de los auriculares y estado de los servicios |
 | **Multimedia** | «Reanuda el vídeo del monitor 2», «pausa el vídeo del monitor 1 y reanuda el del monitor 2», «dale play al vídeo de la segunda pantalla», «pon el vídeo en pantalla completa», «sal de pantalla completa del monitor 3», «modo teatro», «sal del modo cine», «silencia la pestaña que suena», «mutea YouTube», «devuélvele el sonido al vídeo», «Pausa la música», «siguiente canción», «la anterior», «¿qué está sonando?», «pon el volumen de Spotify al 30», «silencia Discord» |
 | **Temporizadores y recordatorios** | «Pon un temporizador de 10 minutos», «recuérdame en 20 minutos sacar la ropa», «recuérdame mañana a las 9 pagar la luz», «pon una alarma a las 7», «¿qué recordatorios tengo?», «cancela el temporizador» |
@@ -37,6 +38,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 ## Seguridad y privacidad
 
 - **Todo local**: Whisper, Ollama y Piper corren en tu PC. Solo consultan servicios externos el plugin de clima (envía únicamente el nombre de la ciudad) y la búsqueda en internet (envía únicamente el texto buscado).
+- **Respuestas rápidas sin estorbar a los juegos**: el modelo de lenguaje se carga en la GPU mientras dices «Hey Jarvis», pulsas el micrófono o escribes (cargarlo tarda ~11 s), queda cargado 2 horas y se descarga solo al abrir un juego para dejarle la memoria de la tarjeta. Lo mismo con la voz a texto en la GPU (~1,5 GB): mientras juegas usa el procesador, y al cerrar el juego los dos vuelven a cargarse solos.
 - **Permisos según el riesgo**: las acciones delicadas (navegar, abrir juegos, gestionar ventanas o monitores) piden confirmación cuando las propone el asistente; los planes de varios pasos se aprueban completos antes de ejecutarse. Para responder cualquier confirmación basta con decir «sí» o «no», sin «Hey Jarvis».
 - **Automatizaciones**: solo pueden ejecutarse sin preguntar si todas sus acciones son de riesgo bajo.
 - **Palabra de activación**: la escucha de «Hey Jarvis» es local y se queda en memoria; solo se transcribe lo que dices después. Se desactiva con «deja de escucharme».
@@ -107,6 +109,17 @@ flowchart LR
    ```
    (modelos de [openWakeWord](https://github.com/dscripka/openWakeWord), licencia CC BY-NC-SA 4.0: uso personal, no comercial).
 5. El contenedor de voz a texto ([speaches](https://github.com/speaches-ai/speaches)) usa `whisper-models/` como caché de modelos de Hugging Face; Jarvis pide el modelo `Systran/faster-whisper-small`.
+6. Opcional, **voz a texto en la tarjeta gráfica** (cualquier GPU con DirectML, también AMD: entiende mejor y responde en ~0,5 s en lugar de ~1,7 s). Cambiar `onnxruntime` por la versión DirectML y descargar Whisper turbo (~1,9 GB) en `whisper-onnx/`, junto a `Jarvis.exe` (o en la carpeta del repositorio si lo ejecutas desde el código):
+   ```bash
+   .venv313/Scripts/python.exe -m pip uninstall -y onnxruntime
+   ```
+   ```bash
+   .venv313/Scripts/python.exe -m pip install -r requirements-gpu.txt
+   ```
+   ```bash
+   .venv313/Scripts/python.exe -c "from huggingface_hub import hf_hub_download as d; [d('onnx-community/whisper-large-v3-turbo', f, local_dir='whisper-onnx') for f in ('onnx/encoder_model_fp16.onnx', 'onnx/decoder_model_merged.onnx', 'tokenizer.json')]"
+   ```
+   Sin esto, Jarvis usa el contenedor de voz a texto de siempre.
 
 ## Uso
 

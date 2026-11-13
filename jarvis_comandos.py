@@ -101,6 +101,9 @@ CATALOGO: tuple[Seccion, ...] = (
        ("Bloquea la pantalla", "Bloquea la sesión de Windows."),
        ("Cancela el apagado", "Frena un apagado o reinicio en curso.")),
     _s("📊", "Consultas",
+       ("Buenos días / Resumen del día", "Clima, avisos y rutinas de hoy, cómo está el equipo y la batería de los "
+        "auriculares. También sale solo la primera vez que usas la PC por la mañana."),
+       ("Desactiva el resumen de la mañana", "Deja de darlo solo cada mañana (se puede seguir pidiendo)."),
        ("¿Qué hora es? / ¿Qué día es hoy?", "Dice la hora o la fecha."),
        ("¿Cómo está el equipo?", "Uso de CPU, memoria, discos y temperaturas."),
        ("¿Qué aplicaciones tengo abiertas?", "Lista los programas abiertos."),

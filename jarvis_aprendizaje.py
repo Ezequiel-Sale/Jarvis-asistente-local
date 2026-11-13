@@ -139,7 +139,7 @@ def _chat_json(sistema: str, usuario: str, esquema: dict, num_predict: int) -> d
             "model": core.MODEL_LLM,
             "stream": False,
             "format": esquema,
-            "keep_alive": "30m",
+            "keep_alive": "2h",  # como jarvis_agent.KEEP_ALIVE (si no, acorta el de la charla)
             "options": {"temperature": 0, "num_ctx": 8192, "num_predict": num_predict},
             "messages": [
                 {"role": "system", "content": sistema},

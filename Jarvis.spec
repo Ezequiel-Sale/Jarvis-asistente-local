@@ -1,11 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 
 a = Analysis(
     ['jarvis_app.py'],
     pathex=[],
-    binaries=[],
+    # onnxruntime-directml trae DirectML.dll (voz a texto en la GPU, jarvis_stt_gpu).
+    binaries=collect_dynamic_libs('onnxruntime'),
     # collect_data_files('openwakeword') incluye los modelos de «Hey Jarvis»
     # (descargados con openwakeword.utils.download_models; ver README).
     datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.'),
@@ -18,7 +19,8 @@ a = Analysis(
                    'winrt.windows.media.control', 'winrt.windows.storage.streams', 'winrt.windows.foundation',
                    # Interfaces COM de UI Automation ya generadas (clic en pantalla).
                    'uiautomation', *collect_submodules('comtypes.gen'),
-                   'pythonnet', 'clr', 'clr_loader', *collect_submodules('clr_loader')],
+                   'pythonnet', 'clr', 'clr_loader', *collect_submodules('clr_loader'),
+                   'jarvis_stt_gpu', 'tokenizers'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
