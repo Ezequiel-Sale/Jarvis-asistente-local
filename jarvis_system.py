@@ -18,8 +18,9 @@ GAME_FOLDERS_PER_DISK = ("Games", "Epic Games", "XboxGames", r"SteamLibrary\stea
 
 
 def carpetas_juegos(discos=None, steam=None) -> list[Path]:
-    """Carpetas de juegos que existen: las fijas, «Games», «Epic Games», «XboxGames» y
-    «SteamLibrary» en cada disco, Epic de Program Files y todas las bibliotecas de Steam.
+    """Carpetas de juegos que existen: las fijas, «Games» de la carpeta del usuario, «Games»,
+    «Epic Games», «XboxGames» y «SteamLibrary» en cada disco, Epic de Program Files y todas
+    las bibliotecas de Steam.
 
     La usan el lanzador («abre Elden Ring») y el modo juego. Antes el lanzador solo
     miraba C:/Games y el Steam de C: (no veía D:/Games ni E:/Games).
@@ -37,7 +38,8 @@ def carpetas_juegos(discos=None, steam=None) -> list[Path]:
 
         steam = bibliotecas_steam()
     programas = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-    candidatas = [*GAME_DIRECTORIES, *steam, programas / "Epic Games"]
+    # «Games» de la carpeta del usuario (p. ej. C:\Users\…\Games\Hookshot, un emulador).
+    candidatas = [*GAME_DIRECTORIES, Path.home() / "Games", *steam, programas / "Epic Games"]
     candidatas += [disco / sub for disco in discos for sub in GAME_FOLDERS_PER_DISK]
     vistas, carpetas = set(), []
     for carpeta in candidatas:

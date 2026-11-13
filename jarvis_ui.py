@@ -722,7 +722,8 @@ class JarvisUIMixin:
             total = sum(1 for j in juegos if j.ejecutable is not None)
             self.games_summary.configure(
                 text=f"{total} juegos reconocidos. Ábrelos con «abre …» o con ▶ JUGAR. "
-                     "Busca en «Games», «Epic Games» y «SteamLibrary» de cada disco y en Steam.")
+                     "Busca en «Games», «Epic Games» y «SteamLibrary» de cada disco, en la carpeta "
+                     "«Games» de tu usuario y en Steam.")
             for juego in listos:
                 fila = tk.Frame(self.games_list, bg=PANEL, padx=16, pady=10,
                                 highlightthickness=1, highlightbackground=BORDER)
