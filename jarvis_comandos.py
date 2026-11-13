@@ -7,6 +7,7 @@ las rutinas del usuario y el filtro del buscador. La ventana la dibuja
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Iterable
@@ -32,6 +33,8 @@ def _s(icono: str, titulo: str, *pares: tuple[str, str]) -> Seccion:
 CATALOGO: tuple[Seccion, ...] = (
     _s("🎙", "Hablar con Jarvis",
        ("Hey Jarvis… (y tu orden)", "Despierta a Jarvis sin tocar nada; también interrumpe lo que esté diciendo."),
+       ("¿Qué puedes hacer? / ¿Qué puedes hacer con los monitores?",
+        "Te dice los temas o ejemplos de uno, y abre esta lista."),
        ("F9 o el botón 🎙 MIC", "Graba lo que dices sin usar «Hey Jarvis»."),
        ("Sí / No", "Responde cualquier confirmación, sin decir «Hey Jarvis»."),
        ("Cancela", "Detiene lo que esté haciendo (también con Esc)."),
@@ -162,6 +165,81 @@ def tus_comandos(rutinas: Iterable, describir=None) -> Seccion | None:
 def _normalizar(texto: str) -> str:
     sin_tildes = unicodedata.normalize("NFKD", texto.casefold())
     return "".join(c for c in sin_tildes if not unicodedata.combining(c))
+
+
+# --- «¿Qué puedes hacer?» por voz -------------------------------------------------
+
+# Palabras que se dicen → título de la sección.
+_TEMAS = {
+    "volumen": "Volumen y sonido", "sonido": "Volumen y sonido", "audio": "Volumen y sonido",
+    "auriculares": "Volumen y sonido",
+    "musica": "Vídeos y música", "video": "Vídeos y música", "videos": "Vídeos y música",
+    "youtube": "Vídeos y música", "canciones": "Vídeos y música", "multimedia": "Vídeos y música",
+    "monitor": "Monitores", "monitores": "Monitores", "pantallas": "Monitores",
+    "programas": "Programas, juegos y ventanas", "aplicaciones": "Programas, juegos y ventanas",
+    "apps": "Programas, juegos y ventanas", "juegos": "Programas, juegos y ventanas",
+    "ventanas": "Programas, juegos y ventanas",
+    "navegador": "Navegador", "brave": "Navegador", "internet": "Navegador", "paginas": "Navegador",
+    "clic": "Pantalla", "pantalla": "Pantalla", "vision": "Pantalla",
+    "recordatorios": "Recordatorios y temporizadores", "alarmas": "Recordatorios y temporizadores",
+    "temporizadores": "Recordatorios y temporizadores", "avisos": "Recordatorios y temporizadores",
+    "rutinas": "Rutinas", "energia": "Energía", "apagar": "Energía", "apagado": "Energía",
+    "consultas": "Consultas", "clima": "Consultas", "equipo": "Consultas",
+    "limpieza": "Limpieza", "disco": "Limpieza", "espacio": "Limpieza",
+    "memoria": "Memoria y conversación", "recuerdos": "Memoria y conversación",
+    "apariencia": "Apariencia y sistema", "temas": "Apariencia y sistema", "colores": "Apariencia y sistema",
+}
+_PIDE_AYUDA = re.compile(
+    r"^(?:(?:hey|oye)\s+)?(?:jarvis\s+)?(?:y\s+)?"
+    r"(?:que\s+(?:mas\s+)?(?:puedes|sabes)\s+hacer|que\s+cosas\s+(?:puedes|sabes)\s+hacer|"
+    r"que\s+(?:te\s+)?puedo\s+(?:decir|pedir)(?:te)?|"
+    r"(?:que|cuales)\s+(?:son\s+)?(?:los\s+|tus\s+)?comandos(?:\s+(?:hay|tienes|conoces|de\s+voz))?|"
+    r"(?:muestrame|ensename|abre|dime|mostrame|ensename)\s+(?:los\s+|tus\s+|la\s+lista\s+de\s+)?comandos(?:\s+de\s+voz)?|"
+    r"(?:lista\s+de\s+)?comandos(?:\s+de\s+voz)?|ayuda|necesito\s+ayuda|como\s+te\s+uso)"
+    r"(?:\s+(?:con|para|sobre|de)\s+(?:el\s+|la\s+|los\s+|las\s+)?(?P<tema>[a-z ]+?))?"
+    r"(?:\s+jarvis)?$"
+)
+
+
+def detectar_ayuda(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«¿Qué puedes hacer?» → ("show_commands_help", {}); «… con los monitores» → con topic."""
+    consulta = " ".join(re.sub(r"[^\w\s]", " ", _normalizar(texto)).split())
+    coincidencia = _PIDE_AYUDA.fullmatch(consulta)
+    if coincidencia is None:
+        return None
+    tema = (coincidencia.group("tema") or "").strip()
+    if tema and seccion_de_tema(tema) is None:
+        return None  # «¿qué puedes hacer con este error?»: que lo responda la IA
+    return "show_commands_help", ({"topic": tema} if tema else {})
+
+
+def seccion_de_tema(tema: str) -> Seccion | None:
+    """La sección del catálogo que corresponde a lo dicho («los monitores», «la música»)."""
+    palabras = _normalizar(tema).split()
+    for palabra in palabras:
+        titulo = _TEMAS.get(palabra) or _TEMAS.get(palabra.rstrip("s"))
+        if titulo:
+            return next(s for s in CATALOGO if s.titulo == titulo)
+    encontradas = filtrar(CATALOGO, tema)
+    return encontradas[0] if len(encontradas) == 1 else None
+
+
+def respuesta_ayuda(tema: str = "", propias: Seccion | None = None) -> str:
+    """Texto corto para decir en voz alta (la lista completa está en la ventana)."""
+    if tema:
+        seccion = seccion_de_tema(tema)
+        if seccion is None:
+            return (f"No tengo una sección de comandos sobre «{tema}», pero puedes pedírmelo igual: "
+                    "lo que no está en la lista lo resuelvo con la IA. En «? COMANDOS» tienes la lista completa.")
+        frases = "; ".join(f"«{c.frase.split(' / ')[0]}»" for c in seccion.comandos[:5])
+        return f"Para {seccion.titulo.lower()} puedes decir, por ejemplo: {frases}."
+    temas = [s.titulo.lower() for s in CATALOGO[1:]]
+    texto = "Puedo ayudarte con " + ", ".join(temas[:-1]) + " y " + temas[-1] + "."
+    if propias is not None and propias.comandos:
+        texto += " Además tienes tus comandos: " + ", ".join(
+            f"«{c.frase.split(' / ')[0]}»" for c in propias.comandos[:4]) + "."
+    return (texto + " Pregúntame por un tema, por ejemplo «¿qué puedes hacer con los monitores?», "
+            "o mira la lista completa en el botón «? COMANDOS».")
 
 
 def filtrar(secciones: Iterable[Seccion], busqueda: str) -> list[Seccion]:

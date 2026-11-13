@@ -288,7 +288,8 @@ def _validate_name(value: object) -> str:
 
 
 def _validate_time(value: object) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) is None:
+    """HH:MM, o HH:MM:SS para lo programado al segundo («suspende el equipo dentro de 10 minutos»)."""
+    if not isinstance(value, str) or re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?", value) is None:
         raise ValueError("usa el formato de 24 horas HH:MM, por ejemplo 08:30.")
     return value
 
@@ -594,19 +595,29 @@ def _parsear_atajo_energia(
         segundos = jarvis_reminders.segundos_de(relativo.group(1))
         if segundos <= 0:
             return None
-        # Las rutinas se ejecutan al minuto: se redondea hacia arriba y nunca menos de 1 min.
-        momento = ahora + timedelta(seconds=max(segundos, 60))
-        if momento.second or momento.microsecond:
-            momento = momento.replace(second=0, microsecond=0) + timedelta(minutes=1)
-        dias = None
-    else:
-        cuando = re.search(jarvis_reminders.CUANDO_ABS, normalizado)
-        if cuando is None:
-            return None
-        sobrante = (normalizado[: cuando.start()] + normalizado[cuando.end():]).strip()
-        if sobrante:
-            return None  # hay más cosas en la frase: que lo interprete el modelo
-        momento = jarvis_reminders.momento_de(cuando, ahora)
+        import jarvis_power
+
+        # Al segundo: la rutina arranca la cuenta atrás de 60 s antes, para que el equipo se
+        # apague justo al cumplirse el tiempo pedido (si falta menos, arranca enseguida).
+        objetivo = (ahora + timedelta(seconds=segundos)).replace(microsecond=0)
+        inicio = max(objetivo - timedelta(seconds=jarvis_power.CUENTA_ATRAS_RUTINA),
+                     ahora.replace(microsecond=0) + timedelta(seconds=2))
+        objetivo = inicio + timedelta(seconds=jarvis_power.CUENTA_ATRAS_RUTINA)
+        pasos = json.dumps([{"tool": "power_control", "arguments": {"action": accion}}], separators=(",", ":"))
+        return RoutineCreationRequest(
+            name=_nombre_libre(f"{_POWER_NAMES[accion]} {objetivo:%H:%M:%S}"),
+            time=f"{inicio:%H:%M:%S}",
+            days=str(inicio.isoweekday()),
+            steps_json=pasos,
+            once=True,
+        )
+    cuando = re.search(jarvis_reminders.CUANDO_ABS, normalizado)
+    if cuando is None:
+        return None
+    sobrante = (normalizado[: cuando.start()] + normalizado[cuando.end():]).strip()
+    if sobrante:
+        return None  # hay más cosas en la frase: que lo interprete el modelo
+    momento = jarvis_reminders.momento_de(cuando, ahora)
     hora = f"{momento.hour:02d}:{momento.minute:02d}"
     pasos = json.dumps([{"tool": "power_control", "arguments": {"action": accion}}], separators=(",", ":"))
     una_vez = dias is None
@@ -1008,23 +1019,46 @@ def rutinas_para_evento(trigger: str) -> list[Routine]:
     return routines
 
 
+# Margen para una rutina que no se revisó justo a su hora (Jarvis ocupado, la confirmación
+# de guardado tardó…). Con 59 s, las de HH:MM salen durante su minuto como siempre y nunca
+# después; las de HH:MM:SS, en el minuto siguiente a su segundo.
+MARGEN_VENCIDA = timedelta(seconds=59)
+
+
+def momento_programado(hora: str, ahora: datetime) -> datetime | None:
+    """Fecha y hora de hoy (o de ayer, pasada la medianoche) para «HH:MM» o «HH:MM:SS»."""
+    try:
+        partes = [int(x) for x in hora.split(":")]
+        momento = ahora.replace(hour=partes[0], minute=partes[1],
+                                second=partes[2] if len(partes) > 2 else 0, microsecond=0)
+    except (ValueError, IndexError):
+        return None
+    if momento - ahora > timedelta(hours=12):  # «23:59:50» revisado a las 00:00:20
+        momento -= timedelta(days=1)
+    return momento
+
+
 def reclamar_rutinas_vencidas(ahora: datetime | None = None) -> list[Routine]:
+    """Rutinas por hora que vencieron hace menos de ``MARGEN_VENCIDA`` y no corrieron ese día."""
     now = ahora or datetime.now().astimezone()
-    date_key = now.date().isoformat()
-    minute = now.strftime("%H:%M")
-    weekday = now.isoweekday()
+    minutos = {(now - timedelta(minutes=m)).strftime("%H:%M") for m in range(3)}
     due: list[Routine] = []
     with core.conexion_db() as connection:
         rows = connection.execute(
-            "SELECT id, nombre, hora, accion, dias_semana, disparador, modo_permiso "
-            "FROM rutinas WHERE activa = 1 AND disparador = 'hora' AND hora = ? "
-            "AND (ultima_ejecucion IS NULL OR ultima_ejecucion <> ?) "
-            "ORDER BY id",
-            (minute, date_key),
+            "SELECT id, nombre, hora, accion, dias_semana, disparador, modo_permiso, ultima_ejecucion "
+            "FROM rutinas WHERE activa = 1 AND disparador = 'hora' AND substr(hora, 1, 5) IN "
+            f"({','.join('?' * len(minutos))}) ORDER BY id",
+            tuple(sorted(minutos)),
         ).fetchall()
-        for row in rows:
+        for *row, ultima in rows:
+            momento = momento_programado(str(row[2]), now)
+            if momento is None or not timedelta(0) <= now - momento <= MARGEN_VENCIDA:
+                continue
+            date_key = momento.date().isoformat()
+            if ultima == date_key:
+                continue
             routine = _routine_from_row(connection, row)
-            if routine is None or weekday not in routine.days:
+            if routine is None or momento.isoweekday() not in routine.days:
                 continue
             cursor = connection.execute(
                 "UPDATE rutinas SET ultima_ejecucion = ?, "

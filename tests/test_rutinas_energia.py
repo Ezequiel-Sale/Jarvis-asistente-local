@@ -125,28 +125,31 @@ class PowerShortcutTests(_DbTestCase):
                 self.assertEqual(json.loads(pedido.steps_json)[0]["arguments"]["action"], accion)
 
     def test_relative_delay(self) -> None:
-        # «dentro de X»: una sola vez, a la hora en que se cumple (redondeada al minuto siguiente).
+        # «dentro de X», al segundo: la cuenta atrás de 60 s arranca antes y termina justo a tiempo.
         ahora = datetime(2026, 11, 12, 14, 22, 40)
 
         def atajo(texto):
             return routines._parsear_atajo_energia(routines._POWER_SHORTCUT.match(texto), ahora)
 
-        casos = {
-            "Suspende el equipo dentro de 10 minutos.": ("14:33", "sleep"),
-            "suspende el equipo dentro de diez minutos": ("14:33", "sleep"),
-            "apaga la pc en media hora": ("14:53", "shutdown"),
-            "reinicia el equipo en una hora y media": ("15:53", "restart"),
-            "apaga el equipo en 30 segundos": ("14:24", "shutdown"),  # nunca menos de 1 minuto
+        casos = {  # texto: (arranca la cuenta atrás, se apaga, acción)
+            "Suspende el equipo dentro de 10 minutos.": ("14:31:40", "14:32:40", "sleep"),
+            "suspende el equipo dentro de diez minutos": ("14:31:40", "14:32:40", "sleep"),
+            "apaga la pc en media hora": ("14:51:40", "14:52:40", "shutdown"),
+            "reinicia el equipo en una hora y media": ("15:51:40", "15:52:40", "restart"),
+            # Menos que la cuenta atrás: arranca enseguida.
+            "apaga el equipo en 30 segundos": ("14:22:42", "14:23:42", "shutdown"),
         }
-        for texto, (hora, accion) in casos.items():
+        for texto, (inicio, fin, accion) in casos.items():
             with self.subTest(texto=texto):
                 pedido = atajo(texto)
-                self.assertEqual((pedido.time, pedido.days, pedido.once), (hora, "4", True))
+                self.assertEqual((pedido.time, pedido.days, pedido.once), (inicio, "4", True))
+                self.assertTrue(pedido.name.endswith(fin))
                 self.assertEqual(json.loads(pedido.steps_json)[0]["arguments"]["action"], accion)
+                self.assertEqual(routines._validate_time(pedido.time), inicio)
         # Pasada la medianoche cuenta el día siguiente.
         noche = routines._parsear_atajo_energia(
             routines._POWER_SHORTCUT.match("apaga el equipo en 20 minutos"), datetime(2026, 11, 12, 23, 50))
-        self.assertEqual((noche.time, noche.days), ("00:10", "5"))
+        self.assertEqual((noche.time, noche.days), ("00:09:00", "5"))
         self.assertIsNone(atajo("apaga el equipo todos los días en 10 minutos"))
         self.assertIsNone(atajo("apaga el equipo en 10 minutos y pon música"))
 
@@ -173,6 +176,25 @@ class PowerShortcutTests(_DbTestCase):
         self.assertEqual({r.name for r in vencidas}, {"Una vez", "Siempre"})
         activas = {r.name: r.active for r in routines.listar_automatizaciones()}
         self.assertEqual(activas, {"Una vez": False, "Siempre": True})
+
+    def test_to_the_second(self) -> None:
+        pasos = json.dumps([{"tool": "lock_computer", "arguments": {}}])
+        routines.crear_rutina("Al segundo", "14:31:40", "4", pasos, self.registry, once=True)
+        # Antes de la hora no sale (aunque sea el mismo minuto).
+        self.assertEqual(routines.reclamar_rutinas_vencidas(datetime(2026, 11, 12, 14, 31, 38)), [])
+        # Sale en cuanto llega, y una sola vez.
+        self.assertEqual([r.name for r in routines.reclamar_rutinas_vencidas(datetime(2026, 11, 12, 14, 31, 41))],
+                         ["Al segundo"])
+        self.assertEqual(routines.reclamar_rutinas_vencidas(datetime(2026, 11, 12, 14, 31, 43)), [])
+
+    def test_late_check_still_runs_within_the_margin(self) -> None:
+        pasos = json.dumps([{"tool": "lock_computer", "arguments": {}}])
+        routines.crear_rutina("A las 23:59:50", "23:59:50", "4", pasos, self.registry)
+        # Revisada pasada la medianoche (otro día de la semana): cuenta como la del jueves.
+        vencidas = routines.reclamar_rutinas_vencidas(datetime(2026, 11, 13, 0, 0, 30))
+        self.assertEqual([r.name for r in vencidas], ["A las 23:59:50"])
+        routines.crear_rutina("Vieja", "10:00", "4", pasos, self.registry)
+        self.assertEqual(routines.reclamar_rutinas_vencidas(datetime(2026, 11, 12, 10, 1, 0)), [])  # pasó su minuto
 
 
 class CountdownExecutionTests(unittest.TestCase):

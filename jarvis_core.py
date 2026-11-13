@@ -427,7 +427,29 @@ def obtener_historial_con_fecha(
     return resultado
 
 
+# Hora (UTC, formato de SQLite) en que apareció cada mensaje del usuario en el chat, para que
+# el historial guarde la suya y no la de la respuesta (el turno se guarda al terminar).
+_MOMENTOS_USUARIO: dict[tuple[str, str], str] = {}
+_MOMENTOS_MAX = 50
+_momentos_cerrojo = threading.Lock()
+
+
+def _ahora_sqlite() -> str:
+    ahora = datetime.now(timezone.utc)
+    return ahora.strftime("%Y-%m-%d %H:%M:%S.") + f"{ahora.microsecond // 1000:03d}"
+
+
+def marcar_mensaje_usuario(conversacion_id: str, texto: str) -> None:
+    """Anota cuándo se mostró el mensaje del usuario (lo usa ``guardar_turno``)."""
+    with _momentos_cerrojo:
+        _MOMENTOS_USUARIO[(conversacion_id, texto)] = _ahora_sqlite()
+        while len(_MOMENTOS_USUARIO) > _MOMENTOS_MAX:
+            _MOMENTOS_USUARIO.pop(next(iter(_MOMENTOS_USUARIO)))
+
+
 def guardar_turno(conversacion_id: str, usuario: str, asistente: str) -> None:
+    with _momentos_cerrojo:
+        creado_usuario = _MOMENTOS_USUARIO.pop((conversacion_id, usuario), None) or _ahora_sqlite()
     with conexion_db() as connection:
         conversation = connection.execute(
             "SELECT titulo FROM conversaciones WHERE id = ?",
@@ -436,12 +458,13 @@ def guardar_turno(conversacion_id: str, usuario: str, asistente: str) -> None:
         if conversation is None:
             raise ValueError(f"No existe la conversación {conversacion_id}.")
 
-        connection.executemany(
-            "INSERT INTO mensajes (conversacion_id, rol, contenido) VALUES (?, ?, ?)",
-            (
-                (conversacion_id, "user", usuario),
-                (conversacion_id, "assistant", asistente),
-            ),
+        connection.execute(
+            "INSERT INTO mensajes (conversacion_id, rol, contenido, creado) VALUES (?, ?, ?, ?)",
+            (conversacion_id, "user", usuario, creado_usuario),
+        )
+        connection.execute(
+            "INSERT INTO mensajes (conversacion_id, rol, contenido, creado) VALUES (?, ?, ?, ?)",
+            (conversacion_id, "assistant", asistente, _ahora_sqlite()),
         )
         titulo = str(conversation[0])
         if titulo == "Nueva conversación":

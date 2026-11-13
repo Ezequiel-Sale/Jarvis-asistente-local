@@ -17,6 +17,7 @@ from urllib.parse import quote_plus
 
 import jarvis_actions
 import jarvis_cards
+import jarvis_comandos
 import jarvis_core as core
 import jarvis_health
 import jarvis_displays
@@ -590,6 +591,11 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                     logging.exception("No se pudo reproducir la alarma.")
             if not self.audio_enabled:
                 return
+            # Al arrancar, los avisos (p. ej. disco casi lleno) llegaban antes de que el servidor
+            # de voz estuviera listo y fallaban: se espera a que termine de iniciar.
+            listo = getattr(self, "_docker_start_finished", None)
+            if listo is not None:
+                listo.wait(timeout=120)
             try:
                 audio = core.generar_audio_tts(text)
             except Exception:
@@ -612,6 +618,26 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             return "Listo: ya no daré el resumen del día solo. Puedes pedirlo con «buenos días»."
         vigilante = getattr(self, "health_watcher", None)
         return jarvis_buenos_dias.generar(vigilante.ultimo if vigilante is not None else None)
+
+    def _tool_show_commands_help(self, topic: str = "") -> str:
+        """«¿Qué puedes hacer?»: abre la guía de comandos (si Jarvis está a la vista) y lo resume."""
+        try:
+            propias = jarvis_comandos.tus_comandos(jarvis_routines.listar_automatizaciones())
+        except Exception:
+            logging.exception("No se pudieron leer las rutinas para la ayuda.")
+            propias = None
+        self.events.put(("show_commands_help", topic))
+        return jarvis_comandos.respuesta_ayuda(topic, propias)
+
+    def _open_commands_help(self, topic: str) -> None:
+        """Abre la guía filtrada por el tema; con Jarvis en la bandeja no salta la ventana."""
+        try:
+            if self.root.state() in ("withdrawn", "iconic"):
+                return
+        except tk.TclError:
+            return
+        seccion = jarvis_comandos.seccion_de_tema(topic) if topic else None
+        self._show_commands_help(seccion.titulo if seccion else "")
 
     def _check_morning_brief(self) -> None:
         """Cada minuto: la primera vez que usas la PC por la mañana, da el resumen del día."""
@@ -863,6 +889,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             return
         system_query = (
             jarvis_buenos_dias.detectar(text)
+            or jarvis_comandos.detectar_ayuda(text)
             or detectar_consulta_fecha_hora(text)
             or jarvis_reminders.detectar_comando(text)
             or detectar_consulta_bateria(text)
@@ -1088,6 +1115,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 return
             system_query = (
                 jarvis_buenos_dias.detectar(transcript)
+                or jarvis_comandos.detectar_ayuda(transcript)
                 or detectar_consulta_fecha_hora(transcript)
                 or jarvis_reminders.detectar_comando(transcript)
                 or detectar_consulta_bateria(transcript)
@@ -1875,7 +1903,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                 self._routine_scheduler_error_reported = True
         finally:
             if not self._closing and self.root.winfo_exists():
-                self.root.after(15000, self._check_scheduled_routines)
+                # Cada 2 s: lo programado al segundo («dentro de 10 minutos») sale a tiempo.
+                self.root.after(2000, self._check_scheduled_routines)
 
     def _start_next_pending_routine(self) -> None:
         if (
@@ -2449,6 +2478,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
                             self._set_status("OLLAMA NO DISPONIBLE", ERROR)
                     elif event[0] == "device_event":
                         self._handle_device_event(event[1])
+                    elif event[0] == "show_commands_help":
+                        self._open_commands_help(event[1])
                     elif event[0] in ("game_started", "game_stopped"):
                         if event[0] == "game_started":
                             self._free_gpu_for_game()
@@ -4217,6 +4248,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         {
             "get_current_datetime",
             "morning_briefing",
+            "show_commands_help",
             "get_headset_battery",
             "get_now_playing",
             "set_reminder",

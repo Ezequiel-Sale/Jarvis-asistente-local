@@ -535,6 +535,22 @@ _CORRECCIONES_VOZ = (
     (r"^(?:initial|inicial|inissia)\b", "inicia"),  # «Inicia WhatsApp» → «Initial WhatsApp» (2026-11-11)
     (r"\bpesta[nñ]a\s+de\s+you\s+tube\b", "pestaña de YouTube"),
     (r"\byou\s+tube\b", "YouTube"),
+    # Vistos al comparar modelos con 84 órdenes sintetizadas (2026-11-13); sirven sobre todo
+    # al jugar, cuando la voz vuelve al modelo «small» en el procesador.
+    (r"^con\s+el\s+(v[ií]deo|volumen)\b", r"Pon el \1"),  # «Con el vídeo en pantalla completa»
+    (r"^ausa\s+(el|la)\b", r"Pausa \1"),
+    (r"\branuda\b", "reanuda"),
+    (r"\bsupendele\s+tipo\b", "suspende el equipo"),
+    (r"\bsupende\b", "suspende"),
+    (r"^(?:se\s+)?(?:arela|regla|[aá]rguela|arregla)\s+(?:el|al)\s+escalado\b", "Arregla el escalado"),
+    (r"\bdiscorda\b", "Discord"),
+    (r"\b(minimiza|maximiza|restaura|cierra)\s+disco\b", r"\1 Discord"),
+    (r"\bdespoticida\b", "de Spotify"),
+    (r"\bvodo\s*gamin", "modo gamin"),
+    (r"\bmodo\s*[gck]aming?\s*[dt]os[ck]a\b", "modo gaming 2K"),  # «Modo gamintosca»
+    (r"\bmodo\s*(?:gaming|gamin|gamil|camin|kamin)\b", "modo gaming"),
+    (r"\b(modo\s+gaming)\s*(?:2\s*k|dos\s*k|[dt]os[ck]a)\b", r"\1 2K"),
+    (r"\b(modo\s+gaming)(?:[dt]os[ck]a)\b", r"\1 2K"),
     (r"\b(volumen\s+de\s+\w+)\s+el\s+(\d)", r"\1 al \2"),  # «… de Spotify el 30 %»
     (r"(\d)\s*%", r"\1 por ciento"),  # Whisper escribe «30%»
 )

@@ -429,6 +429,24 @@ def crear_registro_herramientas(
         timeout_seconds=30,
         record_result=False,
     )
+    registry.register(
+        "show_commands_help",
+        (
+            "Solo lectura. Qué puede hacer Jarvis («¿qué puedes hacer?», «¿qué comandos tienes?»): "
+            "abre la lista de comandos de voz y devuelve un resumen. topic, opcional, es un tema "
+            "(«monitores», «música», «recordatorios»…) para dar ejemplos de ese tema."
+        ),
+        {
+            "type": "object",
+            "properties": {"topic": {"type": "string", "maxLength": 60}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        host._tool_show_commands_help,
+        label="Comandos de voz",
+        timeout_seconds=10,
+        record_result=False,
+    )
     _registrar_energia(registry)
     registry.register(
         "screen_click",

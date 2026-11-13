@@ -202,7 +202,8 @@ class RoutineForm:
         ).pack(anchor="w")
 
         self.marco_hora = tk.Frame(cuerpo, bg=PANEL, padx=12, pady=8)
-        hora, minuto = (routine.time.split(":") if routine and routine.time else ("08", "00"))
+        # «HH:MM:SS» (lo programado al segundo) se edita como HH:MM.
+        hora, minuto = (routine.time.split(":")[:2] if routine and routine.time else ("08", "00"))
         self.hora = tk.StringVar(value=hora)
         self.minuto = tk.StringVar(value=minuto)
         fila_hora = tk.Frame(self.marco_hora, bg=PANEL)

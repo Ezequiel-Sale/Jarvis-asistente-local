@@ -44,6 +44,30 @@ class HistoryWithTimeTests(unittest.TestCase):
         self.assertEqual(core.obtener_historial(conversacion), [(r, t) for r, t, _ in historial])
 
 
+class ExactUserTimeTests(HistoryWithTimeTests):
+    def test_user_message_keeps_the_time_it_was_shown(self) -> None:
+        conversacion = core.crear_conversacion()
+        with patch.object(core, "_ahora_sqlite", return_value="2026-11-13 12:00:00.000"):
+            core.marcar_mensaje_usuario(conversacion, "¿qué es Python?")
+        # La respuesta tarda: el turno se guarda después.
+        with patch.object(core, "_ahora_sqlite", return_value="2026-11-13 12:00:15.000"):
+            core.guardar_turno(conversacion, "¿qué es Python?", "Un lenguaje.")
+        (_, _, usuario), (_, _, respuesta) = core.obtener_historial_con_fecha(conversacion)
+        self.assertEqual((respuesta - usuario).total_seconds(), 15)
+
+    def test_without_mark_uses_now(self) -> None:
+        conversacion = core.crear_conversacion()
+        core.guardar_turno(conversacion, "hola", "hola")
+        (_, _, usuario), (_, _, respuesta) = core.obtener_historial_con_fecha(conversacion)
+        self.assertLess(abs((respuesta - usuario).total_seconds()), 2)
+
+    def test_marks_are_bounded(self) -> None:
+        for n in range(core._MOMENTOS_MAX + 10):
+            core.marcar_mensaje_usuario("c", str(n))
+        self.assertLessEqual(len(core._MOMENTOS_USUARIO), core._MOMENTOS_MAX)
+        core._MOMENTOS_USUARIO.clear()
+
+
 class ReminderToolTextTests(unittest.TestCase):
     def test_reminder_tool_says_it_does_not_power_off(self) -> None:
         registro = Mock()

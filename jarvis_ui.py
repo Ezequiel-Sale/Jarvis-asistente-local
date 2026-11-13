@@ -106,13 +106,16 @@ class JarvisUIMixin:
                 padx=12, pady=8, font=("Consolas", 8, "bold"), cursor="hand2",
             )
 
-        def _show_commands_help(self) -> None:
-            """Ventana con todos los comandos de voz (los de Jarvis y las frases de tus rutinas)."""
+        def _show_commands_help(self, buscar: str = "") -> None:
+            """Ventana con todos los comandos de voz (los de Jarvis y las frases de tus rutinas).
+            ``buscar``: texto inicial del buscador («Monitores» al preguntar por voz)."""
             import jarvis_comandos
             import jarvis_routines
 
             ventana = getattr(self, "_commands_window", None)
             if ventana is not None and ventana.winfo_exists():
+                if buscar:
+                    self._commands_search.set(buscar)
                 ventana.deiconify()
                 ventana.lift()
                 ventana.focus_force()
@@ -145,7 +148,8 @@ class JarvisUIMixin:
             fila = tk.Frame(arriba, bg=BG)
             fila.pack(fill="x")
             tk.Label(fila, text="🔎", bg=BG, fg=MUTED, font=("Segoe UI", 10)).pack(side="left", padx=(0, 6))
-            busqueda = tk.StringVar()
+            busqueda = tk.StringVar(value=buscar)
+            self._commands_search = busqueda
             entrada = tk.Entry(fila, textvariable=busqueda, bg=PANEL_LIGHT, fg=TEXT, insertbackground=CYAN,
                                relief="flat", font=("Segoe UI", 10),
                                highlightthickness=1, highlightbackground=BORDER, highlightcolor=CYAN)
@@ -1345,6 +1349,11 @@ class JarvisUIMixin:
 
             should_follow = self._chat_following
             is_user = role == "user"
+            if is_user and momento is None:
+                import jarvis_core
+
+                # El turno se guarda al terminar la respuesta: así queda con la hora de ahora.
+                jarvis_core.marcar_mensaje_usuario(getattr(self, "conversation_id", ""), text)
             row = tk.Frame(self.messages, bg=PANEL)
             row.pack(fill="x", padx=14, pady=8)
 

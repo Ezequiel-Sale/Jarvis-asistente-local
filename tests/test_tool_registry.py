@@ -58,6 +58,9 @@ class _TestHost:
     def _tool_restore_display(self, routine: str = "") -> str:
         return self._record(("restore_display", routine), "display restored")
 
+    def _tool_show_commands_help(self, topic: str = "") -> str:
+        return self._record(("help", topic), "help")
+
     def _tool_morning_briefing(self, automatic: bool | None = None) -> str:
         return self._record(("briefing", automatic), "briefing")
 
@@ -105,7 +108,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 41)
+        self.assertEqual(len(tools), 42)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -114,6 +117,7 @@ class ToolRegistryTests(unittest.TestCase):
                 "power_control",
                 "get_current_datetime",
                 "morning_briefing",
+                "show_commands_help",
                 "set_reminder",
                 "list_reminders",
                 "cancel_reminder",
