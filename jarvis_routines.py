@@ -3,7 +3,7 @@ import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 import jarvis_core as core
@@ -578,21 +578,35 @@ def _nombre_libre(base: str) -> str:
 def _parsear_atajo_energia(
     match: re.Match[str], ahora: datetime | None = None
 ) -> RoutineCreationRequest | None:
-    """«apaga el equipo a las 2» (una vez) o «… todos los días a las 23:30»."""
+    """«apaga el equipo a las 2» (una vez), «… todos los días a las 23:30» o
+    «suspende el equipo dentro de 10 minutos» (una vez, a la hora en que se cumplen)."""
     import jarvis_reminders
 
     verbo = match.group("verbo").casefold()
     accion = "sleep" if verbo.startswith("susp") else "restart" if verbo.startswith("rein") else "shutdown"
     dias, resto = _dias_recurrentes(match.group("resto"))
     normalizado, _ = jarvis_reminders._normalizar_con_mapa(resto)
-    cuando = re.search(jarvis_reminders.CUANDO_ABS, normalizado)
-    if cuando is None:
-        return None
-    sobrante = (normalizado[: cuando.start()] + normalizado[cuando.end():]).strip()
-    if sobrante:
-        return None  # hay más cosas en la frase: que lo interprete el modelo
     ahora = ahora or datetime.now()
-    momento = jarvis_reminders.momento_de(cuando, ahora)
+    relativo = re.fullmatch(rf"(?:en|dentro\s+de)\s+(?:unos?\s+)?({jarvis_reminders.DURACION})", normalizado.strip())
+    if relativo is not None:
+        if dias is not None:
+            return None  # «todos los días dentro de 10 minutos» no tiene sentido
+        segundos = jarvis_reminders.segundos_de(relativo.group(1))
+        if segundos <= 0:
+            return None
+        # Las rutinas se ejecutan al minuto: se redondea hacia arriba y nunca menos de 1 min.
+        momento = ahora + timedelta(seconds=max(segundos, 60))
+        if momento.second or momento.microsecond:
+            momento = momento.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        dias = None
+    else:
+        cuando = re.search(jarvis_reminders.CUANDO_ABS, normalizado)
+        if cuando is None:
+            return None
+        sobrante = (normalizado[: cuando.start()] + normalizado[cuando.end():]).strip()
+        if sobrante:
+            return None  # hay más cosas en la frase: que lo interprete el modelo
+        momento = jarvis_reminders.momento_de(cuando, ahora)
     hora = f"{momento.hour:02d}:{momento.minute:02d}"
     pasos = json.dumps([{"tool": "power_control", "arguments": {"action": accion}}], separators=(",", ":"))
     una_vez = dias is None

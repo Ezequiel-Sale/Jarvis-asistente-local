@@ -317,12 +317,13 @@ class MainActivity : Activity() {
         for (i in 0 until events.length()) {
             val event = events.getJSONObject(i)
             val text = event.optString("text")
+            val ts = event.optLong("ts", 0L)
             when (event.optString("type")) {
-                "user" -> addBubble(text, true)
-                "live" -> showLive(text)
+                "user" -> addBubble(text, true, ts)
+                "live" -> showLive(text, ts)
                 "assistant" -> {
                     showLive("")
-                    addBubble(text, false)
+                    addBubble(text, false, ts)
                     if (!initial) speak(text)
                 }
                 "notice" -> addNotice(text)
@@ -368,7 +369,7 @@ class MainActivity : Activity() {
     }
 
     /** Respuesta que Jarvis está escribiendo: una burbuja que se actualiza; vacía = quitarla. */
-    private fun showLive(text: String) {
+    private fun showLive(text: String, ts: Long = 0L) {
         if (text.isEmpty()) {
             liveBubble?.let { messages.removeView(it) }
             liveBubble = null
@@ -380,17 +381,32 @@ class MainActivity : Activity() {
             view.text = text
             return
         }
-        liveBubble = addBubble(text, false)
+        liveBubble = addBubble(text, false, ts)
         liveText = liveBubble?.getChildAt(1) as? TextView
     }
 
-    private fun addBubble(text: String, user: Boolean): LinearLayout {
+    /** «12/11 14:22» (con el año si no es el actual) a partir de los segundos Unix del evento. */
+    private fun messageTime(ts: Long): String {
+        val moment = if (ts > 0) java.util.Date(ts * 1000) else java.util.Date()
+        val year = java.text.SimpleDateFormat("yyyy", java.util.Locale.ROOT)
+        val pattern = if (year.format(moment) == year.format(java.util.Date())) "dd/MM HH:mm" else "dd/MM/yyyy HH:mm"
+        return java.text.SimpleDateFormat(pattern, java.util.Locale.ROOT).format(moment)
+    }
+
+    private fun addBubble(text: String, user: Boolean, ts: Long = 0L): LinearLayout {
         val bubble = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(getColor(if (user) R.color.cyan_dark else R.color.panel_light))
             setPadding(dp(14), dp(9), dp(14), dp(10))
         }
-        bubble.addView(label(if (user) "TÚ" else "JARVIS", getColor(if (user) R.color.cyan else R.color.violet)))
+        // Cabecera «TÚ   12/11 14:22»: queda como hijo 0 (showLive lee el texto en el hijo 1).
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        header.addView(label(if (user) "TÚ" else "JARVIS", getColor(if (user) R.color.cyan else R.color.violet)))
+        header.addView(label(messageTime(ts), getColor(R.color.muted)).apply {
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(10), 0, 0, 0)
+        })
+        bubble.addView(header)
         bubble.addView(TextView(this).apply {
             this.text = text
             setTextColor(getColor(R.color.text))

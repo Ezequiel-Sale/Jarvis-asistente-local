@@ -124,6 +124,37 @@ class PowerShortcutTests(_DbTestCase):
                 self.assertEqual((pedido.time, pedido.days, pedido.once), (hora, dias, False))
                 self.assertEqual(json.loads(pedido.steps_json)[0]["arguments"]["action"], accion)
 
+    def test_relative_delay(self) -> None:
+        # «dentro de X»: una sola vez, a la hora en que se cumple (redondeada al minuto siguiente).
+        ahora = datetime(2026, 11, 12, 14, 22, 40)
+
+        def atajo(texto):
+            return routines._parsear_atajo_energia(routines._POWER_SHORTCUT.match(texto), ahora)
+
+        casos = {
+            "Suspende el equipo dentro de 10 minutos.": ("14:33", "sleep"),
+            "suspende el equipo dentro de diez minutos": ("14:33", "sleep"),
+            "apaga la pc en media hora": ("14:53", "shutdown"),
+            "reinicia el equipo en una hora y media": ("15:53", "restart"),
+            "apaga el equipo en 30 segundos": ("14:24", "shutdown"),  # nunca menos de 1 minuto
+        }
+        for texto, (hora, accion) in casos.items():
+            with self.subTest(texto=texto):
+                pedido = atajo(texto)
+                self.assertEqual((pedido.time, pedido.days, pedido.once), (hora, "4", True))
+                self.assertEqual(json.loads(pedido.steps_json)[0]["arguments"]["action"], accion)
+        # Pasada la medianoche cuenta el día siguiente.
+        noche = routines._parsear_atajo_energia(
+            routines._POWER_SHORTCUT.match("apaga el equipo en 20 minutos"), datetime(2026, 11, 12, 23, 50))
+        self.assertEqual((noche.time, noche.days), ("00:10", "5"))
+        self.assertIsNone(atajo("apaga el equipo todos los días en 10 minutos"))
+        self.assertIsNone(atajo("apaga el equipo en 10 minutos y pon música"))
+
+    def test_relative_delay_goes_through_routine_creation(self) -> None:
+        pedido = routines.parsear_solicitud_creacion("Suspende el equipo dentro de 10 minutos.")
+        self.assertTrue(pedido.once)
+        self.assertEqual(json.loads(pedido.steps_json), [{"tool": "power_control", "arguments": {"action": "sleep"}}])
+
     def test_not_a_shortcut(self) -> None:
         self.assertIsNone(routines._POWER_SHORTCUT.match("apaga el equipo"))
         self.assertIsNone(self._atajo("apaga el equipo a las 2 y abre youtube"))

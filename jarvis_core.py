@@ -1,6 +1,6 @@
 import argparse
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -403,6 +403,28 @@ def obtener_historial(
             (conversacion_id, limite),
         ).fetchall()
     return [(str(role), str(content)) for role, content in reversed(rows)]
+
+
+def obtener_historial_con_fecha(
+    conversacion_id: str,
+    limite: int = 50,
+) -> list[tuple[str, str, datetime | None]]:
+    """Como ``obtener_historial`` pero con la hora local de cada mensaje (para el chat)."""
+    with conexion_db() as connection:
+        rows = connection.execute(
+            "SELECT rol, contenido, creado FROM mensajes "
+            "WHERE conversacion_id = ? ORDER BY id DESC LIMIT ?",
+            (conversacion_id, limite),
+        ).fetchall()
+    resultado = []
+    for role, content, creado in reversed(rows):
+        try:
+            # SQLite guarda la hora en UTC («2026-11-12 17:22:40.123»).
+            momento = datetime.fromisoformat(str(creado)).replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+        except (TypeError, ValueError):
+            momento = None
+        resultado.append((str(role), str(content), momento))
+    return resultado
 
 
 def guardar_turno(conversacion_id: str, usuario: str, asistente: str) -> None:

@@ -502,7 +502,10 @@ def registrar_herramientas(registry, verificador=None) -> None:
         (
             "Programa un temporizador (kind=timer), una alarma (alarm) o un recordatorio "
             "(reminder, con text obligatorio). Usa delay_seconds para «dentro de X» o at "
-            "(AAAA-MM-DD HH:MM, hora local) para una hora concreta; nunca ambos."
+            "(AAAA-MM-DD HH:MM, hora local) para una hora concreta; nunca ambos. "
+            "Solo avisa: NO apaga, suspende ni reinicia el equipo. Para «apaga/suspende/reinicia "
+            "el equipo dentro de X» usa schedule_routine con power_control y once=true, y nunca "
+            "digas que el equipo se apagará si solo programaste un aviso."
         ),
         {
             "type": "object",

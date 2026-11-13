@@ -4,8 +4,16 @@ Lógica sin Tk (la dibuja ``JarvisUIMixin._add_action_card``).
 """
 
 import json
+from datetime import datetime
 
 from jarvis_actions import EstadoAccion, ResultadoAccion
+
+
+def hora_mensaje(momento: datetime | None = None, ahora: datetime | None = None) -> str:
+    """Fecha y hora de un mensaje del chat: «12/11 14:22» (con el año si no es el actual)."""
+    ahora = ahora or datetime.now()
+    momento = momento or ahora
+    return momento.strftime("%d/%m %H:%M" if momento.year == ahora.year else "%d/%m/%Y %H:%M")
 
 ICONOS = {
     "configure_display": "🖥", "restore_display_config": "🖥", "fix_display_scaling": "🖥", "move_window": "🗔",

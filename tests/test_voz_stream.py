@@ -152,6 +152,7 @@ class LiveBubbleTests(unittest.TestCase):
             _show_live_answer = JarvisApp._show_live_answer
             _clear_live_answer = JarvisApp._clear_live_answer
             _notify_mobile_live = JarvisApp._notify_mobile_live
+            _bubble_header = JarvisApp._bubble_header
 
             def _scroll_chat_to_bottom(self) -> None:
                 pass

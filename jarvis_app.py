@@ -213,7 +213,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         except OSError:
             logging.exception("No se pudo actualizar el inicio con Windows.")
         self.conversation_id = core.obtener_conversacion_actual()
-        historial = core.obtener_historial(self.conversation_id)
+        historial = core.obtener_historial_con_fecha(self.conversation_id)
 
         try:
             jarvis_theme.activar(jarvis_theme.nombre_valido(core.obtener_preferencia(jarvis_theme.PREFERENCIA)))
@@ -336,8 +336,8 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
         self.mcp = GestorMCP(self.integraciones.servidores_mcp, core.APP_DIR / "logs")
         jarvis_health.registrar_proveedor(self._integration_checks)
         if historial:
-            for role, content in historial:
-                self._add_message(role, content)
+            for role, content, momento in historial:
+                self._add_message(role, content, momento=momento)
         else:
             self._add_message(
                 "assistant",
@@ -1232,9 +1232,7 @@ class JarvisApp(JarvisUIMixin, AudioPlayerMixin):
             self._live_row = fila
             burbuja = tk.Frame(fila, bg=PANEL_LIGHT, padx=14, pady=10)
             burbuja.pack(side="left", anchor="w")
-            tk.Label(
-                burbuja, text="JARVIS", bg=PANEL_LIGHT, fg=VIOLET, font=("Consolas", 8, "bold")
-            ).pack(anchor="w", pady=(0, 5))
+            self._bubble_header(burbuja, "JARVIS", PANEL_LIGHT, VIOLET, jarvis_cards.hora_mensaje())
             self._live_label = tk.Label(
                 burbuja, text="", bg=PANEL_LIGHT, fg=TEXT, justify="left", anchor="w",
                 wraplength=650, font=("Segoe UI", 11),

@@ -1330,8 +1330,12 @@ class JarvisUIMixin:
             text: str,
             audio_path: str | None = None,
             aviso: str | None = None,
+            momento=None,
         ) -> None:
-            """``aviso`` ("alarm"/"info"): recordatorio o alerta; el celular lo notifica."""
+            """``aviso`` ("alarm"/"info"): recordatorio o alerta; el celular lo notifica.
+            ``momento``: hora del mensaje (los del historial); por defecto, ahora."""
+            import jarvis_cards
+
             should_follow = self._chat_following
             is_user = role == "user"
             row = tk.Frame(self.messages, bg=PANEL)
@@ -1345,13 +1349,9 @@ class JarvisUIMixin:
             )
             bubble.pack(side="right" if is_user else "left", anchor="e" if is_user else "w")
 
-            tk.Label(
-                bubble,
-                text="TÚ" if is_user else "JARVIS",
-                bg=CYAN_DARK if is_user else PANEL_LIGHT,
-                fg=CYAN if is_user else VIOLET,
-                font=("Consolas", 8, "bold"),
-            ).pack(anchor="w", pady=(0, 5))
+            self._bubble_header(bubble, "TÚ" if is_user else "JARVIS",
+                                CYAN_DARK if is_user else PANEL_LIGHT, CYAN if is_user else VIOLET,
+                                jarvis_cards.hora_mensaje(momento))
             if is_user:
                 tk.Label(
                     bubble,
@@ -1387,6 +1387,14 @@ class JarvisUIMixin:
             self._notify_mobile(role, text, aviso)
             if should_follow:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
+
+        def _bubble_header(self, bubble: tk.Frame, quien: str, bg: str, fg: str, hora: str) -> tk.Frame:
+            """«TÚ   12/11 14:22» encima del texto de una burbuja."""
+            cabecera = tk.Frame(bubble, bg=bg)
+            cabecera.pack(anchor="w", fill="x", pady=(0, 5))
+            tk.Label(cabecera, text=quien, bg=bg, fg=fg, font=("Consolas", 8, "bold")).pack(side="left")
+            tk.Label(cabecera, text=hora, bg=bg, fg=MUTED, font=("Consolas", 8)).pack(side="left", padx=(10, 0))
+            return cabecera
 
         # --- Animaciones suaves --------------------------------------------------
 
@@ -1453,7 +1461,7 @@ class JarvisUIMixin:
                 (jarvis_cards.icono(resultado.herramienta), TEXT, ("Segoe UI Emoji", 11)),
                 (resultado.etiqueta, TEXT, ("Segoe UI", 10, "bold")),
                 (texto_estado, color, ("Consolas", 8, "bold")),
-                (jarvis_cards.resumen(resultado), MUTED, ("Consolas", 8)),
+                (f"{jarvis_cards.resumen(resultado)} · {jarvis_cards.hora_mensaje()}", MUTED, ("Consolas", 8)),
             )
             etiquetas = []
             for n, (texto, fg, fuente) in enumerate(partes):

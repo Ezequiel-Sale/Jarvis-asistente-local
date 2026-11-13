@@ -37,7 +37,9 @@ class CatalogTests(unittest.TestCase):
             for comando in seccion.comandos:
                 for frase in comando.frase.split(" / "):
                     with self.subTest(frase=frase):
-                        self.assertTrue(any(f(frase) is not None for f in detectores),
+                        # Las programadas («… dentro de 10 minutos») las crea el atajo de energía.
+                        programada = r._POWER_SHORTCUT.match(frase) is not None
+                        self.assertTrue(programada or any(f(frase) is not None for f in detectores),
                                         f"Ningún comando directo entiende «{frase}»")
 
 

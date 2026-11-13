@@ -96,6 +96,8 @@ CATALOGO: tuple[Seccion, ...] = (
     _s("⏻", "Energía",
        ("Apaga el equipo / Reinicia la PC", "Apaga o reinicia (siempre pregunta antes)."),
        ("Suspende el equipo", "Pone la PC en suspensión."),
+       ("Suspende el equipo dentro de 10 minutos / Apaga la PC a las 2",
+        "Lo programa para más tarde; al llegar la hora avisa 60 s antes y se puede cancelar."),
        ("Bloquea la pantalla", "Bloquea la sesión de Windows."),
        ("Cancela el apagado", "Frena un apagado o reinicio en curso.")),
     _s("📊", "Consultas",
