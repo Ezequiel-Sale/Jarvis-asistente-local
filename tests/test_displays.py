@@ -149,8 +149,26 @@ class PrimaryMonitorTests(unittest.TestCase):
         with self.assertRaises(d.ErrorPantalla) as context:
             d.planificar("set_primary", (2,), TRES)
         self.assertIn("1 y 3", str(context.exception))
-        with self.assertRaises(d.ErrorPantalla):
-            d.planificar("set_primary", (3,), [pantalla(1), pantalla(2), pantalla(3, activa=False)])
+        # Desactivado (p. ej. tras «modo gaming 2K»): se activa y después pasa a principal.
+        deseado, texto = d.planificar("set_primary", (3,), [pantalla(1), pantalla(2), pantalla(3, activa=False)])
+        self.assertIsNone(deseado[(ADAPTER, 103)])
+        self.assertEqual(texto, "Activé el monitor 3 (Monitor3) y ahora es el monitor principal.")
+
+    def test_inactive_primary_is_activated_then_moved_to_origin(self) -> None:
+        apagado = [pantalla(1), pantalla(2), pantalla(3, activa=False)]
+        pasos = []
+        listas = iter([(apagado, {}), (TRES, {})])
+        with patch.object(d, "listar_pantallas", side_effect=lambda mapa=None: next(listas)), \
+                patch.object(d, "validar"), patch.object(d, "guardar_configuracion", return_value="previa"), \
+                patch.object(d, "restaurar_configuracion"), \
+                patch.object(d, "_aplicar", side_effect=lambda deseado, solo_validar=False: pasos.append(
+                    ("activar", deseado[(ADAPTER, 103)]))), \
+                patch.object(d, "_config_principal", side_effect=lambda p: pasos.append(("principal", p.activa))
+                             or ([], [])), \
+                patch.object(d, "_aplicar_explicito"):
+            texto, previa, _mapa = d.aplicar("set_primary", (3,))
+        self.assertEqual(pasos, [("activar", None), ("principal", True)])
+        self.assertEqual((texto, previa), ("Activé el monitor 3 (Monitor3) y ahora es el monitor principal.", "previa"))
 
     def test_desktop_is_shifted_so_new_primary_is_at_origin(self) -> None:
         paths = [_path(0, 101), _path(1, 102), _path(2, 103)]

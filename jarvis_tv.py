@@ -70,6 +70,32 @@ APPS = {
     "flow": ("Flow", "com.cablevision.flow"),
 }
 MAX_PASOS_VOLUMEN = 30
+# Acciones de la herramienta tv_control, en el orden en que aparecen en las rutinas. «power»
+# (alterna), «wakeup» y «sleep» quedan para uso interno: la TCL ignora las dos últimas.
+ACCIONES = (
+    "power_on", "power_off", "hdmi1", "hdmi2", "hdmi3", "hdmi4", "set_volume", "volume_up",
+    "volume_down", "mute", "play_pause", "play", "pause", "stop", "next", "previous", "forward",
+    "rewind", "home", "back", "settings", "input", "up", "down", "left", "right", "ok",
+    "channel_up", "channel_down",
+)
+
+
+# Paquetes del sistema que no se ofrecen como apps (inicio, protector de pantalla, entradas,
+# ajustes, asistente…): la tele los muestra como «app actual» pero no tiene sentido abrirlos.
+_SISTEMA = ("com.google.android.apps.tv.", "com.google.android.tv", "com.google.android.katniss",
+            "com.google.android.gms", "com.google.android.backdrop", "com.android.", "com.tcl.",
+            "com.mediatek.", "android")
+
+
+def es_app_de_usuario(paquete: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z]\w*(?:\.[A-Za-z_]\w*)+", paquete or "")) and not paquete.startswith(_SISTEMA)
+
+
+def _clave_nombre(texto: str) -> str:
+    """«Star+» / «star plus» / «STAR» → «star» para comparar nombres dichos con los guardados."""
+    texto = unicodedata.normalize("NFKD", texto.casefold())
+    texto = "".join(c for c in texto if not unicodedata.combining(c)).replace("+", " plus")
+    return re.sub(r"[^a-z0-9]", "", texto)
 
 
 class ErrorTV(RuntimeError):
@@ -89,6 +115,7 @@ class EstadoTV:
     volumen_max: int | None = None
     silenciada: bool | None = None
     esperando_codigo: bool = False
+    adb: str = ""  # jarvis_adb: conectado / sin_autorizar / sin_respuesta / sin_adb ("" = sin probar)
     extra: dict = field(default_factory=dict)
 
     def como_dict(self) -> dict:
@@ -327,8 +354,17 @@ class ControlTV:
     """Conexión con la TV. ``al_cambiar`` se llama (desde otro hilo) cuando cambia el estado."""
 
     def __init__(self, carpeta: Path, al_cambiar: Callable[[], None] | None = None, fabrica=None,
-                 buscador: Callable[[float], list[tuple[str, str]]] | None = None) -> None:
+                 buscador: Callable[[float], list[tuple[str, str]]] | None = None,
+                 nombrar: Callable[[str], str] | None = None, adb=None) -> None:
         self._carpeta = carpeta
+        # Nombre legible de un paquete de Android (la app usa jarvis_app_tv.nombre_app).
+        base = nombrar or (lambda paquete: paquete.rsplit(".", 1)[-1].capitalize())
+        # Primero los nombres puestos a mano en tv.json («nombres»: {paquete: nombre}; queda en la PC).
+        self._nombrar = lambda paquete: (self._config.get("nombres") or {}).get(paquete) or base(paquete)
+        # jarvis_adb.ADB (la app lo pasa; los tests usan uno falso o ninguno): abre las apps sin
+        # enlace web y lista las instaladas.
+        self._adb = adb
+        self._adb_revisado = 0.0
         self._buscar = buscador  # para los tests; por defecto, buscar() por mDNS
         self._mac_de_ip = None   # para los tests; por defecto, mac_de_ip() (ARP)
         self._responde = None    # para los tests; por defecto, responde() (conexión TCP)
@@ -404,6 +440,7 @@ class ControlTV:
 
         def app(valor):
             self.estado.app = valor or ""
+            self._aprender_app(self.estado.app)
             self._al_cambiar()
 
         def volumen(info):
@@ -539,7 +576,9 @@ class ControlTV:
         self.estado.conectada = True
         self.estado.encendida = getattr(self._remoto, "is_on", None)
         self.estado.app = getattr(self._remoto, "current_app", None) or ""
+        self._aprender_app(self.estado.app)
         self._aprender_mac()
+        self._revisar_adb()
         self._al_cambiar()
         return True
 
@@ -620,9 +659,128 @@ class ControlTV:
         for _ in range(max(1, min(veces, MAX_PASOS_VOLUMEN))):
             self._loop.call_soon_threadsafe(remoto.send_key_command, TECLAS[nombre])
 
+    # --- apps aprendidas ----------------------------------------------------------
+    def _aprender_app(self, paquete: str) -> None:
+        """La tele no dice qué apps tiene instaladas, pero sí cuál está abierta: cada app nueva
+        (que no sea del sistema ni de la lista fija) se guarda en tv.json para ofrecerla."""
+        if not es_app_de_usuario(paquete):
+            return
+        aprendidas = self._config.setdefault("apps", {})
+        if paquete in aprendidas:
+            return
+        nombre = self._nombrar(paquete)
+        if any(_clave_nombre(nombre) == _clave_nombre(fija) for fija, _enlace in APPS.values()):
+            return  # ya está en la lista fija (Netflix, YouTube…)
+        aprendidas[paquete] = nombre
+        self._guardar_config()
+        logging.info("Aprendí una app de la tele: %s (%s).", nombre, paquete)
+
+    # --- ADB ---------------------------------------------------------------------------
+    def _revisar_adb(self, forzar: bool = False) -> None:
+        """En segundo plano, como mucho cada 10 min: conecta ADB y guarda las apps instaladas."""
+        if self._adb is None or not self.estado.host:
+            return
+        if not forzar and time.monotonic() - self._adb_revisado < 600 and self._adb_revisado:
+            return
+        self._adb_revisado = time.monotonic()
+        host = self.estado.host
+
+        def revisar() -> None:
+            try:
+                self.estado.adb = self._adb.conectar(host)
+                if self.estado.adb == "conectado":
+                    instaladas = sorted(p for p in self._adb.apps(host) if es_app_de_usuario(p))
+                    if instaladas and instaladas != self._config.get("instaladas"):
+                        self._config["instaladas"] = instaladas
+                        self._guardar_config()
+                        logging.info("Apps de la tele (por ADB): %d.", len(instaladas))
+            except Exception as error:
+                logging.info("No se pudo revisar ADB en la tele (%s).", error)
+            self._al_cambiar()
+
+        threading.Thread(target=revisar, name="JarvisTVADB", daemon=True).start()
+
+    def _paquetes_conocidos(self) -> list[str]:
+        """Instaladas (por ADB) y aprendidas (al abrirlas), sin repetir."""
+        paquetes = list(self._config.get("instaladas") or [])
+        return paquetes + [p for p in self._config.get("apps") or {} if p not in paquetes]
+
+    def apps(self) -> list[tuple[str, str]]:
+        """(clave, nombre) de las apps que se ofrecen. Con la lista de ADB: las de la lista fija que
+        están instaladas y después todas las demás; sin ella, la lista fija y las aprendidas."""
+        # El nombre se recalcula (si mejora la forma de nombrar, se corrigen las ya guardadas).
+        otras = {paquete: self._nombrar(paquete) for paquete in self._paquetes_conocidos()}
+        fijas = [(clave, nombre) for clave, (nombre, _enlace) in APPS.items()]
+        if self._config.get("instaladas"):
+            instaladas = {_clave_nombre(nombre) for nombre in otras.values()}
+            fijas = [(clave, nombre) for clave, nombre in fijas if _clave_nombre(nombre) in instaladas]
+        repetidas = {_clave_nombre(nombre) for _clave, nombre in fijas}
+        otras = {p: n for p, n in otras.items() if _clave_nombre(n) not in repetidas}
+        return fijas + sorted(otras.items(), key=lambda par: par[1].casefold())
+
+    def olvidar_app(self, paquete: str) -> bool:
+        if paquete not in (self._config.get("apps") or {}):
+            return False
+        del self._config["apps"][paquete]
+        self._guardar_config()
+        return True
+
+    def _resolver_app(self, app: str) -> tuple[str, str]:
+        """(nombre, enlace) por clave de la lista fija, por nombre (fijo o aprendido) o por paquete."""
+        texto = app.strip()
+        buscado = _clave_nombre(texto)
+        fija = APPS.get(texto.casefold()) or next(
+            ((n, e) for n, e in APPS.values() if buscado and buscado == _clave_nombre(n)), None)
+        if fija is not None:
+            nombre, enlace = fija
+            if "://" not in enlace:
+                # Paquete: el instalado puede ser otro (Paramount+ es com.cbs.ca en Argentina).
+                enlace = next((p for p in self._paquetes_conocidos()
+                               if _clave_nombre(self._nombrar(p)) == _clave_nombre(nombre)), enlace)
+            return nombre, enlace
+        for paquete in self._paquetes_conocidos():
+            nombre = self._nombrar(paquete)
+            if texto == paquete or (buscado and buscado == _clave_nombre(nombre)):
+                return nombre, paquete
+        if es_app_de_usuario(texto) or "://" in texto:
+            return texto, texto
+        parecida = self._app_parecida(texto)
+        if parecida is not None:
+            return self._resolver_app(parecida)
+        raise ErrorTV(f"No conozco la app «{texto}» en la tele. Ábrela una vez con el control de la tele "
+                      "y la aprendo; o usa el nombre del paquete de Android.")
+
+    def _app_parecida(self, texto: str, minimo: float = 0.8) -> str | None:
+        """Nombre de app que suena como ``texto`` (Whisper oye «Tripley» como «triple ey», «triplay» o
+        «triple A»), si hay uno claro; con la misma clave fonética que las ventanas («Cloudy» → Claude)."""
+        from difflib import SequenceMatcher
+
+        from jarvis_windows import clave_fonetica
+
+        buscado = clave_fonetica(texto)
+        if len(buscado) < 3:
+            return None
+        nombres = {nombre for nombre, _enlace in APPS.values()}
+        nombres |= {self._nombrar(p) for p in self._paquetes_conocidos()}
+        puntajes = sorted(((SequenceMatcher(None, buscado, clave_fonetica(n)).ratio(), n) for n in nombres),
+                          reverse=True)
+        if not puntajes or puntajes[0][0] < minimo:
+            return None
+        if len(puntajes) > 1 and puntajes[1][0] >= puntajes[0][0] - 0.05:
+            return None  # dos parecidas por igual: mejor no adivinar
+        logging.info("«%s» se tomó como la app %s de la tele (nombre parecido).", texto, puntajes[0][1])
+        return puntajes[0][1]
+
     def abrir_app(self, app: str) -> str:
-        clave = app.casefold().strip()
-        nombre, enlace = APPS.get(clave, (app, app))
+        """Enlace web por el protocolo del control; un paquete, por ADB (la TCL rechaza abrir
+        paquetes por el control). Sin ADB se intenta igual por el control."""
+        nombre, enlace = self._resolver_app(app)
+        if "://" not in enlace and self._adb is not None and self.estado.host:
+            try:
+                if self._adb.abrir(self.estado.host, enlace):
+                    return nombre
+            except Exception as error:
+                logging.info("ADB no pudo abrir %s (%s); pruebo por el control.", enlace, error)
         remoto = self._listo()
         self._loop.call_soon_threadsafe(remoto.send_launch_app_command, enlace)
         return nombre
@@ -741,6 +899,8 @@ class ControlTV:
 
     def detener(self) -> None:
         self.desconectar()
+        if self._adb is not None:
+            self._adb.detener()
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
 
@@ -845,6 +1005,12 @@ def _atras(_m):
 @_frase(rf"^(?:como\s+esta|que\s+(?:esta\s+)?(?:pasando|viendo|hay)\s+en|que\s+tiene)\s+{_TELE}$|^estado\s+de\s+{_TELE}$")
 def _estado(_m):
     return "tv_status", {}
+
+
+@_frase(rf"^(?:abre|abri|abrime|inicia|lanza)\s+(?:el\s+|la\s+)?(?P<app>[a-z0-9][a-z0-9 ]{{1,30}}?)\s+(?:en|de)\s+{_TELE}$")
+def _app_libre(m):
+    """Cualquier otro nombre («abre Star en la tele»): la herramienta lo busca entre las aprendidas."""
+    return "tv_open_app", {"app": m.group("app")}
 
 
 def detectar(texto: str) -> tuple[str, dict[str, object]] | None:

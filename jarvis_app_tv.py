@@ -8,6 +8,7 @@ Parte de ``JarvisApp`` (jarvis_app.py), que hereda de esta clase. ``self.tv`` es
 import logging
 import threading
 
+import jarvis_adb
 import jarvis_tv
 
 # Nombres de las apps que informa la tele (paquete de Android) → como se dicen.
@@ -22,6 +23,10 @@ APPS_CONOCIDAS = {
     "com.apple.atve.androidtv.appletv": "Apple TV", "com.cablevision.flow": "Flow",
     "com.google.android.apps.tv.dreamx": "el protector de pantalla", "com.tcl.tv": "una entrada HDMI",
     "com.android.tv.settings": "la configuración", "com.google.android.youtube.tvkids": "YouTube Kids",
+    # Nombre que muestra la tele cuando el paquete no lo dice bien. Los nombres de las demás apps
+    # instaladas se ponen en «nombres» de tv.json (carpeta tv/, fuera de git: no se publica qué apps hay).
+    "ar.com.flow.androidtv": "Flow", "com.cbs.ca": "Paramount+", "com.google.android.youtube.tvmusic": "YouTube Music",
+    "com.google.android.videos": "Google TV", "com.google.android.play.games": "Play Juegos",
 }
 TEXTOS_TECLA = {
     "mute": "Silencié la tele (o le devolví el sonido).", "play_pause": "Pausé o reanudé la tele.",
@@ -33,8 +38,20 @@ TEXTOS_TECLA = {
 }
 
 
+# Partes de un paquete que no dicen el nombre de la app (com.ejemplo.tripley.app → «Tripley», no «App»).
+_PARTES_GENERICAS = {
+    "com", "net", "org", "ar", "br", "es", "mx", "co", "tv", "app", "apps", "android", "androidtv", "atv",
+    "mobile", "client", "leanback", "player", "ott", "firetv", "google", "free", "launcher", "main",
+}
+
+
 def nombre_app(paquete: str) -> str:
-    return APPS_CONOCIDAS.get(paquete, paquete.rsplit(".", 1)[-1].capitalize() if paquete else "")
+    if paquete in APPS_CONOCIDAS:
+        return APPS_CONOCIDAS[paquete]
+    partes = [p for p in paquete.split(".") if p]
+    utiles = [p for p in partes if p.casefold() not in _PARTES_GENERICAS]
+    nombre = (utiles or partes or [""])[-1]
+    return nombre[:1].upper() + nombre[1:]
 
 
 def etiqueta_app(paquete: str) -> str:
@@ -153,7 +170,7 @@ class TvMixin:
     def _tv_for_mobile(self) -> dict:
         datos = self.tv.estado.como_dict()
         datos["appName"] = etiqueta_app(self.tv.estado.app)
-        datos["apps"] = [{"id": clave, "name": nombre} for clave, (nombre, _enlace) in jarvis_tv.APPS.items()]
+        datos["apps"] = [{"id": clave, "name": nombre} for clave, nombre in self.tv.apps()]
         return datos
 
     def _tv_action_from_mobile(self, accion: str) -> str:
@@ -221,9 +238,15 @@ class TvMixin:
         etiqueta = getattr(self, "tv_settings_status", None)
         if etiqueta is not None:
             try:
-                etiqueta.configure(text=texto)
+                etiqueta.configure(text=texto + ("\n" + jarvis_adb.describir(estado.adb) if estado.vinculada else ""))
             except Exception:
                 pass
+        apps = getattr(self, "_render_tv_apps", None)
+        if apps is not None:
+            try:
+                apps(self.tv.apps())
+            except Exception:
+                logging.debug("No se pudieron dibujar las apps de la tele.", exc_info=True)
         pintar = getattr(self, "_paint_tv_status", None)
         if pintar is not None:
             try:

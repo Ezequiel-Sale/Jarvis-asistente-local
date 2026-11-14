@@ -432,9 +432,10 @@ def planificar(accion: str, numeros: tuple[int, ...], pantallas: list[Pantalla])
             raise ErrorPantalla(f"Solo puedo poner como principal los monitores {permitidos}.")
         objetivo = _buscar(pantallas, numeros[0])
         if not objetivo.activa:
-            raise ErrorPantalla(
-                f"El {objetivo.descripcion} está desactivado; actívalo antes de hacerlo principal."
-            )
+            # Desactivado (p. ej. por «modo gaming 2K»): primero se extiende y después pasa a
+            # principal, como en «modo gaming 4K» justo después de prender la tele.
+            deseado[(objetivo.adapter, objetivo.target_id)] = None
+            return deseado, f"Activé el {objetivo.descripcion} y ahora es el monitor principal."
         return deseado, f"El {objetivo.descripcion} ahora es el monitor principal."
     raise ErrorPantalla(f"Acción de pantalla desconocida: {accion}")
 
@@ -567,7 +568,11 @@ def validar(accion: str, numeros: tuple[int, ...], mapa: dict[str, int] | None =
     pantallas, _ = listar_pantallas(mapa)
     deseado, descripcion = planificar(accion, numeros, pantallas)
     if accion == "set_primary":
-        _aplicar_explicito(*_config_principal(_buscar(pantallas, numeros[0])), solo_validar=True)
+        objetivo = _buscar(pantallas, numeros[0])
+        if not objetivo.activa:
+            _aplicar(deseado, solo_validar=True)  # el segundo paso depende de cómo quede
+            return descripcion
+        _aplicar_explicito(*_config_principal(objetivo), solo_validar=True)
         return descripcion
     if accion == "duplicate":
         base, copia = _par(numeros, pantallas)
@@ -591,7 +596,18 @@ def aplicar(
     # La red de seguridad debe funcionar antes de tocar nada.
     restaurar_configuracion(previa, solo_validar=True)
     if accion == "set_primary":
-        _aplicar_explicito(*_config_principal(_buscar(pantallas, numeros[0])))
+        objetivo = _buscar(pantallas, numeros[0])
+        activado = not objetivo.activa
+        if activado:
+            # Paso 1: activarlo (extendido); paso 2: moverlo al origen del escritorio.
+            _aplicar(deseado)
+            pantallas, mapa = listar_pantallas(mapa)
+            objetivo = _buscar(pantallas, numeros[0])
+        try:
+            _aplicar_explicito(*_config_principal(objetivo))
+        except YaEstaAsi:
+            if not activado:
+                raise  # ya era el principal antes de empezar
     elif accion == "duplicate":
         base, copia = _par(numeros, pantallas)
         if not (base.activa and copia.activa):

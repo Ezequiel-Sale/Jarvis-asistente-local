@@ -535,6 +535,7 @@ _CORRECCIONES_VOZ = (
     (r"^(?:initial|inicial|inissia)\b", "inicia"),  # «Inicia WhatsApp» → «Initial WhatsApp» (2026-11-11)
     (r"\bpesta[nñ]a\s+de\s+you\s+tube\b", "pestaña de YouTube"),
     (r"\byou\s+tube\b", "YouTube"),
+    (r"\ben\s+la\s+tel(?:ena|eta|el)\b", "en la tele"),  # «Abre triplay en la telena» (2026-11-13)
     # Vistos al comparar modelos con 84 órdenes sintetizadas (2026-11-13); sirven sobre todo
     # al jugar, cuando la voz vuelve al modelo «small» en el procesador.
     (r"^con\s+el\s+(v[ií]deo|volumen)\b", r"Pon el \1"),  # «Con el vídeo en pantalla completa»

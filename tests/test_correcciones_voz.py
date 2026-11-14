@@ -15,6 +15,7 @@ class CorrectionTests(unittest.TestCase):
             "deshutea la pestaña": "desmutea la pestaña",
             "sube el volumen de spoticia el 30%.": "sube el volumen de Spotify al 30 por ciento.",
             "Hey Jarbis, pausa": "Hey Jarvis pausa",
+            "Abre triplay en la telena.": "Abre triplay en la tele.",
         }
         for oido, esperado in casos.items():
             with self.subTest(oido=oido):

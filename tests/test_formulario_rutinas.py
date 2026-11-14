@@ -202,6 +202,42 @@ class FormWindowTests(_DbTestCase):
             [("media_control", {"action": "pause"}), ("set_output_device", {"device": "headphones"})],
         )
 
+    def test_tv_steps_with_clear_labels(self) -> None:
+        """Rutina «cine»: prender la tele, HDMI 1 y abrir Netflix (elegida de la lista o escrita)."""
+        guardado = Mock()
+        ventana = form.RoutineForm(self.root, self.registry, guardado)
+        ventana.nombre.set("Cine")
+        ventana.disparador.set("frase")
+        ventana.frases.set("modo cine")
+        ventana.herramienta.set("Control de la tele")
+        ventana._mostrar_campos()
+        opciones = list(ventana.campos["action"]._jarvis_enum)
+        self.assertEqual(opciones[:3], ["Encender", "Apagar", "Entrada HDMI 1"])
+        self.assertIn("Atrás", opciones)  # no «página anterior», que es del navegador
+        self.assertFalse({"power", "wakeup", "sleep", "suspender"} & set(opciones))
+        for accion in ("Encender", "Entrada HDMI 1"):
+            ventana.campos["action"].set(accion)
+            ventana._agregar()
+        ventana.herramienta.set("Abrir app en la tele")
+        ventana._mostrar_campos()
+        ventana.campos["app"].set("Netflix")
+        ventana._agregar()
+        ventana.campos["app"].set("com.otra.app")
+        ventana._agregar()
+        # Las apps aprendidas de la tele (las registra JarvisApp) también salen en la lista.
+        with patch.dict(form.SUGERENCIAS, {"tv_open_app": lambda: {"Netflix": "netflix", "Star": "com.star.app"}}):
+            ventana._mostrar_campos()
+            self.assertEqual(ventana.campos["app"]._jarvis_sugerencias, {"Netflix": "netflix", "Star": "com.star.app"})
+            self.assertEqual(form.etiqueta_valor("tv_open_app", "com.star.app"), "Star")
+        self.assertEqual(ventana.lista.get(0, "end")[1].split(". ", 1)[-1], "Control de la tele (Entrada HDMI 1)")
+        ventana._guardar()
+        rutina = routines.buscar_rutina_por_frase("modo cine")
+        self.assertEqual([(s.tool, s.arguments) for s in rutina.steps], [
+            ("tv_control", {"action": "power_on"}), ("tv_control", {"action": "hdmi1"}),
+            ("tv_open_app", {"app": "netflix"}), ("tv_open_app", {"app": "com.otra.app"})])
+        # Solo tocan la tele: una rutina por horario las puede hacer sin preguntar.
+        self.assertEqual(routines.acciones_con_permiso(["tv_control", "tv_open_app"], self.registry), [])
+
     def test_name_field_is_not_hidden_behind_its_row(self) -> None:
         ventana = form.RoutineForm(self.root, self.registry, Mock())
         # El campo debe ser hijo de la fila con la etiqueta «Nombre» (si se crea

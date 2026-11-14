@@ -393,7 +393,7 @@ def _error_automatica(bloqueantes: list[str]) -> ValueError:
         "Esta rutina no puede ser automática porque "
         + ", ".join(f"«{b}»" for b in bloqueantes)
         + " siempre pide confirmación. Solo las rutinas con acciones de riesgo "
-        "bajo (volumen, salida de audio, audio de Jarvis, abrir pestaña) pueden "
+        "bajo (volumen, salida de audio, audio de Jarvis, abrir pestaña, la tele) pueden "
         "ejecutarse sin preguntar."
     )
 

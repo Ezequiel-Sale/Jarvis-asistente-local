@@ -839,7 +839,7 @@ class ServidorMovil:
             if metodo == "GET":
                 return self._json(self.tele())
             accion = str(self._cuerpo_json(cuerpo).get("action", ""))
-            if not re.fullmatch(r"[a-z0-9_]{2,20}|app:[a-z0-9_.]{2,80}", accion):
+            if not re.fullmatch(r"[a-z0-9_]{2,20}|app:[A-Za-z0-9_.]{2,80}", accion):
                 raise _Error(400, "Acción de la tele no válida.")
             try:
                 texto = self.tele_accion(accion)

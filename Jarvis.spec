@@ -12,7 +12,8 @@ a = Analysis(
     datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.'),
            # Sensores de temperatura (LibreHardwareMonitor, MPL 2.0) y sus dependencias.
            ('vendor/LibreHardwareMonitor', 'vendor/LibreHardwareMonitor'),
-           ('vendor/PresentMon', 'vendor/PresentMon')]
+           ('vendor/PresentMon', 'vendor/PresentMon'),
+           ('vendor/adb', 'vendor/adb')]
     + collect_data_files('openwakeword') + collect_data_files('pythonnet')
     + collect_data_files('clr_loader'),
     hiddenimports=['mss.windows', 'av', 'dxcam', 'pyaudiowpatch', 'pystray._win32', 'pystray._util.win32',

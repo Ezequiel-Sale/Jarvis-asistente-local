@@ -83,8 +83,10 @@ class ControlTests(unittest.TestCase):
 
         self.cambios = Mock()
         self.en_la_red = []  # lo que «encuentra» la búsqueda por mDNS (nunca la red real)
+        conocidas = {"com.netflix.ninja": "Netflix", "com.google.android.youtube.tv": "YouTube"}
         self.control = tv.ControlTV(self.carpeta, al_cambiar=self.cambios, fabrica=fabrica,
-                                    buscador=lambda segundos: list(self.en_la_red))
+                                    buscador=lambda segundos: list(self.en_la_red),
+                                    nombrar=lambda p: conocidas.get(p, p.rsplit(".", 1)[-1].capitalize()))
         self.mac_actual = None    # lo que «responde» el ARP (nunca el real)
         self.tele_viva = True     # lo que «responde» la comprobación de conexión (nunca la real)
         self.control._mac_de_ip = lambda ip: self.mac_actual
@@ -137,6 +139,75 @@ class ControlTests(unittest.TestCase):
             "https://www.netflix.com/title", "com.otra.app"])
         with self.assertRaises(tv.ErrorTV):
             self.control.tecla("autodestruccion")
+
+    def test_learns_apps_opened_on_the_tv(self) -> None:
+        """La tele no dice qué apps tiene: Jarvis aprende las que se abren (no las del sistema ni las
+        de la lista fija), las guarda y las abre por nombre."""
+        self._vincular()
+        remoto = self.remotos[-1]
+        for paquete in ("com.disney.starplus", "com.google.android.apps.tv.dreamx", "com.tcl.tv",
+                        "com.google.android.youtube.tv", "com.netflix.ninja", "", "com.disney.starplus",
+                        "ar.com.flujo.tv"):
+            remoto.callbacks["app"](paquete)
+        aprendidas = json.loads((self.carpeta / tv.ARCHIVO_CONFIG).read_text(encoding="utf-8"))["apps"]
+        self.assertEqual(aprendidas, {"com.disney.starplus": "Starplus", "ar.com.flujo.tv": "Tv"})
+        self.assertEqual(self.control.apps()[:2], [("netflix", "Netflix"), ("youtube", "YouTube")])
+        self.assertIn(("com.disney.starplus", "Starplus"), self.control.apps())
+        # Por nombre (como se dice), por paquete o por clave de la lista fija.
+        self.assertEqual(self.control.abrir_app("Star Plus"), "Starplus")
+        self.assertEqual(self.control.abrir_app("com.otra.app"), "com.otra.app")
+        self.assertEqual(self.control.abrir_app("Disney+"), "Disney+")
+        _esperar_bucle(self.control)
+        self.assertEqual(remoto.apps, ["com.disney.starplus", "com.otra.app", "https://www.disneyplus.com"])
+        with self.assertRaises(tv.ErrorTV) as error:
+            self.control.abrir_app("una app rara")
+        self.assertIn("Ábrela una vez", str(error.exception))
+        self.assertTrue(self.control.olvidar_app("com.disney.starplus"))
+        self.assertNotIn("com.disney.starplus", dict(self.control.apps()))
+        # Otra instancia (al reiniciar Jarvis) las recuerda.
+        self.assertIn("ar.com.flujo.tv", dict(tv.ControlTV(self.carpeta).apps()))
+
+    def test_adb_lists_and_opens_apps_without_link(self) -> None:
+        """Con ADB: la lista sale de la tele (solo las fijas instaladas y el resto) y los paquetes se
+        abren por ADB, porque la TCL rechaza abrirlos por el control."""
+        class _ADBFalso:
+            def __init__(self):
+                self.abiertas = []
+            def conectar(self, host):
+                return "conectado"
+            def apps(self, host):
+                return ["com.android.tv.settings", "com.netflix.ninja", "com.ejemplo.tripley", "com.cbs.ca",
+                        "com.tcl.tv", "com.spotify.tv.android"]
+            def abrir(self, host, paquete):
+                self.abiertas.append(paquete)
+                return True
+            def detener(self):
+                pass
+
+        adb = _ADBFalso()
+        nombres = {"com.netflix.ninja": "Netflix", "com.cbs.ca": "Paramount+", "com.spotify.tv.android": "Spotify",
+                   "com.ejemplo.tripley": "Tripley"}
+        self.control._nombrar = lambda p: nombres.get(p, p)
+        self._vincular()
+        self.control._adb = adb
+        hilos = []
+        with patch.object(tv.threading, "Thread", side_effect=lambda target, **_k: hilos.append(target) or Mock()):
+            self.control._revisar_adb(forzar=True)  # lo mismo que al conectarse
+        for revisar in hilos:
+            revisar()  # el hilo «JarvisTVADB», sin hilos de verdad
+        self.assertEqual(self.control.estado.adb, "conectado")
+        self.assertEqual(self.control.apps(), [("netflix", "Netflix"), ("spotify", "Spotify"),
+                                               ("paramount", "Paramount+"), ("com.ejemplo.tripley", "Tripley")])
+        remoto = self.remotos[-1]
+        self.assertEqual(self.control.abrir_app("Tripley"), "Tripley")
+        self.assertEqual(self.control.abrir_app("paramount"), "Paramount+")  # el paquete instalado, no com.cbs.ott
+        self.assertEqual(self.control.abrir_app("netflix"), "Netflix")      # enlace web: por el control
+        _esperar_bucle(self.control)
+        self.assertEqual(adb.abiertas, ["com.ejemplo.tripley", "com.cbs.ca"])
+        # Como lo transcribe Whisper («Abre triple ey en la tele»): por parecido fonético.
+        for oido in ("triple ey", "triplay", "triple A"):
+            self.assertEqual(self.control.abrir_app(oido), "Tripley")
+        self.assertEqual(remoto.apps, ["https://www.netflix.com/title"])
 
     def test_settings_and_inputs_hold_home(self) -> None:
         """La TCL ignora SETTINGS y TV_INPUT: INICIO presionado abre el panel de Google TV."""
@@ -353,6 +424,7 @@ class PhraseTests(unittest.TestCase):
             "Abrí Netflix en la tele": ("tv_open_app", {"app": "netflix"}),
             "pon Disney Plus en la tele": ("tv_open_app", {"app": "disney"}),
             "pon la tele en HDMI 2": ("tv_control", {"action": "hdmi2"}),
+            "abre Star Plus en la tele": ("tv_open_app", {"app": "star plus"}),  # una app aprendida
             "cambia a hdmi 1 en la tele": ("tv_control", {"action": "hdmi1"}),
             "inicio en la tele": ("tv_control", {"action": "home"}),
             "¿Qué está pasando en la tele?": ("tv_status", {}),
@@ -401,9 +473,24 @@ class AppTests(unittest.TestCase):
         llamadas = [c.args[:2] for c in host.tool_registry.execute.call_args_list]
         self.assertEqual(llamadas, [("tv_open_app", {"app": "youtube"}), ("tv_control", {"action": "volume_up"})])
         host.tv.estado = tv.EstadoTV(app="com.nousguide.android.rbtv")
+        host.tv.apps.return_value = [("netflix", "Netflix"), ("com.star.app", "Star")]
         datos = JarvisApp._tv_for_mobile(host)
         self.assertEqual(datos["appName"], "Red Bull TV")
-        self.assertIn({"id": "netflix", "name": "Netflix"}, datos["apps"])
+        self.assertEqual(datos["apps"], [{"id": "netflix", "name": "Netflix"}, {"id": "com.star.app", "name": "Star"}])
+
+    def test_names_from_tv_json_win(self) -> None:
+        """Nombres puestos a mano en tv.json (fuera de git) antes que los deducidos del paquete."""
+        carpeta = Path(tempfile.mkdtemp())
+        (carpeta / tv.ARCHIVO_CONFIG).write_text(json.dumps({"nombres": {"com.ejemplo.tripley": "Tripley"}}),
+                                                 encoding="utf-8")
+        control = tv.ControlTV(carpeta, nombrar=at.nombre_app)
+        self.assertEqual(control._nombrar("com.ejemplo.tripley"), "Tripley")
+        self.assertEqual(control._nombrar("com.otraplay.app"), "Otraplay")
+
+    def test_app_names_skip_generic_parts(self) -> None:
+        self.assertEqual(at.nombre_app("com.otraplay.app"), "Otraplay")  # no «App»
+        self.assertEqual(at.nombre_app("tv.pluto.android"), "Pluto")
+        self.assertEqual(at.nombre_app("com.netflix.ninja"), "Netflix")
 
     def test_status_card_summary(self) -> None:
         """Tarjeta de estado del control (PC y celular): nombres legibles, no paquetes de Android."""
@@ -419,6 +506,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(at.resumen_estado(tv.EstadoTV())[0], "Sin vincular")
         host = Mock()
         host.tv.estado = tv.EstadoTV(app="com.google.android.apps.tv.dreamx")
+        host.tv.apps.return_value = []
         self.assertEqual(JarvisApp._tv_for_mobile(host)["appName"], "Protector de pantalla")
 
 
@@ -457,3 +545,36 @@ class MobileEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ADBTests(unittest.TestCase):
+    """Lectura de las salidas de adb (sin ejecutar adb)."""
+
+    def test_devices_and_activities(self) -> None:
+        import jarvis_adb as adb
+
+        salida = "List of devices attached\n192.168.1.102:5555\tunauthorized\nemulator-5554\toffline\n"
+        self.assertEqual(adb.interpretar_devices(salida, "192.168.1.102:5555"), adb.SIN_AUTORIZAR)
+        self.assertEqual(adb.interpretar_devices(salida.replace("unauthorized", "device"), "192.168.1.102:5555"),
+                         adb.CONECTADO)
+        self.assertEqual(adb.interpretar_devices(salida, "10.0.0.1:5555"), adb.SIN_RESPUESTA)
+        actividades = ("com.android.tv.settings/.MainSettings\n"
+                       "com.ejemplo.tripley/.ui.MainActivity\n"
+                       "com.ejemplo.tripley/.Otra\nbasura sin barra\n")
+        self.assertEqual(adb.interpretar_actividades(actividades), ["com.android.tv.settings", "com.ejemplo.tripley"])
+
+    def test_commands_sent(self) -> None:
+        import jarvis_adb as adb
+
+        pedidos = []
+
+        def ejecutar(*argumentos, tiempo=adb.TIEMPO):
+            pedidos.append(argumentos)
+            return "192.168.1.102:5555\tdevice\n" if argumentos == ("devices",) else "Events injected: 1"
+
+        cliente = adb.ADB(ejecutar)
+        self.assertTrue(cliente.abrir("192.168.1.102", "com.ejemplo.tripley"))
+        self.assertEqual(pedidos[0], ("connect", "192.168.1.102:5555"))
+        self.assertIn("monkey", pedidos[-1])
+        with self.assertRaises(ValueError):
+            cliente.abrir("192.168.1.102", "com.x; reboot")

@@ -488,7 +488,6 @@ def crear_registro_herramientas(
     )
     import jarvis_tv
 
-    acciones_tv = ["power_on", "power_off", "set_volume", *jarvis_tv.TECLAS]
     registry.register(
         "tv_control",
         (
@@ -500,7 +499,7 @@ def crear_registro_herramientas(
         {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": acciones_tv},
+                "action": {"type": "string", "enum": list(jarvis_tv.ACCIONES)},
                 "steps": {"type": "integer", "minimum": 1, "maximum": jarvis_tv.MAX_PASOS_VOLUMEN},
                 "level": {"type": "integer", "minimum": 0, "maximum": 100},
             },
@@ -508,7 +507,7 @@ def crear_registro_herramientas(
             "additionalProperties": False,
         },
         host._tool_tv_control,
-        risk=ToolRisk.MEDIUM,
+        risk=ToolRisk.LOW,  # solo la tele: así las rutinas por horario la usan sin preguntar
         label="Control de la tele",
         timeout_seconds=75,
     )
@@ -516,16 +515,17 @@ def crear_registro_herramientas(
         "tv_open_app",
         (
             "Abre una app en el televisor (Google TV): " + ", ".join(jarvis_tv.APPS)
-            + ", o el nombre de paquete de Android de otra app."
+            + ", el nombre de otra app que la tele ya usó (Jarvis las aprende) o su paquete de Android."
         ),
         {
             "type": "object",
-            "properties": {"app": {"type": "string", "minLength": 2, "maxLength": 120}},
+            "properties": {"app": {"type": "string", "minLength": 2, "maxLength": 120,
+                                   "examples": list(jarvis_tv.APPS)}},
             "required": ["app"],
             "additionalProperties": False,
         },
         host._tool_tv_open_app,
-        risk=ToolRisk.MEDIUM,
+        risk=ToolRisk.LOW,
         label="Abrir app en la tele",
         timeout_seconds=20,
     )

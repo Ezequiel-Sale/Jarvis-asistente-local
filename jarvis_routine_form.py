@@ -19,6 +19,7 @@ from collections.abc import Callable
 from tkinter import filedialog, messagebox, ttk
 
 import jarvis_routines
+import jarvis_tv
 from jarvis_theme import BG, CYAN, ERROR, HOVER, MUTED, PANEL, PANEL_LIGHT, TEXT
 from jarvis_tool_registry import ToolError, ToolRegistry, ToolRisk
 
@@ -45,6 +46,24 @@ ETIQUETAS_VALOR = {
     "channel_up": "canal siguiente", "channel_down": "canal anterior",
     "hdmi1": "HDMI 1", "hdmi2": "HDMI 2", "hdmi3": "HDMI 3", "hdmi4": "HDMI 4",
 }
+# Las de la tele, aparte: «back», «forward», «sleep»… ya significan otra cosa en otras acciones.
+ETIQUETAS_POR_HERRAMIENTA = {
+    "tv_control": {
+        "power_on": "Encender", "power_off": "Apagar",
+        "hdmi1": "Entrada HDMI 1", "hdmi2": "Entrada HDMI 2", "hdmi3": "Entrada HDMI 3", "hdmi4": "Entrada HDMI 4",
+        "set_volume": "Fijar volumen (0-100)", "volume_up": "Subir volumen", "volume_down": "Bajar volumen",
+        "mute": "Silenciar / quitar silencio", "play_pause": "Reproducir / pausar", "play": "Reproducir",
+        "pause": "Pausar", "stop": "Detener", "next": "Siguiente", "previous": "Anterior",
+        "forward": "Adelantar", "rewind": "Retroceder", "home": "Ir al inicio", "back": "Atrás",
+        "settings": "Abrir el panel (configuración)", "input": "Abrir el panel (entradas)",
+        "up": "Flecha arriba", "down": "Flecha abajo", "left": "Flecha izquierda", "right": "Flecha derecha",
+        "ok": "OK", "channel_up": "Canal siguiente", "channel_down": "Canal anterior",
+    },
+    "tv_open_app": {clave: nombre for clave, (nombre, _enlace) in jarvis_tv.APPS.items()},
+}
+# Sugerencias que dependen de la app en marcha (las apps aprendidas de la tele):
+# herramienta → función que devuelve {etiqueta: valor}. Las registra JarvisApp.
+SUGERENCIAS: dict[str, Callable[[], dict[str, str]]] = {}
 ETIQUETAS_CAMPO = {
     "percentage": "Porcentaje", "device": "Salida", "enabled": "Activado", "url": "Dirección web",
     "name": "Nombre", "action": "Acción", "query": "Búsqueda", "play_index": "Resultado nº",
@@ -82,14 +101,29 @@ def herramientas_disponibles(registry: ToolRegistry) -> list[tuple[str, str]]:
     return sorted(disponibles, key=lambda par: par[0].casefold())
 
 
+def _sugerencias(herramienta: str) -> dict[str, str]:
+    funcion = SUGERENCIAS.get(herramienta)
+    if funcion is None:
+        return {}
+    try:
+        return dict(funcion())
+    except Exception:
+        return {}
+
+
+def etiqueta_valor(herramienta: str, valor: object) -> str:
+    propias = ETIQUETAS_POR_HERRAMIENTA.get(herramienta, {})
+    if str(valor) not in propias:
+        propias = {v: e for e, v in _sugerencias(herramienta).items()} or propias
+    return propias.get(str(valor)) or ETIQUETAS_VALOR.get(str(valor), str(valor))
+
+
 def describir_paso(registry: ToolRegistry, paso: dict) -> str:
     try:
         etiqueta = registry.get(paso["tool"]).display_name
     except ToolError:
         etiqueta = paso["tool"]
-    detalles = ", ".join(
-        ETIQUETAS_VALOR.get(str(valor), str(valor)) for valor in paso["arguments"].values()
-    )
+    detalles = ", ".join(etiqueta_valor(paso["tool"], valor) for valor in paso["arguments"].values())
     return f"{etiqueta} ({detalles})" if detalles else etiqueta
 
 
@@ -344,7 +378,7 @@ class RoutineForm:
             texto = ETIQUETAS_CAMPO.get(clave, clave) + ("" if clave in requeridos else " (opcional)")
             tk.Label(fila, text=texto, bg=PANEL, fg=TEXT, width=28, anchor="w").pack(side="left")
             if "enum" in definicion:
-                opciones = [ETIQUETAS_VALOR.get(str(v), str(v)) for v in definicion["enum"]]
+                opciones = [etiqueta_valor(nombre, v) for v in definicion["enum"]]
                 variable = tk.StringVar(value=opciones[0] if clave in requeridos else "")
                 ttk.Combobox(
                     fila, textvariable=variable, values=([""] if clave not in requeridos else []) + opciones,
@@ -363,6 +397,13 @@ class RoutineForm:
                 variable = tk.BooleanVar(value=False)
                 tk.Checkbutton(fila, variable=variable, bg=PANEL, selectcolor=PANEL_LIGHT,
                                activebackground=PANEL).pack(side="left")
+            elif "examples" in definicion:
+                # Lista con sugerencias (p. ej. las apps de la tele) que admite escribir otro valor.
+                sugerencias = (_sugerencias(nombre)
+                               or {etiqueta_valor(nombre, v): v for v in definicion["examples"]})
+                variable = tk.StringVar(value="")
+                ttk.Combobox(fila, textvariable=variable, values=list(sugerencias), width=30).pack(side="left")
+                variable._jarvis_sugerencias = sugerencias  # type: ignore[attr-defined]
             else:
                 variable = tk.StringVar(value="")
                 self._entrada(fila, variable, 36).pack(side="left", fill="x", expand=True)
@@ -392,6 +433,9 @@ class RoutineForm:
             mapa = getattr(variable, "_jarvis_enum", None)
             if mapa is not None:
                 valor = mapa.get(valor, "")
+            sugerencias = getattr(variable, "_jarvis_sugerencias", None)
+            if sugerencias is not None:
+                valor = sugerencias.get(valor, valor)
             valores[clave] = valor
         try:
             argumentos = argumentos_desde_campos(self.registry.get(nombre).parameters, valores)

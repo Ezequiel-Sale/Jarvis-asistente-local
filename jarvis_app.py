@@ -40,6 +40,9 @@ import jarvis_hardware
 import jarvis_routines
 import jarvis_system
 import jarvis_theme
+import jarvis_adb
+import jarvis_app_tv
+import jarvis_routine_form
 import jarvis_tv
 from jarvis_actions import CancellationToken
 from audio_capture import GrabadorAudio
@@ -256,7 +259,10 @@ class JarvisApp(
         )
         # «Deshaz lo último»: cada acción reversible anota cómo volver atrás.
         # Televisor (Google TV): certificado y configuración en APP_DIR/tv.
-        self.tv = jarvis_tv.ControlTV(core.APP_DIR / "tv", al_cambiar=lambda: self.events.put(("tv_state",)))
+        self.tv = jarvis_tv.ControlTV(core.APP_DIR / "tv", al_cambiar=lambda: self.events.put(("tv_state",)),
+                                      nombrar=jarvis_app_tv.nombre_app, adb=jarvis_adb.ADB())
+        # Las apps aprendidas de la tele también se ofrecen en el formulario de rutinas.
+        jarvis_routine_form.SUGERENCIAS["tv_open_app"] = lambda: {n: c for c, n in self.tv.apps()}
         self.deshacer = jarvis_deshacer.Historial({
             "volumen": jarvis_audio_devices.obtener_volumen_sistema,
             "volumen_app": jarvis_media.leer_volumen_aplicacion,

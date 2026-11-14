@@ -951,14 +951,24 @@ class JarvisUIMixin:
             navegación, volumen y reproducción), entradas y apps. Los botones van por ``_tv_button``."""
             import jarvis_tv
 
-            cuerpo = tk.Frame(page, bg=BG, padx=28, pady=18)
+            cuerpo = tk.Frame(page, bg=BG, padx=20, pady=18)
             cuerpo.pack(fill="both", expand=True)
             columnas = tk.Frame(cuerpo, bg=BG)
             columnas.pack(anchor="nw")
             izquierda = tk.Frame(columnas, bg=BG)
-            izquierda.pack(side="left", anchor="n")
+            izquierda.grid(row=0, column=0, sticky="n")
             derecha = tk.Frame(columnas, bg=BG)
-            derecha.pack(side="left", anchor="n", padx=(16, 0))
+            derecha.grid(row=0, column=1, sticky="n", padx=(16, 0))
+
+            def acomodar(evento):
+                """Ventana angosta: las entradas y apps pasan debajo del control (antes se cortaban)."""
+                ancho = izquierda.winfo_reqwidth() + derecha.winfo_reqwidth() + 16 + 40  # + márgenes
+                if evento.width < ancho:
+                    derecha.grid_configure(row=1, column=0, padx=0, sticky="nw")
+                else:
+                    derecha.grid_configure(row=0, column=1, padx=(16, 0), sticky="n")
+
+            cuerpo.bind("<Configure>", acomodar, add="+")
 
             estilos = {  # fondo, texto, fondo al pasar el mouse
                 "normal": (PANEL_LIGHT, TEXT, HOVER), "acento": (CYAN, BG, CYAN),
@@ -1038,18 +1048,33 @@ class JarvisUIMixin:
             entradas = tarjeta(derecha, "ENTRADAS")
             marco = tk.Frame(entradas, bg=PANEL)
             marco.pack(anchor="w")
-            for n in range(1, 5):
-                tecla(marco, f"HDMI {n}", f"hdmi{n}", "suave", ancho=8).pack(side="left", padx=(0, 6))
+            for n in range(1, 5):  # 2×2: la columna derecha queda angosta y entra al lado del control
+                tecla(marco, f"HDMI {n}", f"hdmi{n}", "suave", ancho=10).grid(row=(n - 1) // 2, column=(n - 1) % 2,
+                                                                             padx=(0, 6), pady=(0, 6))
             apps = tarjeta(derecha, "APPS")
             rejilla = tk.Frame(apps, bg=PANEL)
             rejilla.pack(anchor="w")
-            for i, (clave, (nombre, _enlace)) in enumerate(jarvis_tv.APPS.items()):
-                tecla(rejilla, nombre, f"app:{clave}", ancho=12, tam=10).grid(row=i // 3, column=i % 3,
-                                                                              padx=(0, 6), pady=(0, 6))
+            tk.Label(apps, text="Las apps que abras con el control de la tele aparecen acá solas.", bg=PANEL,
+                     fg=MUTED, font=("Segoe UI", 8), wraplength=240, justify="left").pack(anchor="w", pady=(4, 0))
+            self._tv_apps_grid, self._tv_apps_key = rejilla, None
+
+            def dibujar_apps(lista):
+                """Rehace la rejilla si cambió la lista (fijas + aprendidas)."""
+                if lista == self._tv_apps_key or not rejilla.winfo_exists():
+                    return
+                self._tv_apps_key = list(lista)
+                for hijo in rejilla.winfo_children():
+                    hijo.destroy()
+                for i, (clave, nombre) in enumerate(lista):
+                    tecla(rejilla, nombre, f"app:{clave}", ancho=12, tam=10).grid(row=i // 2, column=i % 2,
+                                                                                  padx=(0, 6), pady=(0, 6))
+
+            self._render_tv_apps = dibujar_apps
+            dibujar_apps([(clave, nombre) for clave, (nombre, _enlace) in jarvis_tv.APPS.items()])
             ayuda = tarjeta(derecha, "POR VOZ")
             tk.Label(ayuda, text="«prende la tele» · «sube el volumen de la tele» · «abre Netflix en la tele» · "
                      "«pon la tele en HDMI 1» · «pausa la tele»", bg=PANEL, fg=MUTED, font=("Segoe UI", 9),
-                     wraplength=330, justify="left").pack(anchor="w")
+                     wraplength=240, justify="left").pack(anchor="w")
 
         def _paint_tv_status(self, nombre: str, corto: str, detalle: str, tono: str) -> None:
             """Tarjeta de estado de la página 📺 TELE (la llama ``_refresh_tv_views``)."""
