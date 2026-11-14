@@ -1543,11 +1543,50 @@ class JarvisUIMixin:
 
         def _update_scroll_region(self, event) -> None:
             self.chat_canvas.configure(scrollregion=event.widget.master.bbox("all"))
+            self._fit_chat_text(ultimas=3)  # lo recién agregado (tarjetas, burbujas)
             if self._chat_following:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
 
         def _resize_messages(self, event) -> None:
             self.chat_canvas.itemconfigure(self.messages_window, width=event.width)
+            if event.width != getattr(self, "_chat_fit_width", None):
+                self._chat_fit_width = event.width
+                self.chat_canvas.after_idle(self._fit_chat_text)
+
+        # Lo que ocupan los márgenes de la fila, la tarjeta o la burbuja y alguna sangría.
+        _MARGEN_CHAT = 120
+
+        def _fit_chat_text(self, ultimas: int | None = None) -> None:
+            """Ningún texto del chat pasa del ancho visible. Las tarjetas y burbujas usan anchos fijos
+            (620-680 px) que con la ventana angosta se cortaban por los dos lados; cada una guarda su
+            máximo y se achica (o vuelve a crecer) con el chat."""
+            try:
+                ancho = self.chat_canvas.winfo_width()
+            except tk.TclError:
+                return
+            if ancho <= 1:
+                return
+            limite = max(200, ancho - self._MARGEN_CHAT)
+            filas = self.messages.winfo_children()
+            pendientes = list(filas[-ultimas:] if ultimas else filas)
+            while pendientes:
+                widget = pendientes.pop()
+                pendientes.extend(widget.winfo_children())
+                clase = widget.winfo_class()
+                try:
+                    if clase == "Label":
+                        maximo = getattr(widget, "_jarvis_wrap", None)
+                        if maximo is None:
+                            maximo = int(float(str(widget.cget("wraplength")) or 0))
+                            widget._jarvis_wrap = maximo
+                        if maximo > 0 and int(float(str(widget.cget("wraplength")))) != min(maximo, limite):
+                            widget.configure(wraplength=min(maximo, limite))
+                    elif clase == "Text" and getattr(widget, "_jarvis_ancho_px", None):
+                        columnas = max(2, -(-min(widget._jarvis_ancho_px, limite) // widget._jarvis_px_letra))
+                        if int(widget.cget("width")) != columnas:
+                            widget.configure(width=columnas)
+                except (tk.TclError, ValueError):
+                    continue
 
         def _on_mousewheel(self, event) -> None:
             units = int(-event.delta / 120)
@@ -2026,6 +2065,7 @@ class JarvisUIMixin:
                     caja.configure(height=alto)
 
             caja.bind("<Configure>", ajustar_alto, add="+")
+            caja._jarvis_ancho_px, caja._jarvis_px_letra = ancho_px, max(1, normal.measure("0"))  # _fit_chat_text
             return caja
 
         def _on_enter(self, event):
