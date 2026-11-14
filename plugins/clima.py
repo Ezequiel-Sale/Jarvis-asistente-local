@@ -236,7 +236,16 @@ def consultar_clima(city: str = "", day: str = "today") -> str:
         timeout=TIMEOUT_HTTP,
     )
     respuesta.raise_for_status()
-    return formatear_clima(lugar, respuesta.json(), day, "°F" if fahrenheit else "°C")
+    texto = formatear_clima(lugar, respuesta.json(), day, "°F" if fahrenheit else "°C")
+    if not city.strip() and day == "today":
+        # El mismo dato que muestra el panel de inicio: al preguntar, el panel se actualiza también.
+        try:
+            import jarvis_dashboard
+
+            jarvis_dashboard.guardar_clima(texto)
+        except Exception:
+            pass
+    return texto
 
 
 def procesar_comando(texto: str, contexto) -> str | None:

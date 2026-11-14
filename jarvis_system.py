@@ -39,7 +39,9 @@ def carpetas_juegos(discos=None, steam=None) -> list[Path]:
         steam = bibliotecas_steam()
     programas = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
     # «Games» de la carpeta del usuario (p. ej. C:\Users\…\Games\Hookshot, un emulador).
-    candidatas = [*GAME_DIRECTORIES, Path.home() / "Games", *steam, programas / "Epic Games"]
+    # Netmarble instala cada juego en su carpeta (p. ej. «7dsgb», The Seven Deadly Sins: Grand Cross).
+    candidatas = [*GAME_DIRECTORIES, Path.home() / "Games", *steam, programas / "Epic Games",
+                  programas / "Netmarble" / "Netmarble Game"]
     candidatas += [disco / sub for disco in discos for sub in GAME_FOLDERS_PER_DISK]
     vistas, carpetas = set(), []
     for carpeta in candidatas:

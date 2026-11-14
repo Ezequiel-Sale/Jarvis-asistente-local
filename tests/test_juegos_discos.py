@@ -1,5 +1,6 @@
 """Juegos en las carpetas «Games» de todos los discos y elección del ejecutable (carpetas temporales)."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,7 +23,7 @@ class FoldersTests(unittest.TestCase):
         (disco_d / "SteamLibrary" / "steamapps" / "common").mkdir(parents=True)
         (disco_e / "Games").mkdir()
         usuario = Path(tempfile.mkdtemp())  # sin «Games»: no se usa la carpeta real del usuario
-        with patch.object(s, "GAME_DIRECTORIES", ()), patch.object(s.Path, "home", return_value=usuario):
+        with patch.object(s, "GAME_DIRECTORIES", ()), patch.object(s.Path, "home", return_value=usuario),                 patch.dict(os.environ, {"ProgramFiles": tempfile.mkdtemp()}):  # sin la Netmarble real
             carpetas = s.carpetas_juegos(discos=[disco_d, disco_e], steam=[])
         self.assertEqual(carpetas, [disco_d / "Games", disco_d / "Epic Games",
                                     disco_d / "SteamLibrary" / "steamapps" / "common", disco_e / "Games"])
@@ -31,7 +32,7 @@ class FoldersTests(unittest.TestCase):
         # C:\Users\…\Games (p. ej. con un emulador): la usan el lanzador y el modo juego.
         usuario = Path(tempfile.mkdtemp())
         _exe(usuario / "Games" / "Hookshot" / "hookshot.exe")
-        with patch.object(s, "GAME_DIRECTORIES", ()), patch.object(s.Path, "home", return_value=usuario):
+        with patch.object(s, "GAME_DIRECTORIES", ()), patch.object(s.Path, "home", return_value=usuario),                 patch.dict(os.environ, {"ProgramFiles": tempfile.mkdtemp()}):  # sin la Netmarble real
             self.assertEqual(s.carpetas_juegos(discos=[], steam=[]), [usuario / "Games"])
 
     def test_same_game_twice_uses_the_first_place(self) -> None:

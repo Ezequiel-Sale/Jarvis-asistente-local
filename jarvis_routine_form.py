@@ -72,6 +72,7 @@ ETIQUETAS_CAMPO = {
     "delay_seconds": "Dentro de (segundos)", "at": "Fecha y hora (AAAA-MM-DD HH:MM)",
     "what": "Qué", "city": "Ciudad", "day": "Día", "match": "Título contiene",
     "steps": "Pasos", "level": "Volumen (0-100)",
+    "program": "Programa (ventana)", "button": "Texto del botón", "wait_seconds": "Esperar hasta (segundos)",
 }
 DIAS = ("L", "M", "X", "J", "V", "S", "D")
 DISPARADORES = (

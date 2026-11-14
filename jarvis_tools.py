@@ -618,6 +618,30 @@ def crear_registro_herramientas(
         label="Abrir programa",
         timeout_seconds=15,
     )
+    import jarvis_botones
+
+    registry.register(
+        "press_window_button",
+        (
+            "Pulsa, sin mover el mouse, el botón con el texto indicado (button, p. ej. «Jugar») en la "
+            "ventana de un programa (program, p. ej. «Netmarble Launcher»); espera hasta wait_seconds a "
+            "que aparezca. Útil en rutinas después de abrir un launcher."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "program": {"type": "string", "minLength": 2, "maxLength": 80},
+                "button": {"type": "string", "minLength": 1, "maxLength": 60},
+                "wait_seconds": {"type": "integer", "minimum": 1, "maximum": jarvis_botones.ESPERA_MAXIMA},
+            },
+            "required": ["program", "button"],
+            "additionalProperties": False,
+        },
+        lambda program, button, wait_seconds=60: jarvis_botones.pulsar_boton(program, button, wait_seconds),
+        risk=ToolRisk.MEDIUM,
+        label="Pulsar botón en una ventana",
+        timeout_seconds=jarvis_botones.ESPERA_MAXIMA + 10,
+    )
     jarvis_media.registrar_herramientas(registry, verificadores)
     jarvis_reminders.registrar_herramientas(
         registry, verificador=verificadores.get("set_reminder")

@@ -79,6 +79,11 @@ def saludo(hora: int) -> str:
     return "Buenas noches"
 
 
+def guardar_clima(texto: str) -> None:
+    """El clima recién consultado («¿qué clima hace?») pasa al panel y reinicia su media hora."""
+    _cache["clima"] = (time.monotonic(), texto)
+
+
 def _cacheado(clave: str, segundos: float, funcion):
     ahora = time.monotonic()
     guardado = _cache.get(clave)

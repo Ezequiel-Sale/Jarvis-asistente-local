@@ -186,6 +186,23 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class WeatherPanelTests(unittest.TestCase):
+    def test_asking_the_weather_refreshes_the_panel(self) -> None:
+        """«¿Qué clima hace?» deja el dato nuevo en el panel (antes mostraba el de hasta 30 min atrás)."""
+        from plugins import clima
+
+        self.addCleanup(panel._cache.pop, "clima", None)
+        panel._cache["clima"] = (time.monotonic(), "viejo")
+        lugar = {"name": "Ciudad", "latitude": 1.0, "longitude": 2.0}
+        respuesta = Mock(json=Mock(return_value={}))
+        with patch.dict(clima._preferencias, {"obtener": lambda clave: None}),                 patch.object(clima, "_lugar_guardado", return_value=lugar),                 patch.object(clima.requests, "get", return_value=respuesta),                 patch.object(clima, "formatear_clima", return_value="nuevo"):
+            self.assertEqual(clima.consultar_clima(), "nuevo")
+            self.assertEqual(panel._cacheado("clima", panel.CACHE_CLIMA, lambda: "otro"), "nuevo")
+            with patch.object(clima, "buscar_ciudad", return_value=lugar),                     patch.object(clima, "formatear_clima", return_value="de Lima"):
+                clima.consultar_clima(city="Lima")  # otra ciudad: el panel no cambia
+        self.assertEqual(panel._cache["clima"][1], "nuevo")
+
+
 class VoiceCleanupTests(unittest.TestCase):
     def test_voice_command_frees_transcription_state_before_starting(self) -> None:
         """Por voz, Jarvis llega «ocupado» por la transcripción: antes eso cortaba la limpieza."""

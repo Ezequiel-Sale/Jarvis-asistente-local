@@ -29,7 +29,7 @@ ICONOS = {
     "list_top_processes": "📊", "list_open_applications": "🗂",
     "get_current_datetime": "🕒", "morning_briefing": "☀", "undo_last_action": "↶",
     "show_commands_help": "?", "find_files": "🔎", "open_file": "📄",
-    "tv_control": "📺", "tv_open_app": "📺", "tv_status": "📺", "get_jarvis_diagnostics": "🩺",
+    "tv_control": "📺", "tv_open_app": "📺", "tv_status": "📺", "press_window_button": "🖱", "get_jarvis_diagnostics": "🩺",
 }
 ORIGENES = {"directo": "directo", "agente": "IA", "rutina": "rutina", "frase": "frase", "pantalla": "pantalla"}
 
@@ -173,6 +173,8 @@ def _frase_especifica(herramienta: str, a: dict) -> str | None:
         import jarvis_tv
 
         return f"Abrir {jarvis_tv.APPS.get(str(a['app']), (a['app'],))[0]} en la tele"
+    if herramienta == "press_window_button" and a.get("button"):
+        return f"Pulsar «{a['button']}» en {a.get('program', 'la ventana')}"
     if herramienta == "screen_click":
         texto = f" y escribir «{a['text']}»" if a.get("text") else ""
         return f"Hacer clic en la pantalla{texto}"
