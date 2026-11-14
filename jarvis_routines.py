@@ -63,6 +63,8 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "set_voice",
         "video_fullscreen",
         "video_theater",
+        "tv_control",
+        "tv_open_app",
         "apply_gpu_profile",
         "open_new_browser_tab",
         "navigate_browser",

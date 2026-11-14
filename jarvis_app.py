@@ -40,6 +40,7 @@ import jarvis_hardware
 import jarvis_routines
 import jarvis_system
 import jarvis_theme
+import jarvis_tv
 from jarvis_actions import CancellationToken
 from audio_capture import GrabadorAudio
 import pystray
@@ -64,6 +65,7 @@ from jarvis_app_pantalla import PantallaMixin
 from jarvis_app_movil import MovilMixin
 from jarvis_app_ajustes import AjustesMixin
 from jarvis_app_juego import JuegoMixin
+from jarvis_app_tv import TvMixin
 from jarvis_app_herramientas import HerramientasMixin
 from jarvis_player import AudioPlayerMixin
 from jarvis_tool_registry import ToolRisk
@@ -90,6 +92,7 @@ class JarvisApp(
     MovilMixin,
     AjustesMixin,
     JuegoMixin,
+    TvMixin,
     HerramientasMixin,
     JarvisUIMixin,
     AudioPlayerMixin,
@@ -216,6 +219,8 @@ class JarvisApp(
             encendido=jarvis_encendido.diagnostico,
             abrir_link=self._open_link_from_mobile,
             portapapeles=(jarvis_archivos.leer_portapapeles, jarvis_archivos.escribir_portapapeles),
+            tele=self._tv_for_mobile,
+            tele_accion=self._tv_action_from_mobile,
         )
         self.fps_meter = jarvis_fps.MedidorFPS()
         self._stt_vocabulary_cache: tuple[float, list[str]] = (0.0, [])
@@ -250,6 +255,8 @@ class JarvisApp(
             verificadores=crear_verificadores(self),
         )
         # «Deshaz lo último»: cada acción reversible anota cómo volver atrás.
+        # Televisor (Google TV): certificado y configuración en APP_DIR/tv.
+        self.tv = jarvis_tv.ControlTV(core.APP_DIR / "tv", al_cambiar=lambda: self.events.put(("tv_state",)))
         self.deshacer = jarvis_deshacer.Historial({
             "volumen": jarvis_audio_devices.obtener_volumen_sistema,
             "volumen_app": jarvis_media.leer_volumen_aplicacion,
@@ -373,6 +380,7 @@ class JarvisApp(
         self._vectors_synced = False
         self.root.after(30000, self._check_learning)
         self.root.after(20000, self._check_morning_brief)
+        self.root.after(60000, self._check_tv_connection)
         try:
             # Un aviso de cierre que quedó de antes (Jarvis ya estaba cerrado) no cuenta.
             (core.APP_DIR / self.SOLICITUD_CIERRE).unlink(missing_ok=True)
@@ -622,6 +630,10 @@ class JarvisApp(
         except Exception:
             logging.exception("No se pudo preparar la voz a texto en la GPU.")
         try:
+            self.tv.conectar()  # si está vinculada; se reconecta sola si la tele se apaga
+        except Exception:
+            logging.exception("No se pudo conectar con la tele.")
+        try:
             core.limpiar_respuestas()
         except Exception:
             logging.exception("No se pudieron limpiar las respuestas antiguas.")
@@ -866,6 +878,14 @@ class JarvisApp(
                             self._set_status("OLLAMA NO DISPONIBLE", ERROR)
                     elif event[0] == "device_event":
                         self._handle_device_event(event[1])
+                    elif event[0] == "tv_state":
+                        self._refresh_tv_views()
+                    elif event[0] in ("tv_info", "tv_error"):
+                        self._refresh_tv_views()
+                        self._set_status(event[1][:70].upper(), ERROR if event[0] == "tv_error" else CYAN)
+                        estado = getattr(self, "tv_settings_hint", None)
+                        if estado is not None:
+                            estado.configure(text=event[1], fg=ERROR if event[0] == "tv_error" else MUTED)
                     elif event[0] == "game_mode_info":
                         self._quiet_message(event[1])
                     elif event[0] == "show_commands_help":
@@ -1320,6 +1340,7 @@ class JarvisApp(
         self.fps_meter.detener()
         self.games_watcher.stop()
         self.services_watcher.stop()
+        self.tv.detener()
         self.gpu_watcher.stop()
         self.taskbar_watcher.stop()
         self._stop_wakeword()

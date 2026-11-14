@@ -20,7 +20,9 @@ a = Analysis(
                    # Interfaces COM de UI Automation ya generadas (clic en pantalla).
                    'uiautomation', *collect_submodules('comtypes.gen'),
                    'pythonnet', 'clr', 'clr_loader', *collect_submodules('clr_loader'),
-                   'jarvis_stt_gpu', 'tokenizers'],
+                   'jarvis_stt_gpu', 'tokenizers',
+                   # Tele (jarvis_tv): se importan dentro de funciones.
+                   *collect_submodules('androidtvremote2'), *collect_submodules('zeroconf')],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

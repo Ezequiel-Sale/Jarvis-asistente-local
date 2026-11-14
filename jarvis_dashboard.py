@@ -49,7 +49,7 @@ def estado_movil(vigilante, *, discos, memoria, fps=None, juegos=()) -> dict:
     historial = [
         {"t": round(momento - inicio, 1), "gpu": _redondeo(m.gpu), "gpuHot": _redondeo(m.gpu_punto_caliente),
          "cpu": _redondeo(m.cpu), "gpuLoad": _redondeo(m.gpu_carga), "cpuLoad": _redondeo(m.cpu_carga),
-         "ram": round(ram, 1)}
+         "ram": round(ram, 1), "gpuMem": _redondeo(jarvis_hardware.vram_pct(m))}
         for momento, m, ram in list(vigilante.historial)
     ]
     return {
@@ -58,6 +58,9 @@ def estado_movil(vigilante, *, discos, memoria, fps=None, juegos=()) -> dict:
         "gpuLoad": _redondeo(t.gpu_carga), "cpuLoad": _redondeo(t.cpu_carga),
         "ram": {"pct": round(memoria.percent, 1), "used": memoria.total - memoria.available,
                 "total": memoria.total},
+        "gpuMem": None if jarvis_hardware.vram_pct(t) is None else {
+            "pct": round(jarvis_hardware.vram_pct(t), 1), "used": int(t.gpu_mem_usada * 1024**2),
+            "total": int(t.gpu_mem_total * 1024**2)},
         "disks": [{"unit": d.unidad, "name": d.nombre, "free": d.libre, "total": d.total,
                    "pct": round(d.usado_pct, 1)} for d in discos],
         "history": historial,

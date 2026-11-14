@@ -33,6 +33,24 @@ class HardwareTests(unittest.TestCase):
         self.assertEqual(t.cpu_carga, 17.6)
         self.assertIsNone(t.cpu)
 
+    def test_video_memory_from_driver_or_d3d(self) -> None:
+        """Memoria de video (MB): «GPU Memory …» del driver; si falta, los contadores de D3D.
+        Con varias GPU, solo la primera."""
+        vram = [
+            ("GpuAmd", "AMD Radeon RX 9070 XT", "SmallData", "GPU Memory Total", 16304.0),
+            ("GpuAmd", "AMD Radeon RX 9070 XT", "SmallData", "D3D Dedicated Memory Total", 16191.5),
+            ("GpuAmd", "AMD Radeon RX 9070 XT", "SmallData", "D3D Dedicated Memory Used", 14057.1),
+            ("GpuAmd", "AMD Radeon RX 9070 XT", "SmallData", "GPU Memory Used", 14057.0),
+            ("GpuIntel", "Intel UHD", "SmallData", "GPU Memory Used", 99.0),
+        ]
+        t = hw.interpretar(LECTURAS + vram)
+        self.assertEqual((t.gpu_mem_usada, t.gpu_mem_total), (14057.0, 16304.0))
+        self.assertAlmostEqual(hw.vram_pct(t), 86.2, places=1)
+        self.assertIn("memoria de video 13.7 de 16 GB", hw.describir(t)[0])
+        solo_d3d = hw.interpretar(LECTURAS + [x for x in vram if x[3].startswith("D3D")])
+        self.assertEqual((solo_d3d.gpu_mem_usada, solo_d3d.gpu_mem_total), (14057.1, 16191.5))
+        self.assertIsNone(hw.vram_pct(hw.interpretar(LECTURAS)))
+
     def test_zero_degrees_means_no_data(self) -> None:
         sensor = SimpleNamespace(Value=0.0)
         self.assertIsNone(hw._valor(sensor))

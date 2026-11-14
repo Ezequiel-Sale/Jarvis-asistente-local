@@ -86,7 +86,7 @@ class JarvisUIMixin:
             pages.grid_rowconfigure(0, weight=1)
             pages.grid_columnconfigure(0, weight=1)
             self._pages: dict[str, tk.Frame] = {}
-            for nombre in ("inicio", "chat", "rutinas", "juegos", "ajustes"):
+            for nombre in ("inicio", "chat", "rutinas", "juegos", "tele", "ajustes"):
                 pagina = tk.Frame(pages, bg=BG)
                 pagina.grid(row=0, column=0, sticky="nsew")
                 self._pages[nombre] = pagina
@@ -94,6 +94,7 @@ class JarvisUIMixin:
             self._build_settings_page(self._pages["ajustes"])
             self._build_home_page(self._pages["inicio"])
             self._build_games_page(self._pages["juegos"])
+            self._build_tv_page(self._pages["tele"])
             self._current_page = ""
             self._show_page("inicio")  # el panel de inicio es la primera página
             self._draw_orb()
@@ -230,7 +231,7 @@ class JarvisUIMixin:
 
             self._nav_buttons: dict[str, tk.Button] = {}
             for nombre, texto in (("inicio", "⌂   INICIO"), ("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"),
-                                  ("juegos", "🎮   JUEGOS"), ("ajustes", "⚙   AJUSTES")):
+                                  ("juegos", "🎮   JUEGOS"), ("tele", "📺   TELE"), ("ajustes", "⚙   AJUSTES")):
                 boton = tk.Button(
                     sidebar, text=texto, anchor="w", command=lambda n=nombre: self._show_page(n),
                     bg=PANEL, fg=MUTED, activebackground=HOVER, activeforeground=TEXT,
@@ -246,7 +247,7 @@ class JarvisUIMixin:
             ).pack(side="bottom", anchor="w", padx=22, pady=18)
 
         _PAGE_TITLES = {"inicio": "INICIO", "chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES",
-                        "juegos": "JUEGOS", "ajustes": "AJUSTES"}
+                        "juegos": "JUEGOS", "tele": "TELEVISOR", "ajustes": "AJUSTES"}
 
         def _show_page(self, nombre: str) -> None:
             if nombre not in self._pages:
@@ -273,6 +274,8 @@ class JarvisUIMixin:
                 self._refresh_morning_brief_button()  # pudo cambiar por voz
             if nombre == "inicio":
                 self._refresh_home_now()
+            if nombre in ("tele", "ajustes"):
+                self._refresh_tv_views()
             if nombre == "juegos" and getattr(self, "_games", None) is None:
                 self._load_games_page()
 
@@ -557,6 +560,7 @@ class JarvisUIMixin:
                  "en una hora deja de hacerlo y te avisa.",
                  "gpu_profile_button", "⚡  UNDERVOLT …", self._toggle_gpu_profile)
             self._build_game_mode_settings(cuerpo)
+            self._build_tv_settings(cuerpo)
             fila("Resumen de la mañana",
                  "La primera vez que usas la PC por la mañana, Jarvis te dice el clima, tus avisos y rutinas "
                  "de hoy y cómo está el equipo. Se pide cuando quieras con «buenos días».",
@@ -794,7 +798,7 @@ class JarvisUIMixin:
             salud.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
             self._home_bars = {}
             for clave, nombre in (("gpu", "GPU"), ("gpu_hot", "GPU punto caliente"), ("gpu_load", "Carga GPU"),
-                                  ("cpu", "CPU"), ("cpu_load", "Carga CPU"), ("ram", "Memoria RAM")):
+                                  ("gpu_mem", "Memoria GPU"), ("cpu", "CPU"), ("cpu_load", "Carga CPU"), ("ram", "Memoria RAM")):
                 self._home_bars[clave] = self._home_bar_row(salud.jarvis_cuerpo, nombre)
             # Una barra por disco instalado; se rehacen si cambian (p. ej. al conectar uno).
             self._home_disks = tk.Frame(salud.jarvis_cuerpo, bg=PANEL)
@@ -902,6 +906,12 @@ class JarvisUIMixin:
                     self._set_home_bar(clave, None, "sin dato")
                 else:
                     self._set_home_bar(clave, valor / 100, f"{valor:.0f} %")
+            vram = hw.vram_pct(s)
+            if vram is None:
+                self._set_home_bar("gpu_mem", None, "sin dato")
+            else:
+                self._set_home_bar("gpu_mem", vram / 100, f"{vram:.0f} % · {s.gpu_mem_usada / 1024:.1f}/"
+                                   f"{s.gpu_mem_total / 1024:.0f} GB", alerta=vram >= 95)
             self._set_home_bar("ram", datos.ram_pct / 100, f"{datos.ram_pct:.0f} % · {datos.ram_texto}",
                                alerta=datos.ram_pct >= 90)
             self._render_home_disks(datos.discos)
@@ -935,6 +945,143 @@ class JarvisUIMixin:
                 f"Voz        {'lista' if voz else ('iniciando…' if voz is None else 'sin conexión')}\n"
                 f"Sensores   {'LibreHardwareMonitor' if not hw.sensores.error else 'no disponibles'}"
             ))
+
+        def _build_tv_page(self, page: tk.Frame) -> None:
+            """Control remoto de la tele (Google TV): tarjeta de estado, control (encendido, cruz,
+            navegación, volumen y reproducción), entradas y apps. Los botones van por ``_tv_button``."""
+            import jarvis_tv
+
+            cuerpo = tk.Frame(page, bg=BG, padx=28, pady=18)
+            cuerpo.pack(fill="both", expand=True)
+            columnas = tk.Frame(cuerpo, bg=BG)
+            columnas.pack(anchor="nw")
+            izquierda = tk.Frame(columnas, bg=BG)
+            izquierda.pack(side="left", anchor="n")
+            derecha = tk.Frame(columnas, bg=BG)
+            derecha.pack(side="left", anchor="n", padx=(16, 0))
+
+            estilos = {  # fondo, texto, fondo al pasar el mouse
+                "normal": (PANEL_LIGHT, TEXT, HOVER), "acento": (CYAN, BG, CYAN),
+                "prender": (CYAN_DARK, CYAN, ACCENT_ACTIVE), "apagar": (PANEL_LIGHT, ERROR, HOVER),
+                "suave": (PANEL_LIGHT, CYAN, HOVER),
+            }
+
+            def tecla(padre, texto, accion, estilo="normal", ancho=6, alto=1, tam=11):
+                fondo, color, encima = estilos[estilo]
+                boton = tk.Button(padre, text=texto, command=lambda: self._tv_button(accion), bg=fondo, fg=color,
+                                  activebackground=encima, activeforeground=color, relief="flat", bd=0,
+                                  width=ancho, height=alto, cursor="hand2", highlightthickness=0,
+                                  font=("Segoe UI", tam, "bold" if estilo == "acento" else "normal"))
+                boton.bind("<Enter>", lambda _e: boton.configure(bg=encima))
+                boton.bind("<Leave>", lambda _e: boton.configure(bg=fondo))
+                return boton
+
+            def tarjeta(padre, titulo=None):
+                marco = tk.Frame(padre, bg=PANEL, padx=20, pady=16, highlightthickness=1, highlightbackground=BORDER)
+                marco.pack(fill="x", pady=(0, 12))
+                if titulo:
+                    tk.Label(marco, text=titulo, bg=PANEL, fg=MUTED,
+                             font=("Consolas", 8, "bold")).pack(anchor="w", pady=(0, 10))
+                return marco
+
+            def fila(padre, pady=(0, 8)):
+                marco = tk.Frame(padre, bg=PANEL)
+                marco.pack(pady=pady)
+                return marco
+
+            # Estado
+            estado = tarjeta(izquierda)
+            arriba = tk.Frame(estado, bg=PANEL)
+            arriba.pack(fill="x")
+            tk.Label(arriba, text="📺", bg=PANEL, fg=TEXT, font=("Segoe UI Emoji", 20)).pack(side="left", padx=(0, 12))
+            textos = tk.Frame(arriba, bg=PANEL)
+            textos.pack(side="left", fill="x", expand=True)
+            linea = tk.Frame(textos, bg=PANEL)
+            linea.pack(anchor="w")
+            self.tv_page_name = tk.Label(linea, text="La tele", bg=PANEL, fg=TEXT, font=("Segoe UI", 13, "bold"))
+            self.tv_page_name.pack(side="left")
+            self.tv_page_pill = tk.Label(linea, text="…", bg=PANEL_LIGHT, fg=MUTED, font=("Segoe UI", 8, "bold"),
+                                         padx=8, pady=1)
+            self.tv_page_pill.pack(side="left", padx=(10, 0))
+            self.tv_page_detail = tk.Label(textos, text="Conectando con la tele…", bg=PANEL, fg=MUTED,
+                                           font=("Segoe UI", 10), anchor="w")
+            self.tv_page_detail.pack(anchor="w", pady=(2, 0))
+
+            # Control
+            control = tarjeta(izquierda, "CONTROL")
+            energia = fila(control, pady=(0, 14))
+            tecla(energia, "⏻  Prender", "power_on", "prender", ancho=14).pack(side="left", padx=4)
+            tecla(energia, "⏻  Apagar", "power_off", "apagar", ancho=14).pack(side="left", padx=4)
+
+            cruz = tk.Frame(control, bg=PANEL)
+            cruz.pack(pady=(0, 14))
+            for texto, accion, f, c, estilo in (("▲", "up", 0, 1, "normal"), ("◀", "left", 1, 0, "normal"),
+                                                ("OK", "ok", 1, 1, "acento"), ("▶", "right", 1, 2, "normal"),
+                                                ("▼", "down", 2, 1, "normal")):
+                tecla(cruz, texto, accion, estilo, ancho=5, alto=2, tam=12).grid(row=f, column=c, padx=3, pady=3)
+
+            navegar = fila(control, pady=(0, 14))
+            for texto, accion in (("↩  Atrás", "back"), ("⌂  Inicio", "home"), ("⚙  Panel", "settings")):
+                tecla(navegar, texto, accion, ancho=10).pack(side="left", padx=4)
+
+            abajo = tk.Frame(control, bg=PANEL)
+            abajo.pack()
+            for f, (titulo, botones) in enumerate((
+                    ("VOLUMEN", (("−", "volume_down"), ("🔇", "mute"), ("+", "volume_up"))),
+                    ("REPRODUCCIÓN", (("◀◀", "rewind"), ("▶ ❚❚", "play_pause"), ("▶▶", "forward"))))):
+                tk.Label(abajo, text=titulo, bg=PANEL, fg=MUTED, font=("Consolas", 8, "bold"),
+                         anchor="w").grid(row=f, column=0, sticky="w", padx=(0, 12))
+                for c, (texto, accion) in enumerate(botones, start=1):
+                    tecla(abajo, texto, accion, ancho=5, tam=10).grid(row=f, column=c, padx=3, pady=3)
+
+            # Entradas, apps y frases
+            entradas = tarjeta(derecha, "ENTRADAS")
+            marco = tk.Frame(entradas, bg=PANEL)
+            marco.pack(anchor="w")
+            for n in range(1, 5):
+                tecla(marco, f"HDMI {n}", f"hdmi{n}", "suave", ancho=8).pack(side="left", padx=(0, 6))
+            apps = tarjeta(derecha, "APPS")
+            rejilla = tk.Frame(apps, bg=PANEL)
+            rejilla.pack(anchor="w")
+            for i, (clave, (nombre, _enlace)) in enumerate(jarvis_tv.APPS.items()):
+                tecla(rejilla, nombre, f"app:{clave}", ancho=12, tam=10).grid(row=i // 3, column=i % 3,
+                                                                              padx=(0, 6), pady=(0, 6))
+            ayuda = tarjeta(derecha, "POR VOZ")
+            tk.Label(ayuda, text="«prende la tele» · «sube el volumen de la tele» · «abre Netflix en la tele» · "
+                     "«pon la tele en HDMI 1» · «pausa la tele»", bg=PANEL, fg=MUTED, font=("Segoe UI", 9),
+                     wraplength=330, justify="left").pack(anchor="w")
+
+        def _paint_tv_status(self, nombre: str, corto: str, detalle: str, tono: str) -> None:
+            """Tarjeta de estado de la página 📺 TELE (la llama ``_refresh_tv_views``)."""
+            if getattr(self, "tv_page_name", None) is None:
+                return
+            fondo, color = {"on": (CYAN_DARK, CYAN), "error": (PANEL_LIGHT, ERROR)}.get(tono, (PANEL_LIGHT, MUTED))
+            self.tv_page_name.configure(text=nombre)
+            self.tv_page_pill.configure(text=corto.upper(), bg=fondo, fg=color)
+            self.tv_page_detail.configure(text=detalle or " ")
+
+        def _build_tv_settings(self, cuerpo: tk.Frame) -> None:
+            """Tarjeta «Televisor»: buscar la tele en la red, vincularla con su código y olvidarla."""
+            marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+            marco.pack(fill="x", pady=(0, 10))
+            tk.Label(marco, text="Televisor", bg=PANEL, fg=TEXT, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+            self.tv_settings_status = tk.Label(marco, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 9),
+                                               wraplength=640, justify="left")
+            self.tv_settings_status.pack(anchor="w", pady=(2, 2))
+            self.tv_settings_hint = tk.Label(marco, text="Google TV / Android TV en la misma red. Se vincula una "
+                                             "vez con el código que muestra la tele.", bg=PANEL, fg=MUTED,
+                                             font=("Segoe UI", 9), wraplength=640, justify="left")
+            self.tv_settings_hint.pack(anchor="w", pady=(0, 8))
+            botones = tk.Frame(marco, bg=PANEL)
+            botones.pack(anchor="w")
+            self._ui_button(botones, "🔎  BUSCAR", self._tv_search, fg=MUTED).pack(side="left")
+            self._ui_button(botones, "🔗  VINCULAR", self._tv_pair_start).pack(side="left", padx=(8, 0))
+            self.tv_code_entry = tk.Entry(botones, width=10, bg=PANEL_LIGHT, fg=TEXT, insertbackground=CYAN,
+                                          relief="flat", font=("Consolas", 12), highlightthickness=1,
+                                          highlightbackground=BORDER, highlightcolor=CYAN)
+            self.tv_code_entry.pack(side="left", padx=(16, 0), ipady=4)
+            self._ui_button(botones, "CONFIRMAR", self._tv_pair_finish).pack(side="left", padx=(8, 0))
+            self._ui_button(botones, "OLVIDAR", self._tv_forget, fg=MUTED).pack(side="left", padx=(16, 0))
 
         def _build_game_mode_settings(self, cuerpo: tk.Frame) -> None:
             """Modo juego: silencio de Jarvis y programas que se cierran mientras juegas."""

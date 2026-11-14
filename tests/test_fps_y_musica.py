@@ -71,7 +71,8 @@ class FpsTests(unittest.TestCase):
 class StatusTests(unittest.TestCase):
     def test_history_and_status_for_phone(self) -> None:
         reloj = {"t": 100.0}
-        lecturas = iter([hw.Temperaturas(gpu=50, gpu_carga=10), hw.Temperaturas(gpu=60, gpu_carga=95)])
+        lecturas = iter([hw.Temperaturas(gpu=50, gpu_carga=10),
+                         hw.Temperaturas(gpu=60, gpu_carga=95, gpu_mem_usada=4096.0, gpu_mem_total=16384.0)])
         vigilante = hw.VigilanteSalud(queue.Queue(), leer=lambda: next(lecturas), reloj=lambda: reloj["t"],
                                       memoria=lambda: 42.0)
         vigilante.revisar_una_vez()
@@ -84,6 +85,8 @@ class StatusTests(unittest.TestCase):
         self.assertEqual([h["t"] for h in datos["history"]], [0.0, 3.0])
         self.assertEqual(datos["history"][0]["gpuLoad"], 10)
         self.assertEqual(datos["ram"], {"pct": 42.0, "used": 16, "total": 32})
+        self.assertEqual(datos["gpuMem"], {"pct": 25.0, "used": 4096 * 1024**2, "total": 16384 * 1024**2})
+        self.assertEqual([h["gpuMem"] for h in datos["history"]], [None, 25.0])
         self.assertEqual(datos["disks"], [{"unit": "C:", "name": "", "free": 10, "total": 100, "pct": 90.0}])
         self.assertEqual((datos["fps"], datos["games"]), ({"fps": 60}, ["Hades"]))
         self.assertEqual(datos["limits"]["gpu"], hw.LIMITE_GPU)

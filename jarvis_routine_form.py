@@ -37,6 +37,13 @@ ETIQUETAS_VALOR = {
     "back": "página anterior", "forward": "página siguiente", "reload": "recargar la página (F5)",
     "date": "fecha", "time": "hora", "both": "fecha y hora",
     "today": "hoy", "tomorrow": "mañana", "memory": "memoria", "cpu": "procesador",
+    # Tele (tv_control). «back» ya es «página anterior» (navegador); en la tele es lo mismo: atrás.
+    "power_on": "encender", "power_off": "apagar", "volume_up": "subir volumen",
+    "volume_down": "bajar volumen", "set_volume": "fijar volumen", "play_pause": "reproducir/pausar",
+    "rewind": "retroceder", "home": "inicio", "up": "arriba", "down": "abajo", "left": "izquierda",
+    "right": "derecha", "ok": "OK", "settings": "ajustes", "input": "menú de entradas",
+    "channel_up": "canal siguiente", "channel_down": "canal anterior",
+    "hdmi1": "HDMI 1", "hdmi2": "HDMI 2", "hdmi3": "HDMI 3", "hdmi4": "HDMI 4",
 }
 ETIQUETAS_CAMPO = {
     "percentage": "Porcentaje", "device": "Salida", "enabled": "Activado", "url": "Dirección web",
@@ -45,6 +52,7 @@ ETIQUETAS_CAMPO = {
     "mute": "Silenciar", "target": "Programa o archivo", "kind": "Tipo", "text": "Texto",
     "delay_seconds": "Dentro de (segundos)", "at": "Fecha y hora (AAAA-MM-DD HH:MM)",
     "what": "Qué", "city": "Ciudad", "day": "Día", "match": "Título contiene",
+    "steps": "Pasos", "level": "Volumen (0-100)",
 }
 DIAS = ("L", "M", "X", "J", "V", "S", "D")
 DISPARADORES = (

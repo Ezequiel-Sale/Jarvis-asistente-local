@@ -26,6 +26,7 @@ class StatusActivity : JarvisActivity() {
         Metric("gpu", "GPU", "°C", 110f, "gpu"),
         Metric("gpuHot", "GPU punto caliente", "°C", 110f, "gpuHot"),
         Metric("gpuLoad", "Carga GPU", "%", 100f, null),
+        Metric("gpuMem", "Memoria GPU (VRAM)", "%", 100f, null),
         Metric("cpu", "CPU", "°C", 110f, "cpu"),
         Metric("cpuLoad", "Carga CPU", "%", 100f, null),
         Metric("ram", "Memoria RAM", "%", 100f, null),
@@ -124,15 +125,16 @@ class StatusActivity : JarvisActivity() {
     private fun render(data: JSONObject) {
         val limits = data.optJSONObject("limits") ?: JSONObject()
         val history = data.optJSONArray("history") ?: JSONArray()
-        val ram = data.optJSONObject("ram")
         for (metric in metrics) {
-            val current = if (metric.key == "ram") ram?.optDouble("pct")?.toFloat() else number(data, metric.key)
+            // RAM y VRAM llegan como {pct, used, total}; el resto, como número.
+            val memory = if (metric.key == "ram" || metric.key == "gpuMem") data.optJSONObject(metric.key) else null
+            val current = if (memory != null) memory.optDouble("pct").toFloat() else number(data, metric.key)
             val limit = metric.limitKey?.let { number(limits, it) }
             val hot = current != null && limit != null && current >= limit
             metric.value.text = when {
                 current == null -> "sin dato"
-                metric.key == "ram" && ram != null ->
-                    "%.0f %%  ·  %.1f / %.0f GB".format(current, ram.optLong("used") / GB, ram.optLong("total") / GB)
+                memory != null ->
+                    "%.0f %%  ·  %.1f / %.0f GB".format(current, memory.optLong("used") / GB, memory.optLong("total") / GB)
                 else -> "%.0f %s".format(current, metric.unit)
             }
             metric.value.setTextColor(getColor(if (hot) R.color.error else R.color.cyan))

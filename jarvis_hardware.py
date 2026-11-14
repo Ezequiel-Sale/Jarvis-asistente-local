@@ -48,6 +48,8 @@ class Temperaturas:
     gpu_punto_caliente: float | None = None
     gpu_memoria: float | None = None
     gpu_carga: float | None = None
+    gpu_mem_usada: float | None = None  # MB de memoria de video (VRAM) en uso
+    gpu_mem_total: float | None = None  # MB
     gpu_nombre: str = ""
     cpu_nombre: str = ""
 
@@ -82,6 +84,18 @@ def interpretar(lecturas: list[tuple[str, str, str, str, float | None]]) -> Temp
                 datos["cpu_carga"] = valor
         elif tipo_hw.startswith("Gpu"):
             datos.setdefault("gpu_nombre", nombre_hw)
+            if nombre_hw != datos["gpu_nombre"]:
+                continue  # con varias GPU, todo de la primera
+            if tipo == "SmallData":  # MB; «GPU Memory …» del driver o, si no, los contadores de D3D
+                if nombre == "GPU Memory Used":
+                    datos["gpu_mem_usada"] = valor
+                elif nombre == "GPU Memory Total":
+                    datos["gpu_mem_total"] = valor
+                elif nombre == "D3D Dedicated Memory Used":
+                    datos.setdefault("d3d_usada", valor)
+                elif nombre == "D3D Dedicated Memory Total":
+                    datos.setdefault("d3d_total", valor)
+                continue
             if tipo == "Temperature" and nombre == "GPU Core":
                 datos["gpu"] = valor
             elif tipo == "Temperature" and nombre == "GPU Hot Spot":
@@ -90,7 +104,17 @@ def interpretar(lecturas: list[tuple[str, str, str, str, float | None]]) -> Temp
                 datos["gpu_memoria"] = valor
             elif tipo == "Load" and nombre == "GPU Core":
                 datos["gpu_carga"] = valor
+    d3d_usada, d3d_total = datos.pop("d3d_usada", None), datos.pop("d3d_total", None)
+    if "gpu_mem_usada" not in datos or "gpu_mem_total" not in datos:
+        datos["gpu_mem_usada"], datos["gpu_mem_total"] = d3d_usada, d3d_total
     return Temperaturas(**datos)
+
+
+def vram_pct(t: Temperaturas) -> float | None:
+    """Porcentaje de la memoria de video en uso (None sin dato)."""
+    if t.gpu_mem_usada is None or not t.gpu_mem_total:
+        return None
+    return min(100.0, t.gpu_mem_usada * 100 / t.gpu_mem_total)
 
 
 class SensoresHardware:
@@ -177,6 +201,8 @@ def describir(t: Temperaturas) -> list[str]:
             partes.append(f"punto caliente {_grados(t.gpu_punto_caliente)}")
         if t.gpu_carga is not None:
             partes.append(f"carga {t.gpu_carga:.0f} %")
+        if vram_pct(t) is not None:
+            partes.append(f"memoria de video {t.gpu_mem_usada / 1024:.1f} de {t.gpu_mem_total / 1024:.0f} GB")
         lineas.append(", ".join(partes) + ".")
     if t.cpu is not None:
         lineas.append(f"CPU a {_grados(t.cpu)}.")

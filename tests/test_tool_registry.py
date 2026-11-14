@@ -58,6 +58,15 @@ class _TestHost:
     def _tool_restore_display(self, routine: str = "") -> str:
         return self._record(("restore_display", routine), "display restored")
 
+    def _tool_tv_control(self, action: str, steps: int = 1, level: int | None = None) -> str:
+        return self._record(("tv", action, steps, level), "tv")
+
+    def _tool_tv_open_app(self, app: str) -> str:
+        return self._record(("tv_app", app), "tv app")
+
+    def _tool_tv_status(self) -> str:
+        return "tv status"
+
     def _tool_undo_last_action(self) -> str:
         return self._record(("undo",), "undo")
 
@@ -117,7 +126,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 45)
+        self.assertEqual(len(tools), 48)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -130,6 +139,9 @@ class ToolRegistryTests(unittest.TestCase):
                 "undo_last_action",
                 "find_files",
                 "open_file",
+                "tv_control",
+                "tv_open_app",
+                "tv_status",
                 "set_reminder",
                 "list_reminders",
                 "cancel_reminder",

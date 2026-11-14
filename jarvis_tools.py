@@ -486,6 +486,57 @@ def crear_registro_herramientas(
         timeout_seconds=15,
         record_result=False,
     )
+    import jarvis_tv
+
+    acciones_tv = ["power_on", "power_off", "set_volume", *jarvis_tv.TECLAS]
+    registry.register(
+        "tv_control",
+        (
+            "Controla el televisor (Google TV) por la red: power_on/power_off (encender/apagar), "
+            "volume_up/volume_down (steps = pasos), set_volume (level 0-100), mute, play/pause/play_pause, "
+            "next/previous/forward/rewind, home, back, up/down/left/right/ok, hdmi1…hdmi4 (entrada), "
+            "settings, input. Solo para la tele, no para la PC."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": acciones_tv},
+                "steps": {"type": "integer", "minimum": 1, "maximum": jarvis_tv.MAX_PASOS_VOLUMEN},
+                "level": {"type": "integer", "minimum": 0, "maximum": 100},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+        host._tool_tv_control,
+        risk=ToolRisk.MEDIUM,
+        label="Control de la tele",
+        timeout_seconds=75,
+    )
+    registry.register(
+        "tv_open_app",
+        (
+            "Abre una app en el televisor (Google TV): " + ", ".join(jarvis_tv.APPS)
+            + ", o el nombre de paquete de Android de otra app."
+        ),
+        {
+            "type": "object",
+            "properties": {"app": {"type": "string", "minLength": 2, "maxLength": 120}},
+            "required": ["app"],
+            "additionalProperties": False,
+        },
+        host._tool_tv_open_app,
+        risk=ToolRisk.MEDIUM,
+        label="Abrir app en la tele",
+        timeout_seconds=20,
+    )
+    registry.register(
+        "tv_status",
+        "Solo lectura. Si la tele está encendida, qué app tiene abierta y su volumen.",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        host._tool_tv_status,
+        label="Estado de la tele",
+        timeout_seconds=15,
+    )
     registry.register(
         "show_commands_help",
         (

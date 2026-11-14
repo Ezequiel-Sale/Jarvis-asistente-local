@@ -48,6 +48,11 @@
             android:exported="false"
             android:screenOrientation="portrait" />
         <activity
+            android:name=".TvActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+        <activity
             android:name=".StatusActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
             android:exported="false"

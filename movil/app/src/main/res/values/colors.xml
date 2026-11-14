@@ -10,5 +10,7 @@
     <color name="text">#E8F0FA</color>
     <color name="muted">#8293A8</color>
     <color name="error">#FF7188</color>
+    <color name="error_dark">#3A1724</color>
+    <color name="hover">#2A4A60</color>
     <color name="border">#193246</color>
 </resources>

@@ -54,7 +54,7 @@ class GameActivity : JarvisActivity() {
 
         val grid = GridLayout(this).apply { columnCount = 2 }
         val names = listOf("gpu" to "GPU", "gpuHot" to "PUNTO CALIENTE", "gpuLoad" to "CARGA GPU",
-            "cpuLoad" to "CARGA CPU", "cpu" to "CPU", "ram" to "RAM")
+            "gpuMem" to "VRAM", "cpuLoad" to "CARGA CPU", "cpu" to "CPU", "ram" to "RAM")
         val built = HashMap<String, TextView>()
         for ((key, name) in names) {
             val box = LinearLayout(this).apply {
@@ -116,7 +116,7 @@ class GameActivity : JarvisActivity() {
             frame.text = "${measured.optString("app")} · ${measured.optDouble("frameMs")} ms por cuadro"
         }
         for ((key, view) in tiles) {
-            val number = if (key == "ram") data.optJSONObject("ram")?.optDouble("pct")
+            val number = if (key == "ram" || key == "gpuMem") data.optJSONObject(key)?.optDouble("pct")
             else if (data.isNull(key)) null else data.optDouble(key)
             val unit = if (key in setOf("gpu", "gpuHot", "cpu")) "°" else "%"
             val limit = if (limits.has(key)) limits.optDouble(key) else null

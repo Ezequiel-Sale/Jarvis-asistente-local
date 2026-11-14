@@ -25,6 +25,8 @@ logs/
 integraciones.json
 
 # --- Secretos ---
+# Certificado y clave con los que la tele reconoce a Jarvis (jarvis_tv).
+tv/
 .env
 .env.*
 !.env.example

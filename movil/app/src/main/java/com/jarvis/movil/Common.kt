@@ -61,12 +61,13 @@ abstract class JarvisActivity : Activity() {
     }
 }
 
-/** Pestañas de abajo: Chat · Pantalla · Música · Equipo · Ajustes. */
+/** Pestañas de abajo: Chat · Pantalla · Música · Tele · Equipo · Ajustes. */
 object Tabs {
     private val items = listOf(
         Triple("chat", "💬\nChat", MainActivity::class.java),
         Triple("screen", "🖥\nPantalla", ScreenActivity::class.java),
         Triple("music", "🎵\nMúsica", MusicActivity::class.java),
+        Triple("tv", "📺\nTele", TvActivity::class.java),
         Triple("status", "📊\nEquipo", StatusActivity::class.java),
         Triple("settings", "⚙\nAjustes", SettingsActivity::class.java),
     )

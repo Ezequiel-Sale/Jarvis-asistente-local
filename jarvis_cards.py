@@ -28,7 +28,8 @@ ICONOS = {
     "get_weather": "☁", "web_search": "🔎", "get_headset_battery": "🔋", "get_system_status": "📊",
     "list_top_processes": "📊", "list_open_applications": "🗂",
     "get_current_datetime": "🕒", "morning_briefing": "☀", "undo_last_action": "↶",
-    "show_commands_help": "?", "find_files": "🔎", "open_file": "📄", "get_jarvis_diagnostics": "🩺",
+    "show_commands_help": "?", "find_files": "🔎", "open_file": "📄",
+    "tv_control": "📺", "tv_open_app": "📺", "tv_status": "📺", "get_jarvis_diagnostics": "🩺",
 }
 ORIGENES = {"directo": "directo", "agente": "IA", "rutina": "rutina", "frase": "frase", "pantalla": "pantalla"}
 
@@ -158,6 +159,20 @@ def _frase_especifica(herramienta: str, a: dict) -> str | None:
                 "sleep": "Suspender el equipo"}.get(accion)
     if herramienta == "set_theme" and a.get("theme"):
         return f"Cambiar el aspecto de Jarvis al tema «{a['theme']}»"
+    if herramienta == "tv_control" and accion:
+        if accion.startswith("hdmi"):
+            return f"Poner la tele en la entrada HDMI {accion[4:]}"
+        if accion in ("volume_up", "volume_down"):
+            return f"{'Subir' if accion == 'volume_up' else 'Bajar'} el volumen de la tele ({a.get('steps', 1)} pasos)"
+        if accion == "set_volume":
+            return f"Poner el volumen de la tele al {a.get('level', '?')} %"
+        return {"power_on": "Encender la tele", "power_off": "Apagar la tele", "mute": "Silenciar la tele",
+                "play": "Dar play en la tele", "pause": "Pausar la tele", "play_pause": "Pausar o reanudar la tele",
+                "home": "Ir al inicio de la tele", "back": "Volver atrás en la tele"}.get(accion, f"Tele: {accion}")
+    if herramienta == "tv_open_app" and a.get("app"):
+        import jarvis_tv
+
+        return f"Abrir {jarvis_tv.APPS.get(str(a['app']), (a['app'],))[0]} en la tele"
     if herramienta == "screen_click":
         texto = f" y escribir «{a['text']}»" if a.get("text") else ""
         return f"Hacer clic en la pantalla{texto}"

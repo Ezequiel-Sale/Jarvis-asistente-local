@@ -23,3 +23,5 @@ winrt-Windows.Media.Control==4!10.0.28000.2957
 winrt-Windows.Storage.Streams==4!10.0.28000.2957
 uiautomation==2.0.29
 pythonnet==3.2.1
+androidtvremote2==0.3.3
+zeroconf==0.154.0

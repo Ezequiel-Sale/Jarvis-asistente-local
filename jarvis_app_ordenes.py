@@ -17,6 +17,7 @@ import jarvis_memory
 import jarvis_reminders
 import jarvis_routines
 import jarvis_screen_actions
+import jarvis_tv
 import jarvis_system
 import jarvis_voz_stream
 import logging
@@ -83,6 +84,10 @@ class OrdenesMixin:
         rutina = self._find_phrase_routine(text)
         if rutina is not None:
             self._start_phrase_routine(rutina, text)
+            return
+        orden_tele = jarvis_tv.detectar(text)  # antes que volumen/multimedia: «… de la tele»
+        if orden_tele is not None:
+            self._start_direct_tool_action(*orden_tele, text)
             return
         pedido_pantalla = jarvis_screen_actions.detectar_comando(text)
         if pedido_pantalla is not None:
@@ -224,6 +229,10 @@ class OrdenesMixin:
             rutina = self._find_phrase_routine(transcript)
             if rutina is not None:
                 self.events.put(("phrase_routine", rutina, transcript))
+                return
+            orden_tele = jarvis_tv.detectar(transcript)  # antes que volumen/multimedia
+            if orden_tele is not None:
+                self.events.put(("system_query", *orden_tele, transcript))
                 return
             pedido_pantalla = jarvis_screen_actions.detectar_comando(transcript)
             if pedido_pantalla is not None:
@@ -543,6 +552,7 @@ class OrdenesMixin:
             "morning_briefing",
             "show_commands_help",
             "undo_last_action",
+            "tv_status",
             "get_headset_battery",
             "get_now_playing",
             "set_reminder",
@@ -556,6 +566,9 @@ class OrdenesMixin:
         "morning_briefing": "PREPARANDO EL RESUMEN DEL DÍA…",
         "find_files": "BUSCANDO ARCHIVOS…",
         "undo_last_action": "DESHACIENDO…",
+        "tv_control": "CONTROLANDO LA TELE…",
+        "tv_open_app": "ABRIENDO LA APP EN LA TELE…",
+        "tv_status": "CONSULTANDO LA TELE…",
         "set_output_device": "CAMBIANDO SALIDA DE AUDIO…",
         "launch_game": "BUSCANDO EL JUEGO…",
         "open_new_browser_tab": "ABRIENDO PESTAÑA EN BRAVE…",

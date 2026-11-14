@@ -64,6 +64,9 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
   herramienta de riesgo alto ``mobile_remote_control``.
 - ``POST /api/input`` {events} → movimientos, clics, rueda y teclas (jarvis_input),
   solo con el control activo.
+- ``GET  /api/tv`` → estado de la tele (encendida, app, volumen, apps); ``POST /api/tv``
+  {action} → un botón del control remoto (``tv_control``, o ``app:<id>`` → ``tv_open_app``)
+  por ``tool_registry.execute`` (jarvis_tv).
 - ``POST /api/vision`` {n, x, y, w, h, question} → «¿Qué es esto?» sobre una zona del
   monitor (fracciones 0–1); la respuesta llega como un mensaje más.
 """
@@ -281,6 +284,8 @@ class ServidorMovil:
         portada: Callable[[], bytes | None] | None = None,
         accion: Callable[[str, dict], str] | None = None,
         estado_equipo: Callable[[bool], dict] | None = None,
+        tele: Callable[[], dict] | None = None,
+        tele_accion: Callable[[str], str] | None = None,
     ) -> None:
         self.eventos_app = eventos_app  # cola de la app: todo lo que toca Tk pasa por ahí
         self.vinculacion = vinculacion
@@ -320,6 +325,8 @@ class ServidorMovil:
         self.portada = portada
         self.accion = accion  # (herramienta, argumentos) → texto; pasa por tool_registry.execute
         self.estado_equipo = estado_equipo
+        self.tele = tele  # estado de la tele (jarvis_tv)
+        self.tele_accion = tele_accion  # botón del control → texto; pasa por tool_registry.execute
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
@@ -826,6 +833,19 @@ class ServidorMovil:
             except Exception as error:  # la herramienta explica qué falló
                 raise _Error(409, str(error) or "No se pudo completar la acción.") from error
             return self._json({"ok": True, "text": texto})
+        if ruta == "/api/tv" and metodo in ("GET", "POST"):
+            if self.tele is None or self.tele_accion is None:
+                raise _Error(501, "El control de la tele no está disponible.")
+            if metodo == "GET":
+                return self._json(self.tele())
+            accion = str(self._cuerpo_json(cuerpo).get("action", ""))
+            if not re.fullmatch(r"[a-z0-9_]{2,20}|app:[a-z0-9_.]{2,80}", accion):
+                raise _Error(400, "Acción de la tele no válida.")
+            try:
+                texto = self.tele_accion(accion)
+            except Exception as error:  # la herramienta explica qué falló
+                raise _Error(409, str(error) or "No se pudo controlar la tele.") from error
+            return self._json({"ok": True, "text": texto, "tv": self.tele()})
         if metodo == "GET" and ruta == "/api/status":
             if self.estado_equipo is None:
                 raise _Error(501, "El estado del equipo no está disponible.")
