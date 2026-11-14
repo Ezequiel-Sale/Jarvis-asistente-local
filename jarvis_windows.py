@@ -53,10 +53,18 @@ def normalizar(texto: str) -> str:
     return "".join(c for c in texto if not unicodedata.combining(c)).strip()
 
 
+PROPIAS = {"jarvis", "j.a.r.v.i.s.", "j.a.r.v.i.s", "el asistente", "ti", "vos", "tu ventana"}
+
+
 def elegir(ventanas: list[Ventana], app: str, propio_pid: int) -> list[Ventana]:
-    """Ventanas que corresponden a ``app`` (sin las de Jarvis)."""
-    ajenas = [v for v in ventanas if v.pid != propio_pid]
+    """Ventanas que corresponden a ``app``. Las de Jarvis solo si se lo nombra («mueve Jarvis al
+    monitor 2»): «todo» y los demás nombres no las arrastran."""
     clave = normalizar(app)
+    if clave in PROPIAS:
+        propias = [v for v in ventanas if v.pid == propio_pid]
+        principal = [v for v in propias if "j.a.r.v.i.s" in normalizar(v.titulo)]
+        return principal[:1] or propias[:1]
+    ajenas = [v for v in ventanas if v.pid != propio_pid]
     if clave in TODO:
         return ajenas
     programas = ALIAS.get(clave, (clave.replace(" ", ""),))

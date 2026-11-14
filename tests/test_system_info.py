@@ -125,6 +125,7 @@ class FormattingTests(unittest.TestCase):
             _home_bar_row = JarvisApp._home_bar_row
             _render_home_disks = JarvisApp._render_home_disks
             _set_home_bar = JarvisApp._set_home_bar
+            _draw_home_bar = JarvisApp._draw_home_bar
 
         host = Host()
         host._home_bars = {}

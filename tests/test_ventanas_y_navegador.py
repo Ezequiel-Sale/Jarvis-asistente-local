@@ -38,6 +38,8 @@ class PhraseTests(unittest.TestCase):
             "trae WhatsApp al frente": ("whatsapp", "window_focus"),
             "cambia a la ventana de Discord": ("discord", "window_focus"),
             "muestra el escritorio": ("todo", "window_minimize"),
+            "maximiza Jarvis": ("jarvis", "window_maximize"),  # antes iba a la IA (2026-11-14)
+            "trae Jarvis al frente": ("jarvis", "window_focus"),
         }
         for frase, (app, accion) in casos.items():
             with self.subTest(frase=frase):

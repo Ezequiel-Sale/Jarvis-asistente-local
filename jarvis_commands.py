@@ -839,8 +839,9 @@ _AL_FRENTE = re.compile(
     r"^(?:trae|traeme|pon|ponme)\s+(?:(?:la|el)\s+)?(?:ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?"
     r"(?P<app>.+?)\s+(?:al\s+frente|adelante|encima)$"
 )
-# Brave y Jarvis ya tienen sus frases («minimiza Brave», «minimiza la ventana»).
-_VENTANA_EXCLUIDAS = {"brave", "navegador", "jarvis", "app", "aplicacion", "ventana", "la ventana",
+# Brave ya tiene sus frases («minimiza Brave») y «minimiza la ventana» es la de Jarvis. «Jarvis» sí
+# pasa (desde 2026-11-14): «maximiza Jarvis» iba a la IA, que no sabía qué hacer.
+_VENTANA_EXCLUIDAS = {"brave", "navegador", "app", "aplicacion", "ventana", "la ventana",
                       "esta ventana", "pantalla", "musica", "cancion", "video", "volumen"}
 
 

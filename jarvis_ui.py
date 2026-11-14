@@ -767,6 +767,7 @@ class JarvisUIMixin:
             lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana, width=e.width))
             cuerpo.jarvis_scroll = lienzo
             cuerpo.grid_columnconfigure((0, 1), weight=1, uniform="inicio")
+            self._home_layout = None  # «ancho» o «angosto»: se reacomoda al cambiar el tamaño
 
             # Encabezado: hora, fecha, saludo, clima y accesos rápidos.
             hero = tk.Frame(cuerpo, bg=PANEL, padx=22, pady=18, highlightthickness=1, highlightbackground=BORDER)
@@ -782,9 +783,10 @@ class JarvisUIMixin:
             self.home_date.pack(anchor="w")
             derecha = tk.Frame(hero, bg=PANEL)
             derecha.grid(row=0, column=1, sticky="nsew", padx=(28, 0))
+            self._home_hero = (izquierda, derecha)
             tk.Label(derecha, text="CLIMA", bg=PANEL, fg=MUTED, font=("Consolas", 9, "bold")).pack(anchor="w")
             self.home_weather = tk.Label(derecha, text="Consultando…", bg=PANEL, fg=TEXT, font=("Segoe UI", 10),
-                                         justify="left", anchor="w", wraplength=460)
+                                         justify="left", anchor="w", wraplength=300)
             self.home_weather.pack(anchor="w", fill="x", pady=(4, 10))
             accesos = tk.Frame(derecha, bg=PANEL)
             accesos.pack(anchor="w")
@@ -805,19 +807,19 @@ class JarvisUIMixin:
             self._home_disks.pack(fill="x")
             self._home_disk_keys: list[str] | None = None
             self.home_health_note = tk.Label(salud.jarvis_cuerpo, text="", bg=PANEL, fg=MUTED,
-                                             font=("Segoe UI", 8), justify="left", wraplength=380)
-            self.home_health_note.pack(anchor="w", pady=(6, 0))
+                                             font=("Segoe UI", 8), justify="left", wraplength=260)
+            self.home_health_note.pack(anchor="w", fill="x", pady=(6, 0))
 
             proximo = self._home_card(cuerpo, "PRÓXIMO")
             proximo.grid(row=1, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
             self.home_upcoming = tk.Label(proximo.jarvis_cuerpo, text="…", bg=PANEL, fg=TEXT, font=("Segoe UI", 10),
-                                          justify="left", anchor="nw", wraplength=420)
+                                          justify="left", anchor="nw", wraplength=260)
             self.home_upcoming.pack(anchor="w", fill="x")
 
             sonando = self._home_card(cuerpo, "SONANDO AHORA · AURICULARES")
             sonando.grid(row=2, column=0, sticky="nsew", padx=(0, 6))
             self.home_media = tk.Label(sonando.jarvis_cuerpo, text="…", bg=PANEL, fg=TEXT, font=("Segoe UI", 10),
-                                       justify="left", anchor="w", wraplength=400)
+                                       justify="left", anchor="w", wraplength=260)
             self.home_media.pack(anchor="w", fill="x")
             self.home_battery = tk.Label(sonando.jarvis_cuerpo, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 10),
                                          anchor="w")
@@ -828,8 +830,35 @@ class JarvisUIMixin:
             self.home_services = tk.Label(servicios.jarvis_cuerpo, text="…", bg=PANEL, fg=TEXT,
                                           font=("Consolas", 9), justify="left", anchor="w")
             self.home_services.pack(anchor="w", fill="x")
+            self._home_cards = (salud, proximo, sonando, servicios)
+            # Los textos se cortan al ancho real de su tarjeta (antes, a un ancho fijo que no entraba).
+            for etiqueta in (self.home_weather, self.home_upcoming, self.home_media, self.home_health_note):
+                etiqueta.bind("<Configure>", lambda e, l=etiqueta: l.configure(wraplength=max(120, e.width - 4)))
+            cuerpo.bind("<Configure>", lambda e: self._layout_home(e.width), add="+")
             self._saludo = jarvis_dashboard.saludo
             self._tick_home_clock()
+
+        HOME_ANCHO_DOS_COLUMNAS = 760  # px de la página: menos que eso, una tarjeta debajo de la otra
+
+        def _layout_home(self, ancho: int) -> None:
+            """Dos columnas de tarjetas (y el clima al lado de la hora) si entran; si no, una sola."""
+            modo = "ancho" if ancho >= self.HOME_ANCHO_DOS_COLUMNAS else "angosto"
+            if modo == self._home_layout:
+                return
+            self._home_layout = modo
+            salud, proximo, sonando, servicios = self._home_cards
+            _izquierda, derecha = self._home_hero
+            if modo == "ancho":
+                derecha.grid_configure(row=0, column=1, padx=(28, 0), pady=0)
+                for tarjeta, (fila, columna) in zip(self._home_cards, ((1, 0), (1, 1), (2, 0), (2, 1))):
+                    tarjeta.grid_configure(row=fila, column=columna, columnspan=1,
+                                           padx=(0, 6) if columna == 0 else (6, 0))
+            else:
+                derecha.grid_configure(row=1, column=0, padx=0, pady=(14, 0))
+                for fila, tarjeta in enumerate(self._home_cards, start=1):
+                    tarjeta.grid_configure(row=fila, column=0, columnspan=2, padx=0)
+            for tarjeta in self._home_cards:
+                tarjeta.grid_configure(pady=(0, 12))
 
         def _tick_home_clock(self) -> None:
             from datetime import datetime
@@ -848,15 +877,27 @@ class JarvisUIMixin:
             reloj.after(1000, self._tick_home_clock)
 
         def _home_bar_row(self, padre: tk.Frame, nombre: str) -> tuple:
+            """Nombre a la izquierda y valor a la derecha; debajo, la barra a todo el ancho (así el
+            valor se ve aunque la ventana sea angosta)."""
             fila = tk.Frame(padre, bg=PANEL)
-            fila.pack(fill="x", pady=3)
-            tk.Label(fila, text=nombre, bg=PANEL, fg=TEXT, font=("Segoe UI", 9), width=17,
-                     anchor="w").pack(side="left")
-            barra = tk.Canvas(fila, width=130, height=8, bg=PANEL_LIGHT, highlightthickness=0, bd=0)
-            barra.pack(side="left", padx=(4, 10))
-            valor = tk.Label(fila, text="…", bg=PANEL, fg=MUTED, font=("Consolas", 9), anchor="w")
-            valor.pack(side="left")
+            fila.pack(fill="x", pady=(2, 5))
+            arriba = tk.Frame(fila, bg=PANEL)
+            arriba.pack(fill="x")
+            tk.Label(arriba, text=nombre, bg=PANEL, fg=TEXT, font=("Segoe UI", 9), anchor="w").pack(side="left")
+            valor = tk.Label(arriba, text="…", bg=PANEL, fg=MUTED, font=("Consolas", 9), anchor="e")
+            valor.pack(side="right")
+            barra = tk.Canvas(fila, height=6, bg=PANEL_LIGHT, highlightthickness=0, bd=0)
+            barra.pack(fill="x", pady=(3, 0))
+            barra.jarvis_barra = (None, CYAN)
+            barra.bind("<Configure>", lambda _e: self._draw_home_bar(barra))
             return barra, valor
+
+        def _draw_home_bar(self, barra: tk.Canvas) -> None:
+            fraccion, color = barra.jarvis_barra
+            barra.delete("all")
+            if fraccion is not None:
+                ancho = max(0.0, min(1.0, fraccion)) * max(1, barra.winfo_width())
+                barra.create_rectangle(0, 0, ancho, 6, fill=color, outline="")
 
         def _render_home_disks(self, discos) -> None:
             claves = [d.unidad for d in discos]
@@ -877,10 +918,8 @@ class JarvisUIMixin:
 
         def _set_home_bar(self, clave: str, fraccion: float | None, texto: str, alerta: bool = False) -> None:
             barra, valor = self._home_bars[clave]
-            barra.delete("all")
-            if fraccion is not None:
-                ancho = max(0.0, min(1.0, fraccion)) * int(barra.cget("width"))
-                barra.create_rectangle(0, 0, ancho, 8, fill=ERROR if alerta else CYAN, outline="")
+            barra.jarvis_barra = (fraccion, ERROR if alerta else CYAN)
+            self._draw_home_bar(barra)
             valor.configure(text=texto, fg=ERROR if alerta else (TEXT if fraccion is not None else MUTED))
 
         def _render_home(self, datos) -> None:

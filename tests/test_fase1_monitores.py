@@ -102,6 +102,9 @@ class MoveWindowTests(unittest.TestCase):
         self.assertEqual([v.hwnd for v in w.elegir(self.VENTANAS, "presupuesto", 99)], [4])
         self.assertEqual([v.hwnd for v in w.elegir(self.VENTANAS, "todo", 99)], [1, 2, 4])  # sin Jarvis
         self.assertEqual(w.elegir(self.VENTANAS, "spotify", 99), [])
+        # Nombrado, Jarvis sí se mueve («mueve Jarvis al monitor 2»): su ventana principal.
+        propias = self.VENTANAS + [w.Ventana(5, "Comandos de voz", "jarvis", 99)]
+        self.assertEqual([v.hwnd for v in w.elegir(propias, "Jarvis", 99)], [3])
 
     def test_new_rect_keeps_relative_position_and_fits(self) -> None:
         origen = (0, 0, 2560, 1392)
