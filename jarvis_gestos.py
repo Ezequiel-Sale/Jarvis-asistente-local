@@ -29,10 +29,11 @@ CARPETA_MODELO = "gestos-modelo"
 MODELO = "hand_landmarker.task"
 TAMANO_MODELO = 7_819_105  # bytes (verificado al descargarlo)
 
-GESTOS = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "otro")
+GESTOS = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "pulgar_arriba", "pulgar_abajo", "otro")
 NOMBRES = {
     "indice": "índice", "dos_dedos": "dos dedos · scroll", "pellizco": "pellizco", "puno": "puño",
-    "mano_abierta": "mano abierta", "otro": "otro",
+    "mano_abierta": "mano abierta", "pulgar_arriba": "pulgar arriba", "pulgar_abajo": "pulgar abajo",
+    "otro": "otro",
 }
 
 # Índices de MediaPipe: 0 muñeca; pulgar 1–4; índice 5–8; medio 9–12; anular 13–16; meñique 17–20.
@@ -65,6 +66,27 @@ def dedos_estirados(puntos: Sequence[Punto]) -> set[str]:
             if _distancia(muneca, puntos[punta]) > _distancia(muneca, puntos[media]) * ESTIRADO}
 
 
+PULGAR_ESTIRADO = 0.75  # punta del pulgar–nudillo del índice / tamaño de la mano
+PULGAR_VERTICAL = 0.45  # cuánto más arriba (o abajo) que su base tiene que estar la punta
+
+
+def sentido_pulgar(puntos: Sequence[Punto], tamano: float) -> str | None:
+    """Con los cuatro dedos cerrados: ``pulgar_arriba``, ``pulgar_abajo`` o None (puño).
+
+    El pulgar está estirado si su punta queda lejos del nudillo del índice (en el puño queda
+    pegado a los dedos). Arriba o abajo según la punta respecto de su base (y crece hacia abajo).
+    """
+    punta, base = puntos[PUNTA_PULGAR], puntos[2]
+    if _distancia(punta, puntos[BASE_INDICE]) / tamano < PULGAR_ESTIRADO:
+        return None
+    vertical = (base[1] - punta[1]) / tamano
+    if vertical > PULGAR_VERTICAL:
+        return "pulgar_arriba"
+    if vertical < -PULGAR_VERTICAL:
+        return "pulgar_abajo"
+    return None
+
+
 def clasificar(puntos: Sequence[Punto]) -> str:
     """Gesto de una mano a partir de sus 21 puntos (x, y normalizados)."""
     if len(puntos) < 21:
@@ -79,7 +101,8 @@ def clasificar(puntos: Sequence[Punto]) -> str:
     if juntos and indice_abierto:
         return "pellizco"
     if not estirados:
-        return "puno"
+        pulgar = sentido_pulgar(puntos, tamano)
+        return pulgar or "puno"
     if estirados == {"indice"}:
         return "indice"
     if estirados == {"indice", "medio"}:
@@ -424,6 +447,126 @@ class Puntero:
         return acciones
 
 
+class Atajos:
+    """Fase 4: gestos que disparan una acción (no continuos como el scroll o el puntero).
+
+    ``actualizar`` devuelve una lista de ``(accion, repetida)``:
+
+    - ``("pausa", False)``: mano abierta (estable) quieta ``QUIETA_PAUSA`` s (play/pausa). Una vez:
+      para repetirla hay que cambiar de gesto o mover la mano.
+    - ``("atras" | "adelante", False)``: la mano abierta cruza hacia un costado (al menos
+      ``DESLIZAR`` de la imagen en ``VENTANA_DESLIZAR`` s, sobre todo horizontal). Como en el
+      touchpad: hacia la derecha (en espejo) es atrás. ``ESPERA_DESLIZAR`` s entre deslizamientos.
+    - ``("pulgar_arriba" | "pulgar_abajo", repetida)``: sostenido ``SOSTENER_PULGAR`` s; mientras
+      siga, se repite cada ``REPETIR_PULGAR`` s con ``repetida=True`` (la app decide: una
+      confirmación solo con la primera, el volumen con todas).
+
+    2026-11-16: el deslizar no se detectaba nunca: exigía el gesto estable (4 cuadros: el comienzo
+    quedaba afuera), borraba el rastro en cuanto un cuadro borroso dejaba de verse como mano abierta
+    y pedía 0,22 de la imagen en 0,4 s. Ahora el rastro usa también el gesto de cada cuadro y
+    aguanta ``SIN_ABIERTA`` s sin verla.
+    """
+
+    QUIETA_PAUSA = 1.2
+    MOVIMIENTO_QUIETA = 0.035  # fracción de la imagen: más es «moviendo la mano»
+    DESLIZAR = 0.18
+    VENTANA_DESLIZAR = 0.6
+    VERTICAL_MAXIMA = 0.6  # |dy| como mucho esta fracción de |dx|
+    ESPERA_DESLIZAR = 1.0
+    SIN_ABIERTA = 0.6  # s sin ver la mano abierta antes de olvidar su rastro
+    SOSTENER_PULGAR = 0.4
+    REPETIR_PULGAR = 0.6
+
+    def __init__(self) -> None:
+        self._quieta: list[tuple[float, float, float]] = []  # (t, x, y) con «mano abierta» estable
+        self._rastro: list[tuple[float, float, float]] = []  # (t, x, y) con la mano abierta (cuadro o estable)
+        self._ultima_abierta = -math.inf
+        self._recorrido_maximo = 0.0  # para el log si no llegó a deslizar
+        self._pausa_hecha = False
+        self._ultimo_deslizar = -math.inf
+        self._pulgar: str | None = None
+        self._pulgar_desde = 0.0
+        self._pulgar_ultimo: float | None = None
+
+    def actualizar(self, estable: str | None, puntos: Sequence[Punto] | None, ahora: float,
+                   gesto: str | None = None) -> list[tuple]:
+        """``gesto``: el de este cuadro, sin estabilizar (el deslizar no espera 4 cuadros)."""
+        acciones: list[tuple] = []
+        abierta = puntos is not None and (gesto == "mano_abierta" or estable == "mano_abierta")
+        if abierta:
+            x, y = centro_palma(puntos)
+            self._ultima_abierta = ahora
+            self._rastro.append((ahora, x, y))
+            self._rastro = [m for m in self._rastro if ahora - m[0] <= self.VENTANA_DESLIZAR]
+            acciones += self._deslizar(ahora, x, y)
+        elif ahora - self._ultima_abierta > self.SIN_ABIERTA:
+            self._olvidar_rastro()
+        if estable != "mano_abierta":
+            self._quieta, self._pausa_hecha = [], False
+        elif puntos is not None and not acciones:
+            x, y = centro_palma(puntos)
+            self._quieta.append((ahora, x, y))
+            self._quieta = [m for m in self._quieta if ahora - m[0] <= max(self.QUIETA_PAUSA, 1.5)]
+            acciones += self._pausa(ahora, x, y)
+        acciones += self._pulgares(estable, ahora)
+        return acciones
+
+    def _olvidar_rastro(self) -> None:
+        if self._recorrido_maximo >= 0.08:
+            # Movió la mano abierta de costado pero no alcanzó: cuánto, para ajustar los umbrales.
+            logging.info("Deslizar no alcanzó: recorrido horizontal máximo %.2f de la imagen en %.1f s "
+                         "(hace falta %.2f).", self._recorrido_maximo, self.VENTANA_DESLIZAR, self.DESLIZAR)
+        self._rastro, self._recorrido_maximo = [], 0.0
+
+    def _deslizar(self, ahora: float, x: float, y: float) -> list[tuple]:
+        t0, x0, y0 = self._rastro[0]
+        dx, dy = x - x0, y - y0
+        self._recorrido_maximo = max(self._recorrido_maximo, abs(dx))
+        if ahora - self._ultimo_deslizar < self.ESPERA_DESLIZAR:
+            return []
+        if abs(dx) >= self.DESLIZAR and abs(dy) <= abs(dx) * self.VERTICAL_MAXIMA:
+            logging.info("Deslizar: %.2f de la imagen en %.2f s.", dx, ahora - t0)
+            self._ultimo_deslizar = ahora
+            self._rastro, self._recorrido_maximo = [], 0.0
+            self._quieta, self._pausa_hecha = [], True  # deslizar no es «quieta»
+            return [("atras" if dx > 0 else "adelante", False)]
+        return []
+
+    def _pausa(self, ahora: float, x: float, y: float) -> list[tuple]:
+        if self._pausa_hecha:
+            # Ya pausó: se rearma si la mano se mueve (y vuelve a quedarse quieta).
+            if any(math.hypot(x - mx, y - my) > self.MOVIMIENTO_QUIETA * 3 for _, mx, my in self._quieta):
+                self._pausa_hecha = False
+                self._quieta = self._quieta[-1:]
+            return []
+        if not self._quieta or ahora - self._quieta[0][0] < self.QUIETA_PAUSA:
+            return []
+        recientes = [m for m in self._quieta if ahora - m[0] <= self.QUIETA_PAUSA]
+        # Quieta = todo el recorrido de la palma en ese tiempo cabe en MOVIMIENTO_QUIETA (no basta con
+        # estar cerca de la posición actual: una mano que oscila pasaría por «quieta» en el medio).
+        xs, ys = [m[1] for m in recientes], [m[2] for m in recientes]
+        quieta = max(xs) - min(xs) <= self.MOVIMIENTO_QUIETA and max(ys) - min(ys) <= self.MOVIMIENTO_QUIETA
+        if quieta:
+            self._pausa_hecha = True
+            return [("pausa", False)]
+        return []
+
+    def _pulgares(self, estable: str | None, ahora: float) -> list[tuple]:
+        if estable not in ("pulgar_arriba", "pulgar_abajo"):
+            self._pulgar, self._pulgar_ultimo = None, None
+            return []
+        if estable != self._pulgar:
+            self._pulgar, self._pulgar_desde, self._pulgar_ultimo = estable, ahora, None
+        if self._pulgar_ultimo is None:
+            if ahora - self._pulgar_desde >= self.SOSTENER_PULGAR:
+                self._pulgar_ultimo = ahora
+                return [(estable, False)]
+        elif ahora - self._pulgar_ultimo >= self.REPETIR_PULGAR:
+            self._pulgar_ultimo = ahora
+            return [(estable, True)]
+        return []
+
+
 SEGUIR = 0.3  # fracción del camino al objetivo en cada paso del deslizamiento
 PASO_DESLIZAR = 0.006  # s entre pasos (~160 por segundo)
 
@@ -484,7 +627,8 @@ class DetectorGestos(threading.Thread):
     def __init__(self, events: queue.Queue, puede_usar: Callable[[], bool], carpeta: Path, *,
                  abrir_camara: Callable | None = None, crear_modelo: Callable | None = None,
                  al_desplazar: Callable[[int], None] | None = None, invertir_scroll: bool = False,
-                 al_apuntar: Callable[[list], None] | None = None, monitor=None) -> None:
+                 al_apuntar: Callable[[list], None] | None = None, monitor=None,
+                 al_atajo: Callable[[str, bool], None] | None = None) -> None:
         """``al_desplazar(cantidad)``: girar la rueda; ``al_apuntar(acciones)``: mover el puntero y
         los clics del pellizco (``Puntero``) en ``monitor``. La app los hace en otro hilo, en orden
         y por el registro de herramientas; este hilo nunca espera."""
@@ -504,6 +648,8 @@ class DetectorGestos(threading.Thread):
         self.al_apuntar = al_apuntar
         self.puntero = Puntero(monitor) if al_apuntar is not None and monitor is not None else None
         self._estado_puntero: str | None = None
+        self.al_atajo = al_atajo  # fase 4: pausa, atrás/adelante, pulgares (la app decide qué hacer)
+        self.atajos = Atajos()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -590,6 +736,7 @@ class DetectorGestos(threading.Thread):
                     self._publicar_gesto(cambio)
                 self._desplazar(estabilizador.actual, gesto, puntos)
                 self._apuntar(estabilizador.actual, puntos, mundo)
+                self._atajos(estabilizador.actual, puntos, gesto)
                 if self.vista:
                     self.ultima_imagen = dibujar(rgb, puntos, cv2)
                 cuadros_en_segundo += 1
@@ -623,6 +770,12 @@ class DetectorGestos(threading.Thread):
             cantidad = self.desplazamiento.terminar(time.monotonic())
         if cantidad:
             self.al_desplazar(cantidad)
+
+    def _atajos(self, estable: str | None, puntos, gesto: str | None = None) -> None:
+        if self.al_atajo is None:
+            return
+        for accion, repetida in self.atajos.actualizar(estable, puntos, time.monotonic(), gesto):
+            self.al_atajo(accion, repetida)
 
     def _apuntar(self, estable: str | None, puntos, mundo=None) -> None:
         """Fase 3: puntero con el índice; clic y arrastre con el pellizco."""

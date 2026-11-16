@@ -415,6 +415,161 @@ class PointerTests(unittest.TestCase):
         self.assertFalse(p.armado)
 
 
+def pulgar(arriba=True):
+    """Puño con el pulgar estirado hacia arriba o hacia abajo."""
+    p = list(mano(()))
+    if arriba:
+        p[2], p[3], p[4] = (0.4, 0.6), (0.38, 0.48), (0.37, 0.38)
+    else:
+        p[2], p[3], p[4] = (0.4, 0.75), (0.38, 0.85), (0.37, 0.95)
+    return p
+
+
+def abierta(x=0.5, y=0.45):
+    base = mano(("indice", "medio", "anular", "menique"))
+    dx, dy = x - g.centro_palma(base)[0], y - g.centro_palma(base)[1]
+    return [(px + dx, py + dy) for px, py in base]
+
+
+class ShortcutTests(unittest.TestCase):
+    """Fase 4: pausa con la mano quieta, deslizar, pulgares."""
+
+    def test_thumbs(self) -> None:
+        self.assertEqual(g.clasificar(pulgar(True)), "pulgar_arriba")
+        self.assertEqual(g.clasificar(pulgar(False)), "pulgar_abajo")
+        self.assertEqual(g.clasificar(mano(())), "puno")
+        self.assertEqual(g.clasificar(puno_con_pulgar_encima()), "puno")
+
+    def _correr(self, cuadros, paso=0.04):
+        a = g.Atajos()
+        salida = []
+        for i, (estable, puntos) in enumerate(cuadros):
+            salida += a.actualizar(estable, puntos, i * paso)
+        return salida
+
+    def test_still_open_hand_pauses_once(self) -> None:
+        salida = self._correr([("mano_abierta", abierta())] * 60)  # 2,4 s quieta
+        self.assertEqual(salida, [("pausa", False)])
+        self.assertEqual(self._correr([("mano_abierta", abierta())] * 20), [])  # 0,8 s: todavía no
+
+    def test_moving_open_hand_does_not_pause(self) -> None:
+        cuadros = [("mano_abierta", abierta(0.45 + 0.03 * math.sin(i / 3))) for i in range(60)]
+        self.assertNotIn(("pausa", False), self._correr(cuadros))
+
+    def test_swipes(self) -> None:
+        derecha = [("mano_abierta", abierta(0.3 + i * 0.04)) for i in range(10)]  # cruza en 0,4 s
+        self.assertEqual(self._correr(derecha), [("atras", False)])
+        izquierda = [("mano_abierta", abierta(0.7 - i * 0.04)) for i in range(10)]
+        self.assertEqual(self._correr(izquierda), [("adelante", False)])
+        lento = [("mano_abierta", abierta(0.3 + i * 0.005)) for i in range(60)]  # 2,4 s: no es deslizar
+        self.assertFalse(any(a[0] in ("atras", "adelante") for a in self._correr(lento)))
+        diagonal = [("mano_abierta", abierta(0.3 + i * 0.04, 0.2 + i * 0.05)) for i in range(10)]
+        self.assertFalse(any(a[0] in ("atras", "adelante") for a in self._correr(diagonal)))
+
+    def test_real_swipes_with_blur_and_late_stable_gesture(self) -> None:
+        """2026-11-16: el deslizar no se detectaba nunca con la mano de verdad."""
+        def correr(cuadros, paso=0.04):
+            a = g.Atajos()
+            salida = []
+            for i, (estable, puntos, gesto) in enumerate(cuadros):
+                salida += a.actualizar(estable, puntos, i * paso, gesto)
+            return salida
+
+        # Empieza antes de que el gesto sea estable (los primeros 4 cuadros, el estable es otro).
+        temprano = [("indice" if i < 4 else "mano_abierta", abierta(0.3 + i * 0.03), "mano_abierta")
+                    for i in range(12)]
+        self.assertEqual(correr(temprano), [("atras", False)])
+        # Borroso a mitad de camino: el estable pasa a «otro», un cuadro sin mano; igual cuenta.
+        borroso = []
+        for i in range(14):
+            estable = "otro" if 5 <= i <= 9 else "mano_abierta"
+            gesto = "otro" if i in (6, 7) else "mano_abierta"
+            puntos = None if i == 8 else abierta(0.75 - i * 0.03)
+            borroso.append((estable, puntos, gesto))
+        self.assertEqual(correr(borroso), [("adelante", False)])
+        # Un poco más lento (0,2 de la imagen en ~0,55 s): también.
+        tranquilo = [("mano_abierta", abierta(0.4 + i * 0.0145), "mano_abierta") for i in range(15)]
+        self.assertEqual(correr(tranquilo), [("atras", False)])
+
+    def test_short_lateral_move_logs_how_far_it_went(self) -> None:
+        a = g.Atajos()
+        for i in range(10):
+            a.actualizar("mano_abierta", abierta(0.4 + i * 0.012), i * 0.04, "mano_abierta")  # 0,11 en total
+        with self.assertLogs(level="INFO") as registro:
+            for i in range(10, 40):
+                a.actualizar("puno", None, i * 0.04, None)
+        self.assertTrue(any("Deslizar no alcanzó" in linea for linea in registro.output))
+
+    def test_thumb_held_fires_then_repeats(self) -> None:
+        salida = self._correr([("pulgar_arriba", pulgar())] * 42)  # hasta 1,64 s
+        self.assertEqual(salida[0], ("pulgar_arriba", False))
+        self.assertTrue(all(a == ("pulgar_arriba", True) for a in salida[1:]))
+        self.assertEqual(len(salida), 3)  # a los 0,4 s y repetido a los 1,0 y 1,6 s
+        self.assertEqual(self._correr([("pulgar_abajo", pulgar(False))] * 8), [])  # 0,32 s: muy corto
+
+
+class ShortcutAppTests(unittest.TestCase):
+    def _host(self, **estado):
+        valores = {"_gesture_actions": queue.Queue(), "PASO_VOLUMEN": JarvisApp.PASO_VOLUMEN,
+                   "_pending_plan_reply": None, "_pending_approval_kind": None, **estado}
+        host = _host(**valores)
+        host._gesture_queue = lambda: host._gesture_actions
+        return host
+
+    def test_thumbs_confirm_or_cancel(self) -> None:
+        host = self._host(_pending_plan_reply=object(), _pending_approval_kind="plan")
+        JarvisApp._on_gesture_shortcut(host, "pulgar_arriba", False)
+        host._resolve_plan_approval.assert_called_once_with(True)
+        self.assertIn("👍", host._add_message.call_args.args[1])
+        host = self._host(_pending_plan_reply=object(), _pending_approval_kind="screen")
+        JarvisApp._on_gesture_shortcut(host, "pulgar_abajo", False)
+        host._resolve_plan_approval.assert_called_once_with(False)
+        host = self._host(_pending_plan_reply=object(), _pending_approval_kind="plan")
+        JarvisApp._on_gesture_shortcut(host, "pulgar_arriba", True)  # repetido: no confirma otra cosa
+        host._resolve_plan_approval.assert_not_called()
+
+    def test_shutdown_is_not_confirmed_with_a_thumb(self) -> None:
+        host = self._host(_pending_plan_reply=object(), _pending_approval_kind="power")
+        JarvisApp._on_gesture_shortcut(host, "pulgar_arriba", False)
+        host._resolve_plan_approval.assert_not_called()
+        self.assertIn("CONFIRMA CON LA VOZ", host._set_status.call_args.args[0])
+        JarvisApp._on_gesture_shortcut(host, "pulgar_abajo", False)  # cancelar, sí
+        host._resolve_plan_approval.assert_called_once_with(False)
+
+    def test_actions_without_a_question(self) -> None:
+        host = self._host()
+        for accion in ("pulgar_arriba", "pulgar_abajo", "pausa", "atras", "adelante"):
+            JarvisApp._on_gesture_shortcut(host, accion, False)
+        cola = [host._gesture_actions.get_nowait() for _ in range(host._gesture_actions.qsize())]
+        self.assertEqual(cola, [("volumen", 5), ("volumen", -5), ("media", "toggle"), ("browser", "back"),
+                                ("browser", "forward")])
+
+    def test_worker_runs_them_through_the_registry(self) -> None:
+        host = self._host()
+        host._gesture_action_worker = lambda cola: JarvisApp._gesture_action_worker(host, cola)
+        llamadas = []
+        hecho = threading.Event()
+
+        def ejecutar(nombre, argumentos, **kwargs):
+            llamadas.append((nombre, argumentos, kwargs["origin"]))
+            if len(llamadas) == 3:
+                hecho.set()
+
+        host.tool_registry.execute.side_effect = ejecutar
+        cola = queue.Queue()
+        for item in (("volumen", 5), ("volumen", 5), ("media", "toggle"), ("browser", "back")):
+            cola.put(item)
+        with patch("jarvis_audio_devices.obtener_volumen_sistema", return_value=40):
+            hilo = threading.Thread(target=JarvisApp._gesture_action_worker, args=(host, cola))
+            hilo.start()
+            self.assertTrue(hecho.wait(3))
+            host._closing = True
+            hilo.join(3)
+        self.assertEqual(llamadas, [("set_system_volume", {"percentage": 50}, "gestos"),  # 5 + 5 juntos
+                                    ("media_control", {"action": "toggle"}, "gestos"),
+                                    ("browser_history", {"action": "back"}, "gestos")])
+
+
 class ImageTests(unittest.TestCase):
     def test_dark_frames_are_brightened(self) -> None:
         import cv2

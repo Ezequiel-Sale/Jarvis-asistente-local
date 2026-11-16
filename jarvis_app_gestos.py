@@ -15,7 +15,7 @@ import jarvis_core as core
 import jarvis_gestos
 import jarvis_screen_actions
 import jarvis_vision
-from jarvis_theme import BG, BORDER, CYAN, MUTED, PANEL, TEXT
+from jarvis_theme import BG, BORDER, CYAN, ERROR, MUTED, PANEL, TEXT
 
 
 class GestosMixin:
@@ -55,7 +55,8 @@ class GestosMixin:
         self.gesture_detector = jarvis_gestos.DetectorGestos(
             self.events, self._can_use_camera, core.APP_DIR,
             al_desplazar=self._queue_gesture_scroll, invertir_scroll=self._gesture_scroll_inverted(),
-            al_apuntar=self._queue_gesture_pointer, monitor=self._gesture_monitor())
+            al_apuntar=self._queue_gesture_pointer, monitor=self._gesture_monitor(),
+            al_atajo=lambda accion, repetida: self.events.put(("gesture_shortcut", accion, repetida)))
         self.gesture_detector.start()
         return None
 
@@ -103,8 +104,8 @@ class GestosMixin:
         movimientos seguidos queda el último. Los clics nunca se juntan ni cambian de orden."""
         juntas: list[tuple] = []
         for accion in pendientes:
-            if juntas and accion[0] == juntas[-1][0] == "scroll":
-                juntas[-1] = ("scroll", juntas[-1][1] + accion[1])
+            if juntas and accion[0] == juntas[-1][0] and accion[0] in ("scroll", "volumen"):
+                juntas[-1] = (accion[0], juntas[-1][1] + accion[1])
             elif juntas and accion[0] == juntas[-1][0] == "mover":
                 juntas[-1] = accion
             else:
@@ -131,6 +132,19 @@ class GestosMixin:
                                                    confirmed=True, origin="gestos")
                     elif accion[0] == "mover":
                         self._set_pointer_target(accion[1], accion[2])  # el hilo de deslizar lo lleva suave
+                    elif accion[0] == "media":
+                        self.tool_registry.execute("media_control", {"action": accion[1]},
+                                                   confirmed=True, origin="gestos")
+                    elif accion[0] == "browser":
+                        self.tool_registry.execute("browser_history", {"action": accion[1]},
+                                                   confirmed=True, origin="gestos")
+                    elif accion[0] == "volumen":
+                        import jarvis_audio_devices
+
+                        actual = jarvis_audio_devices.obtener_volumen_sistema()
+                        self.tool_registry.execute(
+                            "set_system_volume", {"percentage": max(0, min(100, actual + accion[1]))},
+                            confirmed=True, origin="gestos")
                     else:  # click / down / up
                         self._set_pointer_target(accion[1], accion[2], saltar=True)
                         self.tool_registry.execute("gesture_click", {"action": accion[0], "x": accion[1],
@@ -282,6 +296,38 @@ class GestosMixin:
         if estado is None:
             self._pointer_target = None  # se soltó: el deslizamiento se detiene
         self._refresh_gesture_indicator()
+
+    # --- Fase 4: atajos con gestos ------------------------------------------------------
+    PASO_VOLUMEN = 5  # % por pulgar (se repite mientras se sostiene)
+
+    def _on_gesture_shortcut(self, accion: str, repetida: bool) -> None:
+        """Hilo de Tk. Pulgares: con una confirmación abierta la aprueban o cancelan (la primera
+        vez, no al repetirse); si no, cambian el volumen. Mano abierta quieta: play/pausa.
+        Deslizar: atrás/adelante en el navegador."""
+        if accion in ("pulgar_arriba", "pulgar_abajo"):
+            aprobar = accion == "pulgar_arriba"
+            if self._pending_plan_reply is not None:
+                if repetida:
+                    return
+                tipo = self._pending_approval_kind or "plan"
+                if aprobar and tipo == "power":
+                    # Apagar o reiniciar no se confirma con un gesto (un pulgar sin querer); cancelar, sí.
+                    self._set_status("PARA APAGAR O REINICIAR, CONFIRMA CON LA VOZ O EL BOTÓN", ERROR)
+                    return
+                logging.info("Confirmación %s con gesto: %s.", tipo, "sí" if aprobar else "no")
+                self._add_message("user", f"Confirmación con gesto: {'👍 sí' if aprobar else '👎 no'}.")
+                self._resolve_plan_approval(aprobar)
+                self._set_status("CONFIRMADO CON UN GESTO" if aprobar else "CANCELADO CON UN GESTO", CYAN)
+                return
+            self._gesture_queue().put(("volumen", self.PASO_VOLUMEN if aprobar else -self.PASO_VOLUMEN))
+            self._set_status("✋ VOLUMEN +" if aprobar else "✋ VOLUMEN −", CYAN)
+        elif accion == "pausa":
+            self._gesture_queue().put(("media", "toggle"))
+            self._set_status("✋ PLAY / PAUSA", CYAN)
+        elif accion in ("atras", "adelante"):
+            self._gesture_queue().put(("browser", "back" if accion == "atras" else "forward"))
+            self._set_status("✋ ATRÁS" if accion == "atras" else "✋ ADELANTE", CYAN)
+        logging.info("Atajo con gestos: %s%s.", accion, " (repetido)" if repetida else "")
 
     def _on_gesture_stats(self, cuadros_por_s: float, brillo: int) -> None:
         self._gesture_fps, self._gesture_brightness = cuadros_por_s, brillo

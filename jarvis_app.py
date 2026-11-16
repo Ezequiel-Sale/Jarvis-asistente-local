@@ -1164,6 +1164,8 @@ class JarvisApp(
                         self._execute_continuous_toggle(enabled, command)
                     elif event[0] == "gesture":
                         self._on_gesture(event[1])
+                    elif event[0] == "gesture_shortcut":
+                        self._on_gesture_shortcut(event[1], event[2])
                     elif event[0] == "gesture_pointer":
                         self._on_gesture_pointer(event[1])
                     elif event[0] == "gesture_stats":
