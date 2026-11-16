@@ -135,6 +135,11 @@ flowchart LR
    .venv313/Scripts/python.exe -c "from huggingface_hub import hf_hub_download as d; d('Wespeaker/wespeaker-voxceleb-resnet34-LM', 'voxceleb_resnet34_LM.onnx', local_dir='speaker-onnx')"
    ```
    Modelo [WeSpeaker ResNet34-LM](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) del proyecto [WeSpeaker](https://github.com/wenet-e2e/wespeaker), licencia CC BY 4.0 (SHA-256 `7bb2f06e…ec068`). Después, en **⚙ Ajustes → Solo mi voz**, lees 6 frases para registrar tu voz.
+8. Opcional, **gestos con la mano** (cámara web): MediaPipe ya viene en `requirements.txt`; falta el modelo de la mano (7,8 MB, Google, Apache 2.0) en `gestos-modelo/`, junto a `Jarvis.exe`:
+   ```bash
+   mkdir -p gestos-modelo && curl -L -o gestos-modelo/hand_landmarker.task https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+   ```
+   Se activan en **⚙ Ajustes → Gestos con la mano** o con «activa los gestos». Por ahora Jarvis reconoce el índice, dos dedos, el pellizco, el puño y la mano abierta (barra lateral y «📷 VER CÁMARA»); el scroll y el puntero llegan en las próximas fases. Las imágenes nunca se guardan y la cámara se cierra en modo juego.
 
 ## Uso
 

@@ -6,7 +6,7 @@ a = Analysis(
     ['jarvis_app.py'],
     pathex=[],
     # onnxruntime-directml trae DirectML.dll (voz a texto en la GPU, jarvis_stt_gpu).
-    binaries=collect_dynamic_libs('onnxruntime'),
+    binaries=collect_dynamic_libs('onnxruntime') + collect_dynamic_libs('mediapipe'),
     # collect_data_files('openwakeword') incluye los modelos de «Hey Jarvis»
     # (descargados con openwakeword.utils.download_models; ver README).
     datas=[('assets/icon.ico', 'assets'), ('init_db.sql', '.'),
@@ -15,7 +15,7 @@ a = Analysis(
            ('vendor/PresentMon', 'vendor/PresentMon'),
            ('vendor/adb', 'vendor/adb')]
     + collect_data_files('openwakeword') + collect_data_files('pythonnet')
-    + collect_data_files('clr_loader'),
+    + collect_data_files('clr_loader') + collect_data_files('mediapipe'),
     hiddenimports=['mss.windows', 'av', 'dxcam', 'pyaudiowpatch', 'pystray._win32', 'pystray._util.win32',
                    'winrt.windows.media.control', 'winrt.windows.storage.streams', 'winrt.windows.foundation',
                    # Interfaces COM de UI Automation ya generadas (clic en pantalla).
@@ -23,7 +23,9 @@ a = Analysis(
                    'pythonnet', 'clr', 'clr_loader', *collect_submodules('clr_loader'),
                    'jarvis_stt_gpu', 'tokenizers',
                    # Tele (jarvis_tv): se importan dentro de funciones.
-                   *collect_submodules('androidtvremote2'), *collect_submodules('zeroconf')],
+                   *collect_submodules('androidtvremote2'), *collect_submodules('zeroconf'),
+                   # Gestos (jarvis_gestos): MediaPipe y OpenCV se importan dentro de funciones.
+                   'cv2', *collect_submodules('mediapipe')],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

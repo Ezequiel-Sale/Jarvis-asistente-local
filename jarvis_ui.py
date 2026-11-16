@@ -227,6 +227,9 @@ class JarvisUIMixin:
                 font=("Consolas", 8, "bold"), wraplength=210, justify="center",
             )
             self.orb_status.pack(fill="x", padx=16, pady=(4, 14))
+            # «✋ GESTOS · ÍNDICE»: solo visible con los gestos activados (_refresh_gesture_indicator).
+            self.gesture_indicator = tk.Label(sidebar, text="", bg=PANEL, fg=MUTED,
+                                              font=("Consolas", 8, "bold"), wraplength=210, justify="center")
             tk.Frame(sidebar, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 10))
 
             self._nav_buttons: dict[str, tk.Button] = {}
@@ -568,6 +571,14 @@ class JarvisUIMixin:
                                                              self._cycle_speaker_strictness, fg=MUTED)
             self.speaker_strictness_button.pack(side="left", padx=(8, 0))
             self._refresh_speaker_buttons()
+            marco = fila("Gestos con la mano",
+                         "La cámara reconoce tu mano: índice, dos dedos, pellizco, puño y mano abierta (por "
+                         "ahora solo los muestra; el scroll y el puntero llegan después). Las imágenes no se "
+                         "guardan; en modo juego la cámara se cierra. También: «activa los gestos».",
+                         "gestures_button", "GESTOS …", self._toggle_gestures_button)
+            extras = tk.Frame(marco, bg=PANEL)
+            extras.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            self._ui_button(extras, "📷  VER CÁMARA", self._open_gesture_preview, fg=CYAN).pack(side="left")
             fila("Iniciar con Windows",
                  "Al encender la PC, Jarvis arranca oculto en la bandeja. "
                  "También: «desactiva el inicio con Windows».",

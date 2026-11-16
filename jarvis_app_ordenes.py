@@ -44,6 +44,7 @@ from jarvis_commands import (
     detectar_comando_energia,
     detectar_comando_escucha,
     detectar_modo_continuo,
+    detectar_comando_gestos,
     detectar_navegacion,
     detectar_comando_gpu,
     detectar_comando_inicio_windows,
@@ -106,6 +107,13 @@ class OrdenesMixin:
         audio_enabled = detectar_comando_audio(text)
         if audio_enabled is not None:
             self._execute_audio_toggle(audio_enabled, text)
+            return
+        gestos = detectar_comando_gestos(text)
+        if gestos is not None:
+            if gestos == "vista":
+                self._open_gesture_preview()
+            else:
+                self._execute_gestures_toggle(gestos == "on", text)
             return
         continua = detectar_modo_continuo(text)
         if continua is not None:
@@ -262,6 +270,10 @@ class OrdenesMixin:
             audio_enabled = detectar_comando_audio(transcript)
             if audio_enabled is not None:
                 self.events.put(("audio_toggle", audio_enabled, transcript))
+                return
+            gestos = detectar_comando_gestos(transcript)
+            if gestos is not None:
+                self.events.put(("gestures_toggle", gestos, transcript))
                 return
             continua = detectar_modo_continuo(transcript)
             if continua is not None:

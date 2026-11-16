@@ -1203,6 +1203,32 @@ def detectar_modo_continuo(texto: str) -> bool | None:
     return None
 
 
+# --- Gestos con la mano [2026-11-16] ------------------------------------------------
+
+_GESTOS = (r"(?:(?:los|el|la)\s+)?(?:gestos(?:\s+(?:con|de)\s+la\s+mano)?|modo\s+(?:de\s+)?gestos|"
+           r"control\s+(?:por|con)\s+gestos|camara\s+de\s+(?:los\s+)?gestos)")
+_GESTOS_ON = re.compile(r"^(?:activa|activar|enciende|encender|prende|prender|habilita|habilitar|pon|usa|usar)\s+"
+                        + _GESTOS + r"$")
+_GESTOS_OFF = re.compile(r"^(?:desactiva|desactivar|apaga|apagar|deshabilita|deshabilitar|quita|quitar|para)\s+"
+                         + _GESTOS + r"$")
+_GESTOS_VISTA = re.compile(
+    r"^(?:muestrame|muestra|mostrame|abre|ensename|quiero\s+ver)\s+(?:la\s+)?(?:camara|vista\s+de\s+(?:la\s+)?camara)"
+    r"(?:\s+de\s+(?:los\s+)?gestos)?$"
+)
+
+
+def detectar_comando_gestos(texto: str) -> str | None:
+    """«activa los gestos» → "on"; «desactiva los gestos» → "off"; «muéstrame la cámara» → "vista"."""
+    consulta = re.sub(r"^(?:(?:hey|oye)\s+)?jarvis\s+", "", _normalizar_consulta(texto))
+    if _GESTOS_ON.fullmatch(consulta):
+        return "on"
+    if _GESTOS_OFF.fullmatch(consulta):
+        return "off"
+    if _GESTOS_VISTA.fullmatch(consulta):
+        return "vista"
+    return None
+
+
 # --- Navegar por las secciones de la app por voz [2026-11-16] -------------------------
 
 SECCIONES = {

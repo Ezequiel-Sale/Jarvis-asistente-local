@@ -72,6 +72,7 @@ class JuegoMixin:
     def _on_game_started(self, juego: str) -> None:
         """Hilo de Tk. Libera la GPU, silencia a Jarvis y cierra los programas elegidos."""
         self._free_gpu_for_game()
+        self._pause_gestures_for_game(True)  # la cámara se cierra mientras jugás
         self._game_quiet = self._game_quiet_enabled()
         self._quiet_backlog: list[str] = []
         try:
@@ -94,6 +95,7 @@ class JuegoMixin:
     def _on_game_stopped(self) -> None:
         """Hilo de Tk. Recarga la GPU, reabre lo cerrado y cuenta lo que pasó mientras jugabas."""
         self._restore_gpu_after_game()
+        self._pause_gestures_for_game(False)
         self._game_quiet = False
         pendientes = list(getattr(self, "_quiet_backlog", []))
         self._quiet_backlog = []

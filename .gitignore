@@ -35,6 +35,7 @@ tv/
 whisper-models/
 whisper-onnx/
 speaker-onnx/
+gestos-modelo/
 huella_voz.json
 piper-voices/
 ollama-data/

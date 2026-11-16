@@ -70,6 +70,7 @@ from jarvis_app_ajustes import AjustesMixin
 from jarvis_app_juego import JuegoMixin
 from jarvis_app_tv import TvMixin
 from jarvis_app_herramientas import HerramientasMixin
+from jarvis_app_gestos import GestosMixin
 from jarvis_player import AudioPlayerMixin
 from jarvis_tool_registry import ToolRisk
 from jarvis_tools import crear_registro_herramientas
@@ -97,6 +98,7 @@ class JarvisApp(
     JuegoMixin,
     TvMixin,
     HerramientasMixin,
+    GestosMixin,
     JarvisUIMixin,
     AudioPlayerMixin,
 ):
@@ -376,6 +378,8 @@ class JarvisApp(
         self._continuous_enabled = self._continuous_preferred()
         self._init_speaker_filter()
         self._refresh_speaker_buttons()
+        self._init_gestures()
+        self._refresh_gesture_indicator()
         self._continuous_transcribing = False
         if self._wakeword_preferida():
             self._start_wakeword()
@@ -1158,6 +1162,19 @@ class JarvisApp(
                         _, enabled, command = event
                         self._set_idle()
                         self._execute_continuous_toggle(enabled, command)
+                    elif event[0] == "gesture":
+                        self._on_gesture(event[1])
+                    elif event[0] == "gesture_stats":
+                        self._on_gesture_stats(event[1], event[2])
+                    elif event[0] == "gestures_error":
+                        self._on_gestures_error(event[1])
+                    elif event[0] == "gestures_toggle":
+                        _, valor, command = event
+                        self._set_idle()
+                        if valor == "vista":
+                            self._open_gesture_preview()
+                        else:
+                            self._execute_gestures_toggle(valor == "on", command)
                     elif event[0] == "navigate":
                         self._navigate_by_voice(event[1], event[2])
                     elif event[0] == "speaker_rejected":
@@ -1387,6 +1404,7 @@ class JarvisApp(
         self.gpu_watcher.stop()
         self.taskbar_watcher.stop()
         self._stop_wakeword()
+        self._stop_gestures()
         if self._routines_panel is not None:
             self._routines_panel.close()
         self._stop_player(wait=True)
