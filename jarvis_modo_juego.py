@@ -123,6 +123,18 @@ def cerrar(
     return list(cerrados.values())
 
 
+def cerrar_programas(texto: str) -> str:
+    """«Discord, Spotify» → los cierra (como al cerrar la ventana; si sigue, a la fuerza).
+    Para rutinas: «Cerrar un programa». Nunca cierra los ``PROTEGIDOS`` (Jarvis, el sistema…)."""
+    nombres = nombres_de(texto)
+    if not nombres:
+        raise ValueError("Indica qué programa cerrar (los del sistema y Jarvis no se cierran).")
+    cerrados = cerrar(nombres)
+    if not cerrados:
+        return f"No estaba abierto: {', '.join(nombres)}."
+    return f"Cerré {', '.join(c.nombre for c in cerrados)}."
+
+
 def reabrir(cerrados: Iterable[Cerrado], lanzar: Callable[..., object] | None = None) -> list[str]:
     """Vuelve a abrir lo cerrado. Devuelve los nombres que no se pudieron abrir."""
     lanzar = lanzar or (lambda ruta: subprocess.Popen(

@@ -209,6 +209,29 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(self.control.abrir_app(oido), "Tripley")
         self.assertEqual(remoto.apps, ["https://www.netflix.com/title"])
 
+    def test_measures_how_long_network_standby_lasts(self) -> None:
+        """Apagada a las 0 h, sigue en la red un rato y después deja de responder: se anota."""
+        self._vincular()
+        remoto = self.remotos[-1]
+        remoto.callbacks["on"](True)
+        reloj = {"t": 1_000_000.0}
+        with patch.object(tv.time, "time", side_effect=lambda: reloj["t"]):
+            remoto.callbacks["on"](False)            # la apagaste
+            self.assertTrue(self.control.vigilar_red())  # en reposo con red
+            reloj["t"] += 3.5 * 3600
+            self.tele_viva = False                   # 3,5 h después ya no responde
+            self.assertFalse(self.control.vigilar_red())
+            self.assertFalse(self.control.vigilar_red())  # sin cambios: no se anota dos veces
+        historial = json.loads((self.carpeta / tv.ARCHIVO_CONFIG).read_text(encoding="utf-8"))["historial_red"]
+        self.assertEqual([h["horas"] for h in historial], [3.5])
+        self.assertEqual(self.control.horas_red_en_espera(), 3.5)
+        # Al no encontrarla para encender, el mensaje dice cuánto suele durar.
+        self.control.desconectar()
+        with patch.object(tv.time, "sleep"), patch.object(self.control, "_esperar_red", return_value=False):
+            with self.assertRaises(tv.ErrorTV) as error:
+                self.control.encender()
+        self.assertIn("unas 3.5 h", str(error.exception))
+
     def test_settings_and_inputs_hold_home(self) -> None:
         """La TCL ignora SETTINGS y TV_INPUT: INICIO presionado abre el panel de Google TV."""
         self._vincular()

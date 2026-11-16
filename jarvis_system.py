@@ -599,7 +599,21 @@ def buscar_app(nombre: str, apps: list[tuple[str, str]]) -> tuple[str, str] | No
     if empiezan:
         return por_nombre[empiezan[0]]
     parecido = jarvis_windows.programa_parecido(clave, set(por_nombre))
-    return por_nombre[parecido] if parecido else None
+    if parecido:
+        return por_nombre[parecido]
+    # Sobran palabras al final: «Claude Code» → la app «Claude» (2026-11-14: iba a «Abrir juego»).
+    # Solo con el nombre exacto, para no confundir apps parecidas.
+    palabras = clave.split()
+    for cuantas in range(len(palabras) - 1, 0, -1):
+        recorte = " ".join(palabras[:cuantas])
+        if len(recorte) >= 3 and recorte in por_nombre:
+            return por_nombre[recorte]
+    # Y por cómo suena: «Cloud Code» (Whisper) → «Claude».
+    for cuantas in range(len(palabras) - 1, 0, -1):
+        recorte = " ".join(palabras[:cuantas])
+        if len(recorte) >= 4 and (parecido := jarvis_windows.programa_parecido(recorte, set(por_nombre))):
+            return por_nombre[parecido]
+    return None
 
 
 def abrir_app(name: str) -> str:

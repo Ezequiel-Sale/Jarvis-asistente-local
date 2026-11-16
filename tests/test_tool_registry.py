@@ -88,6 +88,12 @@ class _TestHost:
     def _tool_set_theme(self, theme: str) -> str:
         return self._record(("theme", theme), "theme changed")
 
+    def _tool_say_text(self, text: str) -> str:
+        return self._record(("say", text), "dicho")
+
+    def _tool_notify_phone(self, text: str) -> str:
+        return self._record(("phone", text), "avisado")
+
     def _tool_set_compact_mode(self, enabled: bool) -> str:
         return self._record(("compact", enabled), "compact")
 
@@ -103,8 +109,13 @@ class _TestHost:
     def _tool_gpu_profile_status(self) -> str:
         return "gpu status"
 
-    def _tool_move_window(self, app: str, monitor: int | None = None, screen_name: str | None = None) -> str:
+    def _tool_move_window(self, app: str, monitor: int | None = None, screen_name: str | None = None,
+                          position: str | None = None) -> str:
         return self._record(("move", app, monitor, screen_name), "moved")
+
+    def _tool_arrange_windows(self, windows: list, monitor: int | None = None,
+                              screen_name: str | None = None) -> str:
+        return self._record(("arrange", len(windows), monitor), "arranged")
 
     def _tool_schedule_routine(
         self,
@@ -126,7 +137,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 49)
+        self.assertEqual(len(tools), 54)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -143,6 +154,11 @@ class ToolRegistryTests(unittest.TestCase):
                 "tv_open_app",
                 "tv_status",
                 "press_window_button",
+                "routine_wait",
+                "say_text",
+                "notify_phone",
+                "close_program",
+                "arrange_windows",
                 "set_reminder",
                 "list_reminders",
                 "cancel_reminder",

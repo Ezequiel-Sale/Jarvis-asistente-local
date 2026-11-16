@@ -365,6 +365,9 @@ class ControlTV:
         # enlace web y lista las instaladas.
         self._adb = adb
         self._adb_revisado = 0.0
+        # Cuánto aguanta la «Red en Espera»: cuándo se apagó la pantalla y si sigue en la red.
+        self._apagada_desde: float | None = None
+        self._en_red: bool | None = None
         self._buscar = buscador  # para los tests; por defecto, buscar() por mDNS
         self._mac_de_ip = None   # para los tests; por defecto, mac_de_ip() (ARP)
         self._responde = None    # para los tests; por defecto, responde() (conexión TCP)
@@ -435,6 +438,7 @@ class ControlTV:
 
     def _escuchar(self, remoto) -> None:
         def encendida(valor):
+            self._anotar_encendida(valor)
             self.estado.encendida = valor
             self._al_cambiar()
 
@@ -609,9 +613,55 @@ class ControlTV:
         self.desconectar()
         return False
 
+    # --- cuánto dura la «Red en Espera» -------------------------------------------------
+    MAX_HISTORIAL_RED = 10
+
+    def _anotar_encendida(self, valor) -> None:
+        if valor is False and self.estado.encendida is not False:
+            self._apagada_desde = time.time()
+        elif valor:
+            self._apagada_desde = None
+
+    def vigilar_red(self) -> bool | None:
+        """Cada minuto: ¿la tele sigue en la red? Si en reposo deja de responder (se apagó del
+        todo), lo anota en el registro y en tv.json («historial_red») con cuántas horas después de
+        apagarla, para saber cuánto dura su «Red en Espera» (el 2026-11-14 se apagaba sola)."""
+        if not self.estado.vinculada or not self.estado.host:
+            return None
+        probar = self._responde or responde
+        en_red = bool(probar(self.estado.host, CAST_PUERTO) or probar(self.estado.host))
+        if self._en_red is not None and en_red != self._en_red:
+            if en_red:
+                logging.info("La tele volvió a la red.")
+            else:
+                horas = (time.time() - self._apagada_desde) / 3600 if self._apagada_desde else None
+                detalle = f" ({horas:.1f} h después de apagarla)" if horas is not None else ""
+                logging.info("La tele dejó de responder en la red: se apagó del todo%s.", detalle)
+                historial = list(self._config.get("historial_red") or [])
+                historial.append({
+                    "apagada": time.strftime("%Y-%m-%d %H:%M", time.localtime(self._apagada_desde))
+                    if self._apagada_desde else None,
+                    "sin_red": time.strftime("%Y-%m-%d %H:%M"),
+                    "horas": round(horas, 2) if horas is not None else None,
+                })
+                self._config["historial_red"] = historial[-self.MAX_HISTORIAL_RED:]
+                self._guardar_config()
+        self._en_red = en_red
+        return en_red
+
+    def horas_red_en_espera(self) -> float | None:
+        """Lo que suele durar en la red tras apagarla (la menor de las medidas), o None."""
+        horas = [h["horas"] for h in self._config.get("historial_red") or [] if h.get("horas")]
+        return min(horas) if horas else None
+
     def intentar_en_segundo_plano(self) -> bool:
         """Cada minuto (desde la app): si está vinculada y desconectada, prueba conectarse sin
-        avisar. Así, al prender la tele con su control, Jarvis se conecta solo y aprende su MAC."""
+        avisar. Así, al prender la tele con su control, Jarvis se conecta solo y aprende su MAC.
+        También anota si la tele sigue en la red (``vigilar_red``)."""
+        try:
+            self.vigilar_red()
+        except Exception:
+            logging.debug("No se pudo revisar si la tele sigue en la red.", exc_info=True)
         if not self.estado.vinculada or self.estado.conectada or self.estado.esperando_codigo:
             return self.estado.conectada
         return self._conectar_una_vez(silencioso=True)
@@ -801,9 +851,13 @@ class ControlTV:
         if not self._esperar_red():
             # En la TCL (Google TV) del usuario: Ajustes → Sistema → Encendido y energía → Modo de Espera.
             # El 2026-11-13 pasó con «Red en Espera» ya elegido: la tele se había apagado del todo.
+            horas = self.horas_red_en_espera()
+            cuanto = (f" Según lo que medí, tu tele deja la red unas {horas:.1f} h después de apagarla."
+                      if horas is not None else "")
             raise ErrorTV("La tele no aparece en la red: parece apagada del todo (sin corriente o en reposo "
-                          "profundo), así que hay que prenderla con su control. Si pasa siempre, revisa en la tele "
-                          "Ajustes → Sistema → Encendido y energía → Modo de Espera: tiene que estar «Red en Espera».")
+                          "profundo), así que hay que prenderla con su control." + cuanto + " Si pasa siempre, "
+                          "revisa en la tele Ajustes → Sistema → Encendido y energía → Modo de Espera: tiene que "
+                          "estar «Red en Espera».")
         self._conectar_una_vez()
         try:
             sesion = (self._lanzar_cast or lanzar_cast)(self.estado.host)
@@ -882,6 +936,7 @@ class ControlTV:
             if not (estado is not None and estado.get("isStandBy") is False):
                 return "La tele ya está apagada."
         self.tecla("power")
+        self._anotar_encendida(False)
         self.estado.encendida = False
         return "Apagué la tele."
 

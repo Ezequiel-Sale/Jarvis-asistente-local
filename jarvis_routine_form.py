@@ -60,6 +60,12 @@ ETIQUETAS_POR_HERRAMIENTA = {
         "ok": "OK", "channel_up": "Canal siguiente", "channel_down": "Canal anterior",
     },
     "tv_open_app": {clave: nombre for clave, (nombre, _enlace) in jarvis_tv.APPS.items()},
+    "move_window": {
+        "left": "Mitad izquierda", "right": "Mitad derecha", "top": "Mitad de arriba", "bottom": "Mitad de abajo",
+        "top_left": "Arriba a la izquierda", "top_right": "Arriba a la derecha",
+        "bottom_left": "Abajo a la izquierda", "bottom_right": "Abajo a la derecha",
+        "center": "En el centro", "full": "Pantalla completa",
+    },
 }
 # Sugerencias que dependen de la app en marcha (las apps aprendidas de la tele):
 # herramienta → función que devuelve {etiqueta: valor}. Las registra JarvisApp.
@@ -72,6 +78,8 @@ ETIQUETAS_CAMPO = {
     "delay_seconds": "Dentro de (segundos)", "at": "Fecha y hora (AAAA-MM-DD HH:MM)",
     "what": "Qué", "city": "Ciudad", "day": "Día", "match": "Título contiene",
     "steps": "Pasos", "level": "Volumen (0-100)",
+    "position": "Posición en el monitor", "screen_name": "Pantalla por nombre (p. ej. tv)",
+    "seconds": "Segundos", "names": "Programas (separados por comas)", "path": "Archivo o carpeta",
     "program": "Programa (ventana)", "button": "Texto del botón", "wait_seconds": "Esperar hasta (segundos)",
 }
 DIAS = ("L", "M", "X", "J", "V", "S", "D")
@@ -91,6 +99,106 @@ _DB_A_FORM = {
     jarvis_routines.DISPARADOR_JUEGO_ABIERTO: "game_started",
     jarvis_routines.DISPARADOR_JUEGO_CERRADO: "game_stopped",
 }
+
+
+# Selector de acciones: categoría, nombre claro y para qué sirve. Antes era una lista alfabética
+# de 35 nombres (y dos se llamaban igual, «Navegar en Brave»: la segunda no se podía elegir).
+CATEGORIAS = (
+    "Básicas", "Tele", "Monitores y pantalla", "Audio", "Música y vídeo", "Programas, juegos y ventanas",
+    "Navegador", "Equipo y energía", "Avisos e información", "Jarvis", "Otras",
+)
+CATALOGO: dict[str, tuple[str, str, str]] = {
+    "routine_wait": ("Básicas", "Esperar", "Pausa unos segundos antes del paso siguiente (p. ej. a que cargue algo)."),
+    "say_text": ("Básicas", "Decir un mensaje", "Jarvis lo dice en voz alta y lo escribe en el chat y en el celular."),
+    "notify_phone": ("Básicas", "Avisar al celular", "Una notificación en la app del celular, sin hablar en la PC."),
+    "close_program": ("Programas, juegos y ventanas", "Cerrar un programa",
+                      "Por su nombre, varios separados por comas (Discord, Spotify…). Nunca Jarvis ni el sistema."),
+    "open_file": ("Programas, juegos y ventanas", "Abrir un archivo", "Un documento, foto o carpeta por su ruta."),
+    "set_compact_mode": ("Jarvis", "Modo compacto", "Pasa Jarvis a la ventana pequeña o la vuelve normal."),
+    "morning_briefing": ("Avisos e información", "Resumen del día", "Clima, avisos, rutinas y el estado del equipo."),
+    "list_reminders": ("Avisos e información", "Decir los avisos pendientes", "Temporizadores, recordatorios y alarmas."),
+    "tv_status": ("Tele", "Decir el estado de la tele", "Si está encendida, qué app tiene y el volumen."),
+    "tv_control": ("Tele", "Controlar la tele",
+                   "Encender, apagar, entrada HDMI, volumen, reproducción, inicio, atrás…"),
+    "tv_open_app": ("Tele", "Abrir una app en la tele", "Netflix, YouTube o cualquier app instalada en la tele."),
+    "configure_display": ("Monitores y pantalla", "Configurar monitores",
+                          "Activar, desactivar o duplicar un monitor, o elegir el principal."),
+    "fix_display_scaling": ("Monitores y pantalla", "Arreglar el escalado",
+                            "Vuelve a poner bien el tamaño de las ventanas tras cambiar monitores."),
+    "move_window": ("Monitores y pantalla", "Mover o acomodar una ventana",
+                    "Lleva las ventanas de un programa a un monitor y, si quieres, a una parte: mitad "
+                    "izquierda o derecha, arriba, abajo, una esquina, el centro o pantalla completa."),
+    "set_system_volume": ("Audio", "Volumen del sistema", "Pone el volumen general en un porcentaje."),
+    "set_app_volume": ("Audio", "Volumen de una aplicación", "Volumen o silencio de un programa (Spotify, Brave…)."),
+    "set_output_device": ("Audio", "Salida de audio", "Cambia entre auriculares y parlantes."),
+    "set_jarvis_audio": ("Audio", "Audio de Jarvis", "Activa o silencia la voz de Jarvis."),
+    "media_control": ("Música y vídeo", "Reproducción", "Play, pausa, siguiente, anterior o detener."),
+    "video_fullscreen": ("Música y vídeo", "Pantalla completa del vídeo", "Pone o quita la pantalla completa."),
+    "video_theater": ("Música y vídeo", "Modo cine del vídeo", "Modo cine o teatro de YouTube y Twitch."),
+    "search_youtube": ("Música y vídeo", "Buscar en YouTube", "Busca y, si quieres, reproduce un resultado."),
+    "mute_browser_tab": ("Música y vídeo", "Silenciar una pestaña", "Silencia o activa el sonido de una pestaña."),
+    "get_now_playing": ("Música y vídeo", "Decir qué está sonando", "Dice la canción o el vídeo actual."),
+    "open_app": ("Programas, juegos y ventanas", "Abrir una aplicación", "Por su nombre (WhatsApp, Discord…)."),
+    "open_program": ("Programas, juegos y ventanas", "Abrir un programa o archivo",
+                     "Por su ruta exacta (con «Examinar…»), p. ej. un launcher."),
+    "launch_game": ("Programas, juegos y ventanas", "Abrir un juego", "Por su nombre, de tus carpetas de juegos."),
+    "press_window_button": ("Programas, juegos y ventanas", "Pulsar un botón en una ventana",
+                            "P. ej. «Jugar» en un launcher; espera a que el botón aparezca."),
+    "window_control": ("Programas, juegos y ventanas", "Minimizar, maximizar o traer al frente",
+                       "Las ventanas de un programa (o todas)."),
+    "manage_window": ("Programas, juegos y ventanas", "Ventana de Jarvis", "Minimizar o maximizar Jarvis."),
+    "open_new_browser_tab": ("Navegador", "Abrir una pestaña en Brave", "Con una dirección web."),
+    "navigate_browser": ("Navegador", "Controlar la ventana de Brave", "Minimizar o maximizar Brave."),
+    "browser_history": ("Navegador", "Atrás, adelante o recargar", "En la pestaña activa de Brave."),
+    "power_control": ("Equipo y energía", "Apagar, reiniciar o suspender",
+                      "Con cuenta atrás; puedes indicar «dentro de» cuánto."),
+    "cancel_power_action": ("Equipo y energía", "Cancelar apagado o reinicio", "Anula uno programado."),
+    "lock_computer": ("Equipo y energía", "Bloquear el equipo", "Bloquea la sesión de Windows."),
+    "apply_gpu_profile": ("Equipo y energía", "Aplicar el undervolt de la GPU", "Vuelve a aplicar tu perfil."),
+    "get_system_status": ("Equipo y energía", "Decir el estado del equipo", "Temperaturas, carga, memoria y discos."),
+    "get_headset_battery": ("Equipo y energía", "Batería de los auriculares", "Dice la batería del G533."),
+    "get_jarvis_diagnostics": ("Equipo y energía", "Diagnóstico de Jarvis", "Revisa voz, modelos y servicios."),
+    "set_reminder": ("Avisos e información", "Programar un aviso", "Temporizador, recordatorio o alarma."),
+    "get_current_datetime": ("Avisos e información", "Decir la fecha y la hora", "Fecha, hora o las dos."),
+    "set_theme": ("Jarvis", "Cambiar el tema", "Colores de Jarvis."),
+    "set_voice": ("Jarvis", "Cambiar la voz", "La voz con que habla Jarvis."),
+}
+
+
+def catalogo_acciones(registry: ToolRegistry) -> list[tuple[str, str, str, str]]:
+    """(categoría, título, descripción, nombre) de las acciones de rutinas, en orden de categoría
+    y título. Las que no están en el catálogo van a «Otras» con su nombre de siempre."""
+    filas = []
+    for definicion in registry.definitions():
+        if definicion.name not in jarvis_routines._ROUTINE_ALLOWED_TOOLS:
+            continue
+        categoria, titulo, descripcion = CATALOGO.get(definicion.name, ("Otras", definicion.display_name, ""))
+        filas.append((categoria, titulo, descripcion, definicion.name))
+    orden = {c: i for i, c in enumerate(CATEGORIAS)}
+    return sorted(filas, key=lambda f: (orden.get(f[0], len(orden)), f[1].casefold()))
+
+
+def _sin_acentos(texto: str) -> str:
+    import unicodedata
+
+    texto = unicodedata.normalize("NFKD", texto.casefold())
+    return "".join(c for c in texto if not unicodedata.combining(c))
+
+
+def filtrar_acciones(filas: list[tuple[str, str, str, str]], busqueda: str,
+                     registry: ToolRegistry | None = None) -> list[tuple[str, str, str, str]]:
+    """Las que contienen todas las palabras buscadas (en categoría, título, descripción o el
+    nombre de siempre), sin importar acentos ni mayúsculas: «hdmi», «volumen tele», «jugar»."""
+    palabras = _sin_acentos(busqueda).split()
+    if not palabras:
+        return list(filas)
+    resultado = []
+    for fila in filas:
+        extra = registry.get(fila[3]).display_name if registry is not None else ""
+        texto = _sin_acentos(" ".join((*fila[:3], extra)))
+        if all(p in texto for p in palabras):
+            resultado.append(fila)
+    return resultado
 
 
 def herramientas_disponibles(registry: ToolRegistry) -> list[tuple[str, str]]:
@@ -124,6 +232,7 @@ def describir_paso(registry: ToolRegistry, paso: dict) -> str:
         etiqueta = registry.get(paso["tool"]).display_name
     except ToolError:
         etiqueta = paso["tool"]
+    etiqueta = CATALOGO.get(paso["tool"], ("", etiqueta))[1]  # el mismo nombre que en el selector
     detalles = ", ".join(etiqueta_valor(paso["tool"], valor) for valor in paso["arguments"].values())
     return f"{etiqueta} ({detalles})" if detalles else etiqueta
 
@@ -162,9 +271,17 @@ class RoutineForm:
         routine: "jarvis_routines.RoutineInfo | None" = None,
         *,
         incrustado: bool = False,
+        juego: str | None = None,
+        pasos: list[dict] | None = None,
+        al_guardar: Callable[[list[dict]], None] | None = None,
     ) -> None:
         """``incrustado``: el formulario cubre ``parent`` (la sección Rutinas de la
-        ventana principal) en vez de abrir otra ventana; al cerrarse, vuelve la lista."""
+        ventana principal) en vez de abrir otra ventana; al cerrarse, vuelve la lista.
+
+        ``juego``: solo las acciones que se hacen al abrir ese juego (página 🎮 JUEGOS): sin
+        nombre, disparador ni permiso; al guardar se llama ``al_guardar(pasos validados)``."""
+        self.juego = juego
+        self.al_guardar = al_guardar
         self.registry = registry
         self.on_saved = on_saved
         self.routine = routine
@@ -176,7 +293,8 @@ class RoutineForm:
             self.window.place(relx=0, rely=0, relwidth=1, relheight=1)
         else:
             self.window = tk.Toplevel(parent)
-            self.window.title("Editar rutina" if routine else "Nueva rutina o comando")
+            self.window.title(f"Acciones al abrir {juego}" if juego else
+                              "Editar rutina" if routine else "Nueva rutina o comando")
             self.window.configure(bg=BG)
             self.window.geometry("800x820")
             self.window.minsize(680, 480)
@@ -205,9 +323,17 @@ class RoutineForm:
             )
 
         tk.Label(
-            cuerpo, text="EDITAR RUTINA" if routine else "NUEVA RUTINA O COMANDO",
-            bg=BG, fg=CYAN, font=("Segoe UI", 15, "bold"),
+            cuerpo, text=(f"ACCIONES AL ABRIR «{juego.upper()}»" if juego else
+                          "EDITAR RUTINA" if routine else "NUEVA RUTINA O COMANDO"),
+            bg=BG, fg=CYAN, font=("Segoe UI", 15, "bold"), wraplength=700, justify="left",
         ).pack(anchor="w")
+        if juego:
+            tk.Label(cuerpo, text="Se hacen en orden después de abrir el juego, por ejemplo: Esperar 10 s → "
+                     "Pulsar un botón en una ventana («Jugar»). Sin acciones, el juego se abre como siempre.",
+                     bg=BG, fg=MUTED, font=("Segoe UI", 9), wraplength=700, justify="left").pack(anchor="w", pady=(4, 0))
+        # En modo juego, nombre, disparador y permiso se arman igual pero no se muestran.
+        visible = cuerpo
+        cuerpo = cuerpo if not juego else tk.Frame(visible, bg=BG)
 
         # Nombre
         self.nombre = tk.StringVar(value=routine.name if routine else "")
@@ -274,6 +400,7 @@ class RoutineForm:
         self.ancla_cuando.pack(fill="x")
 
         # Acciones
+        oculto, cuerpo = cuerpo, visible
         self._titulo(cuerpo, "ACCIONES (en orden)")
         lista = tk.Frame(cuerpo, bg=BG)
         lista.pack(fill="x")
@@ -290,20 +417,49 @@ class RoutineForm:
 
         nuevo = tk.Frame(cuerpo, bg=PANEL, padx=12, pady=10)
         nuevo.pack(fill="x", pady=(8, 0))
-        tk.Label(nuevo, text="Añadir acción:", bg=PANEL, fg=MUTED).pack(anchor="w")
+        tk.Label(nuevo, text="Añadir acción: busca o elige de la lista", bg=PANEL, fg=MUTED).pack(anchor="w")
         self.herramientas = herramientas_disponibles(registry)
-        self.herramienta = tk.StringVar()
-        selector = ttk.Combobox(
-            nuevo, textvariable=self.herramienta, state="readonly", width=45,
-            values=[etiqueta for etiqueta, _ in self.herramientas],
-        )
-        selector.pack(anchor="w")
-        selector.bind("<<ComboboxSelected>>", lambda _e: self._mostrar_campos())
+        self.acciones = catalogo_acciones(registry)
+        if juego:
+            import jarvis_acciones_juego
+
+            permitidas = jarvis_acciones_juego.herramientas_permitidas()
+            self.acciones = [f for f in self.acciones if f[3] in permitidas]
+        self.herramienta = tk.StringVar()  # título (o nombre de siempre) de la acción elegida
+        self.busqueda = tk.StringVar()
+        fila_buscar = tk.Frame(nuevo, bg=PANEL)
+        fila_buscar.pack(fill="x", pady=(4, 6))
+        tk.Label(fila_buscar, text="🔎", bg=PANEL, fg=MUTED, font=("Segoe UI Emoji", 10)).pack(side="left")
+        self.campo_buscar = self._entrada(fila_buscar, self.busqueda, 40)
+        self.campo_buscar.pack(side="left", fill="x", expand=True, padx=(6, 0), ipady=3)
+        self.busqueda.trace_add("write", lambda *_: self._llenar_acciones())
+        self.campo_buscar.bind("<Down>", lambda _e: self._enfocar_primera())
+        self.campo_buscar.bind("<Return>", lambda _e: self._enfocar_primera())
+        estilo = ttk.Style(self.window)
+        estilo.configure("Rutina.Treeview", background=PANEL_LIGHT, fieldbackground=PANEL_LIGHT, foreground=TEXT,
+                         rowheight=24, borderwidth=0, font=("Segoe UI", 10))
+        estilo.map("Rutina.Treeview", background=[("selected", HOVER)], foreground=[("selected", CYAN)])
+        marco_arbol = tk.Frame(nuevo, bg=PANEL)
+        marco_arbol.pack(fill="x")
+        self.arbol = ttk.Treeview(marco_arbol, style="Rutina.Treeview", show="tree", height=9,
+                                  selectmode="browse")
+        barra_arbol = ttk.Scrollbar(marco_arbol, orient="vertical", command=self.arbol.yview)
+        self.arbol.configure(yscrollcommand=barra_arbol.set)
+        self.arbol.pack(side="left", fill="x", expand=True)
+        barra_arbol.pack(side="left", fill="y")
+        self.arbol.tag_configure("categoria", foreground=CYAN, font=("Consolas", 9, "bold"))
+        self.arbol.bind("<<TreeviewSelect>>", lambda _e: self._elegir_de_arbol())
+        self.descripcion = tk.Label(nuevo, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 9), justify="left",
+                                    anchor="w", wraplength=600)
+        self.descripcion.pack(fill="x", pady=(6, 0))
+        self.descripcion.bind("<Configure>", lambda e: self.descripcion.configure(wraplength=max(200, e.width - 4)))
+        self._llenar_acciones()
         self.marco_campos = tk.Frame(nuevo, bg=PANEL)
         self.marco_campos.pack(fill="x", pady=(6, 0))
         self._boton(nuevo, "+ AÑADIR ACCIÓN", self._agregar).pack(anchor="e", pady=(6, 0))
 
         # Permiso
+        cuerpo = oculto
         self._titulo(cuerpo, "PERMISO")
         self.automatica = tk.BooleanVar(
             value=bool(routine and routine.permission == jarvis_routines.PERMISO_AUTOMATICA)
@@ -324,6 +480,8 @@ class RoutineForm:
 
         if routine:
             self.pasos = [{"tool": s.tool, "arguments": dict(s.arguments)} for s in routine.steps]
+        if pasos:
+            self.pasos = [dict(p) for p in pasos]
         self._actualizar_lista()
         self._actualizar_cuando()
         self.window.lift()
@@ -360,9 +518,47 @@ class RoutineForm:
             self.marco_hora.pack(fill="x", pady=(6, 0), before=self.ancla_cuando)
         self._actualizar_permiso()
 
+    def _llenar_acciones(self) -> None:
+        """Rehace el árbol con lo que coincide con la búsqueda (categorías abiertas)."""
+        self.arbol.delete(*self.arbol.get_children())
+        visibles = filtrar_acciones(self.acciones, self.busqueda.get(), self.registry)
+        categorias: dict[str, str] = {}
+        for categoria, titulo, _descripcion, nombre in visibles:
+            if categoria not in categorias:
+                categorias[categoria] = self.arbol.insert("", "end", text=categoria.upper(), open=True,
+                                                          tags=("categoria",))
+            self.arbol.insert(categorias[categoria], "end", iid=f"accion:{nombre}", text=f"   {titulo}")
+        if not visibles:
+            self.arbol.insert("", "end", text="Ninguna acción coincide con la búsqueda.", tags=("categoria",))
+
+    def _enfocar_primera(self) -> str:
+        primera = next((h for c in self.arbol.get_children() for h in self.arbol.get_children(c)), None)
+        if primera:
+            self.arbol.focus_set()
+            self.arbol.selection_set(primera)
+            self.arbol.focus(primera)
+            self.arbol.see(primera)
+        return "break"
+
+    def _elegir_de_arbol(self) -> None:
+        seleccion = self.arbol.selection()
+        if not seleccion or not seleccion[0].startswith("accion:"):
+            return
+        nombre = seleccion[0].split(":", 1)[1]
+        fila = next(f for f in self.acciones if f[3] == nombre)
+        self._elegida = nombre
+        self.herramienta.set(fila[1])
+        self._mostrar_campos()
+
     def _nombre_herramienta(self) -> str | None:
+        """La acción elegida en el árbol o, si se escribió el título o el nombre de siempre
+        («Control de la tele»), la que se llama así."""
         etiqueta = self.herramienta.get()
-        return next((nombre for e, nombre in self.herramientas if e == etiqueta), None)
+        elegida = getattr(self, "_elegida", None)
+        if elegida and CATALOGO.get(elegida, ("", etiqueta))[1] == etiqueta:
+            return elegida
+        por_titulo = next((f[3] for f in self.acciones if f[1] == etiqueta), None)
+        return por_titulo or next((nombre for e, nombre in self.herramientas if e == etiqueta), None)
 
     def _mostrar_campos(self) -> None:
         for hijo in self.marco_campos.winfo_children():
@@ -370,8 +566,16 @@ class RoutineForm:
         self.campos = {}
         nombre = self._nombre_herramienta()
         if nombre is None:
+            self.descripcion.configure(text="")
             return
-        esquema = self.registry.get(nombre).parameters
+        definicion = self.registry.get(nombre)
+        fila = next((f for f in self.acciones if f[3] == nombre), None)
+        riesgo = ("se puede usar sin preguntar" if definicion.risk is ToolRisk.LOW
+                  else "pide confirmación salvo en comandos por frase")
+        self.descripcion.configure(
+            text=f"{fila[1] if fila else definicion.display_name}: {fila[2] if fila and fila[2] else ''} "
+                 f"({riesgo}).".replace(":  (", " ("), fg=TEXT)
+        esquema = definicion.parameters
         requeridos = set(esquema.get("required", []))
         for clave, definicion in esquema.get("properties", {}).items():
             fila = tk.Frame(self.marco_campos, bg=PANEL)
@@ -487,7 +691,23 @@ class RoutineForm:
         self.casilla_auto.configure(state="normal" if habilitada else "disabled")
         self.nota_permiso.configure(text=nota)
 
+    def _guardar_juego(self) -> None:
+        import jarvis_acciones_juego
+
+        try:
+            pasos = jarvis_acciones_juego.validar(self.pasos, self.registry)
+            if self.al_guardar is not None:
+                self.al_guardar(pasos)
+        except (ValueError, ToolError) as error:
+            messagebox.showerror("No se pudo guardar", str(error), parent=self.window)
+            return
+        self.window.destroy()
+        self.on_saved()
+
     def _guardar(self) -> None:
+        if self.juego:
+            self._guardar_juego()
+            return
         disparador = self.disparador.get()
         frases = [f.strip() for f in self.frases.get().split(",") if f.strip()]
         dias = ",".join(str(i + 1) for i, var in enumerate(self.dias) if var.get())

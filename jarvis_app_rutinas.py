@@ -54,6 +54,18 @@ class RutinasMixin:
             self.events.put(("plan_confirmation_timeout", reply))
             return False
 
+    def _tool_say_text(self, text: str) -> str:
+        """«Decir un mensaje» en una rutina: como un aviso (chat, voz y celular)."""
+        self.events.put(("routine_say", text.strip()))
+        return f"Dije: «{text.strip()}»."
+
+    def _tool_notify_phone(self, text: str) -> str:
+        """«Avisar al celular»: notificación en la app, sin hablar en la PC."""
+        if not self.mobile.activo():
+            raise ToolError("La app del celular no está activada en Ajustes.")
+        self.mobile.mensaje("assistant", text.strip(), aviso="info")
+        return "Le avisé al celular."
+
     def _tool_schedule_routine(
         self,
         name: str,
@@ -125,10 +137,74 @@ class RutinasMixin:
             rutina = jarvis_routines.buscar_rutina_por_frase(texto)
             if rutina is None:
                 rutina = self._find_undo_routine(texto)
+            if rutina is None:
+                rutina = self._chained_orders(texto)
             return rutina
         except Exception:
             logging.exception("No se pudieron buscar los comandos personalizados.")
             return None
+
+    def _chained_orders(self, texto: str) -> "jarvis_routines.Routine | None":
+        """«X luego Y después Z»: si Jarvis reconoce cada parte sola (orden directa o rutina por
+        frase), arma una rutina al vuelo y la hace en orden. Si alguna parte no la reconoce, None
+        (va a la IA, que arma un plan)."""
+        from jarvis_commands import dividir_ordenes
+
+        partes = dividir_ordenes(texto)
+        if not partes:
+            return None
+        import re
+
+        pasos: list[jarvis_routines.RoutineStep] = []
+        for parte in partes:
+            rutina = jarvis_routines.buscar_rutina_por_frase(parte)
+            if rutina is not None:
+                pasos.extend(rutina.steps)
+                continue
+            orden = None
+            verbo, _, resto = parte.partition(" ")
+            sin_pronombre = re.sub(r"(?<=\w{3})(?:la|lo|le|las|los)$", "", verbo)
+            if pasos and sin_pronombre != verbo:
+                # «… ponla en HDMI 1», «… pausala», «… muévelo al monitor 2»: el pronombre es lo de
+                # la parte anterior (la tele o el programa), antes que la misma orden para la PC.
+                anterior = pasos[-1]
+                ventanas = anterior.arguments.get("windows") or []
+                app = anterior.arguments.get("app") or (ventanas[0].get("app") if len(ventanas) == 1 else None)
+                if anterior.tool.startswith("tv_"):
+                    orden = self._direct_tool_for(f"{sin_pronombre} {resto} en la tele".replace("  ", " "))
+                elif app:
+                    orden = self._direct_tool_for(f"{sin_pronombre} {app} {resto}".strip())
+            if orden is None:
+                orden = self._direct_tool_for(parte)
+            if orden is None:
+                return None
+            pasos.append(jarvis_routines.RoutineStep(orden[0], dict(orden[1])))
+        if not pasos or len(pasos) > jarvis_routines.MAX_PASOS:
+            return None
+        return jarvis_routines.Routine(0, "Órdenes", "", (), tuple(pasos), jarvis_routines.DISPARADOR_FRASE)
+
+    def _direct_tool_for(self, texto: str) -> tuple[str, dict] | None:
+        """La herramienta de una orden directa que no necesita preguntar nada ni decidir en otro
+        hilo (tele, monitores, ventanas, multimedia, volumen, salida de audio, energía…)."""
+        import jarvis_reminders
+        import jarvis_tv
+        from jarvis_commands import (
+            detectar_comando_compacto, detectar_comando_dispositivo_salida, detectar_comando_energia,
+            detectar_comando_monitores, detectar_comando_multimedia, detectar_comando_tema,
+            detectar_comando_ventanas, detectar_comando_volumen,
+        )
+
+        orden = (jarvis_tv.detectar(texto) or detectar_comando_monitores(texto)
+                 or detectar_comando_ventanas(texto) or detectar_comando_multimedia(texto)
+                 or detectar_comando_energia(texto) or detectar_comando_tema(texto)
+                 or detectar_comando_compacto(texto) or jarvis_reminders.detectar_comando(texto))
+        if orden is not None:
+            return orden
+        if (porcentaje := detectar_comando_volumen(texto)) is not None:
+            return "set_system_volume", {"percentage": porcentaje}
+        if (dispositivo := detectar_comando_dispositivo_salida(texto)) is not None:
+            return "set_output_device", {"device": dispositivo}
+        return None
 
     def _find_undo_routine(self, texto: str) -> "jarvis_routines.Routine | None":
         """«Desactiva el modo gaming 2K»: si esa rutina cambió los monitores y hay una

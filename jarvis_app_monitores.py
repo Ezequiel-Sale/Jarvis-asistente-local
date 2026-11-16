@@ -175,19 +175,44 @@ class MonitoresMixin:
         jarvis_displays.restaurar_configuracion(lote["previa"])
         return "No confirmaste los cambios de monitores, así que restauré la configuración anterior."
 
+    def _tool_arrange_windows(self, windows: list, monitor: int | None = None,
+                              screen_name: str | None = None) -> str:
+        """«En el monitor 2 pon Jarvis a la izquierda y Claude a la derecha»."""
+        numero = monitor
+        if numero is None and screen_name:
+            numero = self._monitor_por_nombre(screen_name)
+        destino = (jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), numero)
+                   if numero is not None else None)
+        hechas, fallas = [], []
+        for ventana in windows:
+            app, posicion = str(ventana.get("app", "")).strip(), str(ventana.get("position", ""))
+            try:
+                jarvis_windows.colocar_ventana(app, posicion, destino)
+                hechas.append(f"{app} {jarvis_windows.NOMBRES_POSICION.get(posicion, posicion)}")
+            except Exception as error:
+                fallas.append(str(error))
+        if not hechas:
+            raise RuntimeError(" ".join(fallas) or "No pude acomodar las ventanas.")
+        donde = f" del monitor {numero}" if numero is not None else ""
+        texto = "Puse " + (", ".join(hechas[:-1]) + " y " + hechas[-1] if len(hechas) > 1 else hechas[0]) + donde + "."
+        return texto + (" " + " ".join(fallas) if fallas else "")
+
     def _tool_move_window(
-        self, app: str, monitor: int | None = None, screen_name: str | None = None
+        self, app: str, monitor: int | None = None, screen_name: str | None = None,
+        position: str | None = None,
     ) -> str:
         numero = monitor
         if numero is None and screen_name:
             numero = self._monitor_por_nombre(screen_name)
+        if position:
+            return self._tool_arrange_windows([{"app": app, "position": position}], numero)
         if numero is None:
             raise ValueError("Indica a qué monitor mover la ventana (número o «la TV»).")
         destino = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), numero)
         movidas, total, programas = jarvis_windows.mover_ventanas(app, destino)
         if movidas == 0:
             raise RuntimeError(f"No pude mover las ventanas de «{app}» al monitor {numero}.")
-        quien = "todas las ventanas" if jarvis_windows.normalizar(app) in jarvis_windows.TODO else (
+        quien = "todas las ventanas" if jarvis_windows.nombre_app(app) in jarvis_windows.TODO else (
             f"{movidas} ventana{'s' if movidas != 1 else ''} de {', '.join(programas)}"
         )
         faltan = f" ({total - movidas} no se pudieron mover)" if movidas < total else ""

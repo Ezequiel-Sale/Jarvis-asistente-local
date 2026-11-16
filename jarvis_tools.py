@@ -1,9 +1,11 @@
+import time
 from collections.abc import Mapping
 from typing import Protocol
 
 from jarvis_actions import Verificador
 from jarvis_commands import normalizar_url_web
 import jarvis_routines
+from jarvis_windows import POSICIONES as POSICIONES_VENTANA
 import jarvis_health
 import jarvis_headset
 import jarvis_media
@@ -21,12 +23,18 @@ class ToolEventHost(Protocol):
     def _tool_set_jarvis_audio(self, enabled: bool) -> str: ...
     def _tool_set_theme(self, theme: str) -> str: ...
     def _tool_set_compact_mode(self, enabled: bool) -> str: ...
+    def _tool_say_text(self, text: str) -> str: ...
+    def _tool_notify_phone(self, text: str) -> str: ...
     def _tool_set_voice(self, voice: str) -> str: ...
     def _tool_apply_gpu_profile(self) -> str: ...
     def _tool_gpu_profile_status(self) -> str: ...
     def _tool_clean_disk(self, categories: list) -> str: ...
     def _tool_move_window(
-        self, app: str, monitor: int | None = None, screen_name: str | None = None
+        self, app: str, monitor: int | None = None, screen_name: str | None = None,
+        position: str | None = None,
+    ) -> str: ...
+    def _tool_arrange_windows(
+        self, windows: list, monitor: int | None = None, screen_name: str | None = None
     ) -> str: ...
     def _tool_open_new_browser_tab(self) -> str: ...
     def _tool_navigate_browser(self, url: str) -> str: ...
@@ -337,7 +345,9 @@ def crear_registro_herramientas(
         (
             "Mueve ventanas a otro monitor. app es el programa (brave, discord, spotify…), "
             "parte del título, «todo» para todas las ventanas o «esta ventana» para la activa. "
-            "Indica monitor (número fijo 1, 2, 3) o screen_name (p. ej. «tv»)."
+            "Indica monitor (número fijo 1, 2, 3) o screen_name (p. ej. «tv»). position (opcional) la "
+            "pone en una parte del monitor: left, right, top, bottom, top_left, top_right, bottom_left, "
+            "bottom_right, center o full."
         ),
         {
             "type": "object",
@@ -345,6 +355,7 @@ def crear_registro_herramientas(
                 "app": {"type": "string"},
                 "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
                 "screen_name": {"type": "string"},
+                "position": {"type": "string", "enum": list(POSICIONES_VENTANA)},
             },
             "required": ["app"],
             "additionalProperties": False,
@@ -353,6 +364,37 @@ def crear_registro_herramientas(
         argument_validators={"app": _trim_non_empty_text},
         risk=ToolRisk.MEDIUM,
         label="Mover ventanas",
+        timeout_seconds=20,
+    )
+    registry.register(
+        "arrange_windows",
+        (
+            "Acomoda varias ventanas en un monitor, cada una en su lugar: «en el monitor 2 pon Jarvis a la "
+            "izquierda y Claude a la derecha». windows = [{app, position}] con position: left, right, top, "
+            "bottom, top_left, top_right, bottom_left, bottom_right, center o full. monitor o screen_name "
+            "(opcional: si falta, cada ventana se acomoda en el monitor donde está)."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "windows": {
+                    "type": "array", "minItems": 1, "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "properties": {"app": {"type": "string"},
+                                       "position": {"type": "string", "enum": list(POSICIONES_VENTANA)}},
+                        "required": ["app", "position"],
+                    },
+                },
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+                "screen_name": {"type": "string"},
+            },
+            "required": ["windows"],
+            "additionalProperties": False,
+        },
+        host._tool_arrange_windows,
+        risk=ToolRisk.MEDIUM,
+        label="Acomodar ventanas",
         timeout_seconds=20,
     )
     registry.register(
@@ -619,6 +661,68 @@ def crear_registro_herramientas(
         timeout_seconds=15,
     )
     import jarvis_botones
+    import jarvis_modo_juego
+
+    def esperar(seconds: int) -> str:
+        time.sleep(seconds)
+        return f"Esperé {seconds} s."
+
+    registry.register(
+        "routine_wait",
+        "Espera unos segundos antes del paso siguiente de una rutina (seconds, de 1 a 600).",
+        {
+            "type": "object",
+            "properties": {"seconds": {"type": "integer", "minimum": 1, "maximum": 600}},
+            "required": ["seconds"],
+            "additionalProperties": False,
+        },
+        esperar,
+        label="Esperar",
+        timeout_seconds=610,
+    )
+    registry.register(
+        "say_text",
+        "Jarvis dice en voz alta (y escribe en el chat y en el celular) el texto indicado.",
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 300}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        host._tool_say_text,
+        label="Decir un mensaje",
+        timeout_seconds=10,
+    )
+    registry.register(
+        "notify_phone",
+        "Manda un aviso (notificación) a la app del celular con el texto indicado, sin hablar en la PC.",
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 300}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        host._tool_notify_phone,
+        label="Avisar al celular",
+        timeout_seconds=10,
+    )
+    registry.register(
+        "close_program",
+        (
+            "Cierra los programas indicados por su nombre, separados por comas (p. ej. «Discord, Spotify»). "
+            "Nunca cierra Jarvis ni los del sistema."
+        ),
+        {
+            "type": "object",
+            "properties": {"names": {"type": "string", "minLength": 2, "maxLength": 200}},
+            "required": ["names"],
+            "additionalProperties": False,
+        },
+        jarvis_modo_juego.cerrar_programas,
+        risk=ToolRisk.MEDIUM,
+        label="Cerrar un programa",
+        timeout_seconds=30,
+    )
 
     registry.register(
         "press_window_button",

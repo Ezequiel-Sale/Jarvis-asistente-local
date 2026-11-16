@@ -12,6 +12,7 @@
 import ctypes
 import logging
 import os
+import re
 import unicodedata
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -53,13 +54,19 @@ def normalizar(texto: str) -> str:
     return "".join(c for c in texto if not unicodedata.combining(c)).strip()
 
 
+def nombre_app(app: str) -> str:
+    """Nombre de programa normalizado, sin la «a» personal: «trae a Jarvis al frente», «coloca a
+    Claude a la derecha» (2026-11-15: fallaba con «no encontré ventanas de «a jarvis»»)."""
+    return re.sub(r"^a\s+", "", normalizar(app))
+
+
 PROPIAS = {"jarvis", "j.a.r.v.i.s.", "j.a.r.v.i.s", "el asistente", "ti", "vos", "tu ventana"}
 
 
 def elegir(ventanas: list[Ventana], app: str, propio_pid: int) -> list[Ventana]:
     """Ventanas que corresponden a ``app``. Las de Jarvis solo si se lo nombra («mueve Jarvis al
     monitor 2»): «todo» y los demás nombres no las arrastran."""
-    clave = normalizar(app)
+    clave = nombre_app(app)
     if clave in PROPIAS:
         propias = [v for v in ventanas if v.pid == propio_pid]
         principal = [v for v in propias if "j.a.r.v.i.s" in normalizar(v.titulo)]
@@ -144,6 +151,47 @@ def nuevo_rect(
     x = dl + round(fx * ((dr - dl) - ancho))
     y = dt + round(fy * ((db - dt) - alto))
     return x, y, x + ancho, y + alto
+
+
+# Posiciones dentro de un monitor (fracciones del área de trabajo: x, y, ancho, alto).
+POSICIONES = {
+    "left": (0, 0, 0.5, 1), "right": (0.5, 0, 0.5, 1), "top": (0, 0, 1, 0.5), "bottom": (0, 0.5, 1, 0.5),
+    "top_left": (0, 0, 0.5, 0.5), "top_right": (0.5, 0, 0.5, 0.5),
+    "bottom_left": (0, 0.5, 0.5, 0.5), "bottom_right": (0.5, 0.5, 0.5, 0.5),
+    "center": (0.15, 0.1, 0.7, 0.8), "full": (0, 0, 1, 1),
+}
+NOMBRES_POSICION = {
+    "left": "a la izquierda", "right": "a la derecha", "top": "arriba", "bottom": "abajo",
+    "top_left": "arriba a la izquierda", "top_right": "arriba a la derecha",
+    "bottom_left": "abajo a la izquierda", "bottom_right": "abajo a la derecha",
+    "center": "en el centro", "full": "en pantalla completa",
+}
+
+
+def rect_posicion(area: tuple[int, int, int, int], posicion: str,
+                  bordes: tuple[int, int, int, int] = (0, 0, 0, 0)) -> tuple[int, int, int, int]:
+    """Rectángulo de ``posicion`` dentro del área de trabajo. ``bordes`` (izq, arriba, der, abajo)
+    son los bordes invisibles de Windows 10/11: se suman para que la parte visible quede justa,
+    sin huecos entre dos ventanas lado a lado."""
+    if posicion not in POSICIONES:
+        raise ErrorVentana(f"Posición desconocida: {posicion}.")
+    l, t, r, b = area
+    fx, fy, fa, fh = POSICIONES[posicion]
+    x0, y0 = l + round(fx * (r - l)), t + round(fy * (b - t))
+    x1, y1 = l + round((fx + fa) * (r - l)), t + round((fy + fh) * (b - t))
+    bi, ba, bd, bb = bordes
+    return x0 - bi, y0 - ba, x1 + bd, y1 + bb
+
+
+def _bordes_invisibles(user32, hwnd) -> tuple[int, int, int, int]:
+    """Diferencia entre GetWindowRect y lo que se ve (DWMWA_EXTENDED_FRAME_BOUNDS)."""
+    rect, visible = wintypes.RECT(), wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    if ctypes.WinDLL("dwmapi").DwmGetWindowAttribute(wintypes.HWND(hwnd), 9, ctypes.byref(visible),
+                                                     ctypes.sizeof(visible)) != 0:
+        return 0, 0, 0, 0
+    return (max(0, visible.left - rect.left), max(0, visible.top - rect.top),
+            max(0, rect.right - visible.right), max(0, rect.bottom - visible.bottom))
 
 
 # --- Windows -------------------------------------------------------------------
@@ -283,11 +331,45 @@ def mover(ventana: Ventana, monitor) -> bool:
             user32.SetThreadDpiAwarenessContext(anterior)
 
 
+def colocar(ventana: Ventana, posicion: str, monitor=None) -> bool:
+    """Pone la ventana en ``posicion`` del monitor (``jarvis_vision.Monitor``; None = el suyo)."""
+    user32 = _user32()
+    anterior = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    try:
+        destino = (_monitor_destino(user32, monitor) if monitor is not None
+                   else user32.MonitorFromWindow(ventana.hwnd, 2))
+        if user32.IsIconic(ventana.hwnd) or user32.IsZoomed(ventana.hwnd):
+            user32.ShowWindow(ventana.hwnd, SW_RESTORE)
+        area = _area_trabajo(user32, destino)
+        bordes = (0, 0, 0, 0) if posicion == "full" else _bordes_invisibles(user32, ventana.hwnd)
+        x0, y0, x1, y1 = rect_posicion(area, "full" if posicion == "full" else posicion, bordes)
+        user32.SetWindowPos(ventana.hwnd, None, x0, y0, x1 - x0, y1 - y0, SWP_NOZORDER | SWP_NOACTIVATE)
+        if posicion == "full":
+            user32.ShowWindow(ventana.hwnd, SW_MAXIMIZE)
+        return user32.MonitorFromWindow(ventana.hwnd, 2) == destino
+    finally:
+        if anterior:
+            user32.SetThreadDpiAwarenessContext(anterior)
+
+
+def colocar_ventana(app: str, posicion: str, monitor=None) -> str:
+    """La primera ventana de ``app`` (la de más arriba) en ``posicion``; devuelve su programa."""
+    ventanas = listar_ventanas()
+    propio = os.getpid()
+    elegidas = ventana_activa(ventanas, propio) if nombre_app(app) in ACTIVA else elegir(ventanas, app, propio)
+    if not elegidas:
+        raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
+    ventana = elegidas[0]
+    if not colocar(ventana, posicion, monitor):
+        raise ErrorVentana(f"Windows no dejó acomodar la ventana de «{app}».")
+    return ventana.programa or ventana.titulo
+
+
 def mover_ventanas(app: str, monitor) -> tuple[int, int, list[str]]:
     """(movidas, total, programas) de las ventanas de ``app`` hacia ``monitor``."""
     ventanas = listar_ventanas()
     propio = os.getpid()
-    elegidas = ventana_activa(ventanas, propio) if normalizar(app) in ACTIVA else elegir(ventanas, app, propio)
+    elegidas = ventana_activa(ventanas, propio) if nombre_app(app) in ACTIVA else elegir(ventanas, app, propio)
     if not elegidas:
         raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
     movidas = 0
@@ -308,7 +390,7 @@ def ventanas_en_monitor(app: str, monitor) -> tuple[int, int]:
         destino = _monitor_destino(user32, monitor)
         ventanas = listar_ventanas()
         propio = os.getpid()
-        elegidas = ventana_activa(ventanas, propio) if normalizar(app) in ACTIVA else elegir(ventanas, app, propio)
+        elegidas = ventana_activa(ventanas, propio) if nombre_app(app) in ACTIVA else elegir(ventanas, app, propio)
         return sum(user32.MonitorFromWindow(v.hwnd, 2) == destino for v in elegidas), len(elegidas)
     finally:
         if anterior:
@@ -352,7 +434,7 @@ def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = No
         raise ErrorVentana(f"Acción de ventana no válida: {accion}.")
     ventanas = listar_ventanas() if ventanas is None else ventanas
     propio = os.getpid() if propio_pid is None else propio_pid
-    clave = normalizar(app)
+    clave = nombre_app(app)
     if clave in ACTIVA:
         elegidas = ventana_activa(ventanas, propio)
     else:

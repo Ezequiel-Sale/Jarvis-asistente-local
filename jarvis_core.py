@@ -32,7 +32,7 @@ STT_MODEL = "Systran/faster-whisper-small"
 # devuelve texto. Que sea corto: una pista larga se cuela a veces en la transcripción.
 STT_PROMPT = (
     "Órdenes para Jarvis: pausa, reanuda, silencia, mutea, desmutea la pestaña de YouTube "
-    "en Brave, monitor 1, monitor 2, haz clic, volumen, Spotify. Minimiza, maximiza, restaura, "
+    "en Brave, monitor 1, monitor 2, haz clic, volumen, Spotify. Maximiza, agranda, minimiza, restaura, "
     "recarga la página."
 )
 LLM_URL = "http://127.0.0.1:11434/api/generate"

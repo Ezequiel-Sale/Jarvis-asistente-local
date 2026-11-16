@@ -105,6 +105,9 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.files).setOnClickListener {
             startActivity(Intent(this, FilesActivity::class.java))
         }
+        findViewById<View>(R.id.help).setOnClickListener {
+            startActivity(Intent(this, CommandsActivity::class.java))
+        }
         val root = findViewById<ViewGroup>(android.R.id.content).getChildAt(0) as LinearLayout
         tabs = Tabs.bar(this, "chat").apply { visibility = View.GONE }
         root.addView(tabs)
@@ -192,6 +195,7 @@ class MainActivity : Activity() {
         pair.isEnabled = true
         findViewById<View>(R.id.screen).visibility = View.GONE
         findViewById<View>(R.id.files).visibility = View.GONE
+        findViewById<View>(R.id.help).visibility = View.GONE
         tabs.visibility = View.GONE
         status.text = "● SIN VINCULAR"
         status.setTextColor(getColor(R.color.muted))
@@ -203,6 +207,7 @@ class MainActivity : Activity() {
         composer.visibility = View.VISIBLE
         findViewById<View>(R.id.screen).visibility = View.VISIBLE
         findViewById<View>(R.id.files).visibility = View.VISIBLE
+        findViewById<View>(R.id.help).visibility = View.VISIBLE
         tabs.visibility = View.VISIBLE
     }
 

@@ -40,6 +40,12 @@ class PhraseTests(unittest.TestCase):
             "muestra el escritorio": ("todo", "window_minimize"),
             "maximiza Jarvis": ("jarvis", "window_maximize"),  # antes iba a la IA (2026-11-14)
             "trae Jarvis al frente": ("jarvis", "window_focus"),
+            "Trae a Jarvis al frente.": ("jarvis", "window_focus"),
+            "minimiza a Discord": ("discord", "window_minimize"),
+            # Whisper a veces oye «minimiza» por «maximiza»: sinónimos que suenan distinto.
+            "agranda Jarvis": ("jarvis", "window_maximize"),
+            "amplía Jarvis": ("jarvis", "window_maximize"),
+            "pon Jarvis en grande": ("jarvis", "window_maximize"),
         }
         for frase, (app, accion) in casos.items():
             with self.subTest(frase=frase):
@@ -47,7 +53,8 @@ class PhraseTests(unittest.TestCase):
 
     def test_other_commands_are_not_stolen(self) -> None:
         for frase in ("ve a youtube.com", "muestra la hora", "siguiente", "anterior", "actualiza la app",
-                      "agranda la letra", "minimiza Brave", "minimiza la ventana", "maximiza"):
+                      "agranda la letra", "minimiza Brave", "minimiza la ventana", "maximiza",
+                      "minimiza Jarvis y luego muévelo al segundo monitor"):  # dos órdenes: no es un programa
             with self.subTest(frase=frase):
                 self.assertIsNone(detectar_comando_ventanas(frase))
         # Brave y Jarvis siguen con sus frases de siempre.
@@ -93,7 +100,8 @@ class ToolTests(unittest.TestCase):
     def test_messages_and_jarvis_case(self) -> None:
         from jarvis_app import JarvisApp
 
-        host = SimpleNamespace(_tool_manage_window=lambda accion: f"jarvis:{accion}")
+        host = SimpleNamespace(_tool_manage_window=lambda accion: f"jarvis:{accion}",
+                               _request_tool_ui_action=lambda accion: f"ui:{accion}")
         with patch.object(w, "cambiar_estado", return_value=(2, ["discord"])):
             self.assertEqual(JarvisApp._tool_window_control(host, "Discord", "window_minimize"),
                              "Minimicé 2 ventanas de discord.")
@@ -101,6 +109,10 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(JarvisApp._tool_window_control(host, "todo", "window_minimize"),
                              "Minimicé todas las ventanas (5).")
         self.assertEqual(JarvisApp._tool_window_control(host, "Jarvis", "window_maximize"), "jarvis:maximize")
+        # Minimizado, Jarvis está oculto en la bandeja: «trae Jarvis al frente» lo trae desde la app.
+        self.assertEqual(JarvisApp._tool_window_control(host, "Jarvis", "window_focus"), "ui:show_jarvis")
+        self.assertEqual(JarvisApp._tool_window_control(host, "a Jarvis", "window_focus"), "ui:show_jarvis")
+        self.assertEqual(JarvisApp._tool_window_control(host, "jarvis", "window_restore"), "ui:restore_jarvis")
 
     def test_usable_in_routines(self) -> None:
         for nombre in ("window_control", "browser_history"):

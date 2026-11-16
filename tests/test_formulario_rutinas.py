@@ -71,11 +71,50 @@ class PhraseRoutineTests(_DbTestCase):
         self.assertEqual(info.phrases, ("modo cine", "peli"))
         self.assertIn("«peli»", routines.describir_disparador(info.trigger, "", info.days, info.phrases))
 
-    def test_up_to_ten_steps(self) -> None:
-        pasos = json.dumps([{"tool": "media_control", "arguments": {"action": "next"}}] * 10)
-        routines.crear_rutina("Diez", "08:00", "1", pasos, self.registry)
+    def test_up_to_fifteen_steps(self) -> None:
+        pasos = [{"tool": "media_control", "arguments": {"action": "next"}}] * 15
+        routines.crear_rutina("Quince", "08:00", "1", json.dumps(pasos), self.registry)
         with self.assertRaises(ValueError):
-            routines.crear_rutina("Once", "08:00", "1", json.dumps(json.loads(pasos) * 2), self.registry)
+            routines.crear_rutina("Dieciséis", "08:00", "1", json.dumps(pasos * 2), self.registry)
+
+    def test_new_basic_actions(self) -> None:
+        """Esperar, Decir un mensaje, Avisar al celular y Cerrar un programa, en una rutina."""
+        import jarvis_modo_juego
+
+        pasos = [
+            {"tool": "close_program", "arguments": {"names": "Discord"}},
+            {"tool": "routine_wait", "arguments": {"seconds": 5}},
+            {"tool": "say_text", "arguments": {"text": "Listo para jugar"}},
+            {"tool": "notify_phone", "arguments": {"text": "Empezó el juego"}},
+            {"tool": "morning_briefing", "arguments": {}},
+        ]
+        routines.crear_rutina("A jugar", "", "", json.dumps(pasos), self.registry, trigger="frase",
+                              phrases=["a jugar"])
+        with patch.object(jarvis_modo_juego, "cerrar", return_value=[jarvis_modo_juego.Cerrado("discord", "d.exe")]):
+            self.assertEqual(jarvis_modo_juego.cerrar_programas("Discord, Jarvis"), "Cerré discord.")
+        with patch.object(jarvis_modo_juego, "cerrar", return_value=[]):
+            self.assertEqual(jarvis_modo_juego.cerrar_programas("spotify"), "No estaba abierto: spotify.")
+        with self.assertRaises(ValueError):
+            jarvis_modo_juego.cerrar_programas("jarvis, explorer")  # protegidos: no queda nada
+        import jarvis_tools
+
+        with patch.object(jarvis_tools.time, "sleep") as dormir:
+            self.assertEqual(self.registry.get("routine_wait").handler(seconds=5), "Esperé 5 s.")
+        dormir.assert_called_once_with(5)
+
+    def test_say_and_phone_from_the_app(self) -> None:
+        import queue
+
+        host = Mock()
+        host.events = queue.Queue()
+        self.assertEqual(JarvisApp._tool_say_text(host, " Hola "), "Dije: «Hola».")
+        self.assertEqual(host.events.get_nowait(), ("routine_say", "Hola"))
+        host.mobile.activo.return_value = True
+        self.assertEqual(JarvisApp._tool_notify_phone(host, "Hola"), "Le avisé al celular.")
+        host.mobile.mensaje.assert_called_once_with("assistant", "Hola", aviso="info")
+        host.mobile.activo.return_value = False
+        with self.assertRaises(Exception):
+            JarvisApp._tool_notify_phone(host, "Hola")
 
 
 class OpenProgramTests(unittest.TestCase):
@@ -165,6 +204,43 @@ class FormHelperTests(_DbTestCase):
             form.argumentos_desde_campos(esquema, {"app": "", "percentage": "30"})
 
 
+class PowerInMinutesTests(_DbTestCase):
+    def test_power_off_in_ten_minutes_passes_validation(self) -> None:
+        """«Apaga el equipo dentro de 10 minutos»: la hora va al segundo (HH:MM:SS) y antes el
+        esquema de schedule_routine solo admitía HH:MM («el parámetro 'time' es demasiado largo»)."""
+        from jarvis_commands import limpiar_transcripcion_voz
+
+        pedido = routines.parsear_solicitud_creacion(
+            limpiar_transcripcion_voz("Apaga el equipo dentro de 10 minutos."), self.registry)
+        argumentos = self.registry.validate_arguments("schedule_routine", pedido.tool_arguments())
+        self.assertEqual(len(argumentos["time"]), 8)
+        self.assertTrue(argumentos["once"])
+
+
+class ActionPickerTests(_DbTestCase):
+    def test_catalog_covers_every_routine_action_with_unique_titles(self) -> None:
+        filas = form.catalogo_acciones(self.registry)
+        self.assertEqual({f[3] for f in filas}, {n for _, n in form.herramientas_disponibles(self.registry)})
+        self.assertNotIn("Otras", {f[0] for f in filas})  # todas tienen su categoría
+        titulos = [f[1] for f in filas]
+        self.assertEqual(len(titulos), len(set(titulos)))  # antes había dos «Navegar en Brave»
+        self.assertEqual([f[0] for f in filas[:4]], ["Básicas"] * 3 + ["Tele"])
+
+    def test_search_by_words_without_accents(self) -> None:
+        filas = form.catalogo_acciones(self.registry)
+
+        def nombres(busqueda):
+            return [f[3] for f in form.filtrar_acciones(filas, busqueda, self.registry)]
+
+        self.assertEqual(nombres("hdmi"), ["tv_control"])
+        self.assertIn("press_window_button", nombres("jugar"))
+        self.assertIn("set_system_volume", nombres("VOLÚMEN"))
+        self.assertEqual(nombres("volumen tele"), ["tv_control", "tv_status"])
+        self.assertIn("media_control", nombres("Controlar reproducción"))  # el nombre de siempre también
+        self.assertEqual(nombres("zzz"), [])
+        self.assertEqual(len(nombres("")), len(filas))
+
+
 class FormWindowTests(_DbTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -229,7 +305,7 @@ class FormWindowTests(_DbTestCase):
             ventana._mostrar_campos()
             self.assertEqual(ventana.campos["app"]._jarvis_sugerencias, {"Netflix": "netflix", "Star": "com.star.app"})
             self.assertEqual(form.etiqueta_valor("tv_open_app", "com.star.app"), "Star")
-        self.assertEqual(ventana.lista.get(0, "end")[1].split(". ", 1)[-1], "Control de la tele (Entrada HDMI 1)")
+        self.assertEqual(ventana.lista.get(0, "end")[1].split(". ", 1)[-1], "Controlar la tele (Entrada HDMI 1)")
         ventana._guardar()
         rutina = routines.buscar_rutina_por_frase("modo cine")
         self.assertEqual([(s.tool, s.arguments) for s in rutina.steps], [
@@ -237,6 +313,16 @@ class FormWindowTests(_DbTestCase):
             ("tv_open_app", {"app": "netflix"}), ("tv_open_app", {"app": "com.otra.app"})])
         # Solo tocan la tele: una rutina por horario las puede hacer sin preguntar.
         self.assertEqual(routines.acciones_con_permiso(["tv_control", "tv_open_app"], self.registry), [])
+
+    def test_pick_from_the_tree_after_searching(self) -> None:
+        ventana = form.RoutineForm(self.root, self.registry, Mock())
+        ventana.busqueda.set("atras recargar")
+        self.assertEqual(ventana.arbol.get_children(ventana.arbol.get_children()[0]), ("accion:browser_history",))
+        ventana.arbol.selection_set("accion:browser_history")
+        self.root.update()  # procesa <<TreeviewSelect>>
+        self.assertEqual(ventana._nombre_herramienta(), "browser_history")
+        self.assertIn("action", ventana.campos)
+        self.assertIn("Atrás, adelante o recargar", ventana.descripcion.cget("text"))
 
     def test_name_field_is_not_hidden_behind_its_row(self) -> None:
         ventana = form.RoutineForm(self.root, self.registry, Mock())

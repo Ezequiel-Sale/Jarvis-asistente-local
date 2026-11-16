@@ -45,6 +45,39 @@ def tamano_salida(ancho_monitor: int, alto_monitor: int, ancho_max: int) -> tupl
     return _par(ancho), _par(alto_monitor * ancho / ancho_monitor)
 
 
+def _refrescar_dxcam() -> None:
+    """dxcam lee la lista de monitores una sola vez (al importarse). Si después cambian (activar,
+    desactivar o cambiar el principal: «modo gaming 4K»), duplicar la pantalla falla con
+    «Error no especificado»: se vuelve a crear su fábrica para que lea los monitores de ahora."""
+    import dxcam
+
+    fabrica = getattr(dxcam, "__factory", None)
+    if fabrica is not None:
+        try:
+            fabrica.clean_up()
+        except Exception:
+            logging.debug("No se pudieron liberar las cámaras de dxcam.", exc_info=True)
+        dxcam.Singleton._instances.pop(type(fabrica), None)
+        setattr(dxcam, "__factory", type(fabrica)())
+    logging.info("Lista de monitores de la captura de vídeo actualizada.")
+
+
+def _abrir_camara(numero: int):
+    """Cámara de dxcam para el monitor; si falla por una lista de monitores vieja, la renueva y
+    reintenta una vez."""
+    import dxcam
+
+    for intento in (1, 2):
+        try:
+            return dxcam.create(output_idx=_salida_dxgi(numero), output_color="BGRA",
+                                processor_backend="numpy")
+        except Exception as error:
+            if intento == 2:
+                raise
+            logging.info("La captura del monitor %s falló (%s); actualizo la lista de monitores.", numero, error)
+            _refrescar_dxcam()
+
+
 def _salida_dxgi(numero: int) -> int:
     """Índice de salida de dxcam del monitor con ese número fijo."""
     import dxcam
@@ -93,8 +126,7 @@ def transmitir(numero: int, fps: int, ancho_max: int, kbps: int,
         raise VideoNoDisponible(f"Falta un componente de vídeo: {error}") from error
 
     fps = fps if fps in FPS_PERMITIDOS else 30
-    camara = dxcam.create(output_idx=_salida_dxgi(numero), output_color="BGRA",
-                          processor_backend="numpy")
+    camara = _abrir_camara(numero)
     try:
         ancho, alto = tamano_salida(camara.width, camara.height, ancho_max)
         nombre, codificador = _abrir_codificador(ancho, alto, fps, kbps)

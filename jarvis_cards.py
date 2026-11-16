@@ -16,7 +16,7 @@ def hora_mensaje(momento: datetime | None = None, ahora: datetime | None = None)
     return momento.strftime("%d/%m %H:%M" if momento.year == ahora.year else "%d/%m/%Y %H:%M")
 
 ICONOS = {
-    "configure_display": "🖥", "restore_display_config": "🖥", "fix_display_scaling": "🖥", "move_window": "🗔",
+    "configure_display": "🖥", "restore_display_config": "🖥", "fix_display_scaling": "🖥", "move_window": "🗔", "arrange_windows": "🗔",
     "set_system_volume": "🔊", "set_app_volume": "🔊", "set_output_device": "🎧",
     "set_jarvis_audio": "🔈", "media_control": "⏯", "media_sequence": "⏯", "video_fullscreen": "⛶", "video_theater": "🎭", "apply_gpu_profile": "⚡",
     "mute_browser_tab": "🔇", "now_playing": "🎵", "search_youtube": "▶",
@@ -29,7 +29,8 @@ ICONOS = {
     "list_top_processes": "📊", "list_open_applications": "🗂",
     "get_current_datetime": "🕒", "morning_briefing": "☀", "undo_last_action": "↶",
     "show_commands_help": "?", "find_files": "🔎", "open_file": "📄",
-    "tv_control": "📺", "tv_open_app": "📺", "tv_status": "📺", "press_window_button": "🖱", "get_jarvis_diagnostics": "🩺",
+    "tv_control": "📺", "tv_open_app": "📺", "tv_status": "📺", "press_window_button": "🖱", "routine_wait": "⏳", "say_text": "🗣", "notify_phone": "📱",
+    "close_program": "✖", "get_jarvis_diagnostics": "🩺",
 }
 ORIGENES = {"directo": "directo", "agente": "IA", "rutina": "rutina", "frase": "frase", "pantalla": "pantalla"}
 
@@ -143,8 +144,19 @@ def _frase_especifica(herramienta: str, a: dict) -> str | None:
                   "window_restore": "Restaurar", "window_focus": "Traer al frente"}
         return f"{verbos.get(accion, accion)} la ventana de {a['app']}"
     if herramienta == "move_window" and a.get("app"):
-        destino = f"al monitor {a['monitor']}" if a.get("monitor") else f"a «{a.get('screen_name', '?')}»"
-        return f"Mover la ventana de {a['app']} {destino}"
+        import jarvis_windows
+
+        destino = f"al monitor {a['monitor']}" if a.get("monitor") else (
+            f"a «{a['screen_name']}»" if a.get("screen_name") else "")
+        lugar = jarvis_windows.NOMBRES_POSICION.get(str(a.get("position")), "")
+        return " ".join(p for p in (f"Mover la ventana de {a['app']}", destino, lugar) if p)
+    if herramienta == "arrange_windows" and a.get("windows"):
+        import jarvis_windows
+
+        partes = [f"{v.get('app')} {jarvis_windows.NOMBRES_POSICION.get(str(v.get('position')), '')}".strip()
+                  for v in a["windows"]]
+        donde = f" en el monitor {a['monitor']}" if a.get("monitor") else ""
+        return "Poner " + ", ".join(partes) + donde
     if herramienta == "navigate_browser" and a.get("url"):
         return f"Abrir la página {a['url']}"
     if herramienta == "open_new_browser_tab":
@@ -173,6 +185,14 @@ def _frase_especifica(herramienta: str, a: dict) -> str | None:
         import jarvis_tv
 
         return f"Abrir {jarvis_tv.APPS.get(str(a['app']), (a['app'],))[0]} en la tele"
+    if herramienta == "routine_wait" and a.get("seconds"):
+        return f"Esperar {a['seconds']} s"
+    if herramienta == "say_text" and a.get("text"):
+        return f"Decir «{a['text']}»"
+    if herramienta == "notify_phone" and a.get("text"):
+        return f"Avisar al celular: «{a['text']}»"
+    if herramienta == "close_program" and a.get("names"):
+        return f"Cerrar {a['names']}"
     if herramienta == "press_window_button" and a.get("button"):
         return f"Pulsar «{a['button']}» en {a.get('program', 'la ventana')}"
     if herramienta == "screen_click":

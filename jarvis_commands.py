@@ -536,6 +536,8 @@ _CORRECCIONES_VOZ = (
     (r"\bpesta[nñ]a\s+de\s+you\s+tube\b", "pestaña de YouTube"),
     (r"\byou\s+tube\b", "YouTube"),
     (r"\ben\s+la\s+tel(?:ena|eta|el)\b", "en la tele"),  # «Abre triplay en la telena» (2026-11-13)
+    (r"^(?:aranda|agrandar?a)\b", "agranda"),
+    (r"^tres\s+(.+?)\s+al\s+frente\b", r"trae \1 al frente"),  # «Tres Jarvis al frente» (2026-11-15)  # «Agrandá Jarvis» → «Aranda Jarvis» (2026-11-14)
     # Vistos al comparar modelos con 84 órdenes sintetizadas (2026-11-13); sirven sobre todo
     # al jugar, cuando la voz vuelve al modelo «small» en el procesador.
     (r"^con\s+el\s+(v[ií]deo|volumen)\b", r"Pon el \1"),  # «Con el vídeo en pantalla completa»
@@ -555,6 +557,18 @@ _CORRECCIONES_VOZ = (
     (r"\b(volumen\s+de\s+\w+)\s+el\s+(\d)", r"\1 al \2"),  # «… de Spotify el 30 %»
     (r"(\d)\s*%", r"\1 por ciento"),  # Whisper escribe «30%»
 )
+
+
+_SEPARADOR_ORDENES = re.compile(
+    r"\s*[,.;]?\s*\b(?:y\s+)?(?:luego|despues|después|entonces|a\s+continuacion|a\s+continuación)\b\s*[,]?\s*",
+    re.IGNORECASE,
+)
+
+
+def dividir_ordenes(texto: str) -> list[str]:
+    """«Trae a Jarvis al frente luego en el monitor 2 coloca…» → las dos órdenes; [] si es una sola."""
+    partes = [p.strip(" ,.;") for p in _SEPARADOR_ORDENES.split(texto.strip()) if p.strip(" ,.;")]
+    return partes if len(partes) >= 2 else []
 
 
 def limpiar_transcripcion_voz(texto: str) -> str:
@@ -794,12 +808,73 @@ _MOVER_VENTANA = re.compile(
 )
 
 
+_POSICION_DICHA = {
+    "arriba a la izquierda": "top_left", "arriba a la derecha": "top_right",
+    "abajo a la izquierda": "bottom_left", "abajo a la derecha": "bottom_right",
+    "izquierda": "left", "derecha": "right", "arriba": "top", "abajo": "bottom",
+    "centro": "center", "medio": "center", "pantalla completa": "full", "toda la pantalla": "full",
+}
+_POSICION_RE = "|".join(sorted(map(re.escape, _POSICION_DICHA), key=len, reverse=True))
+_ITEM_ACOMODAR = re.compile(
+    r"^(?:(?:el|la|los|las)\s+)?(?:ventanas?\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?(?P<app>.+?)\s+"
+    r"(?:(?:a|en|hacia|ocupando)\s+(?:(?:la|el)\s+)?(?:(?:mitad|parte|lado)\s+(?:de\s+)?(?:(?:la|el)\s+)?)?)?"
+    r"(?P<pos>" + _POSICION_RE + r")$"
+)
+_DONDE_MONITOR = (r"(?:en|sobre|de|del)\s+(?:el\s+|la\s+)?(?:(?P<tv>" + _PANTALLA_TV + r")|"
+                  r"(?:monitor|pantalla)\s+(?:numero\s+)?(?P<num>" + _NUM_MONITOR.strip("()") + r"))")
+_ACOMODAR = re.compile(
+    r"^(?:" + _DONDE_MONITOR.replace("?P<tv>", "?P<tv1>").replace("?P<num>", "?P<num1>") + r"\s+)?"
+    r"(?:coloca|colocame|pon|ponme|acomoda|acomodame|ubica|mueve|manda|lleva|deja|organiza)\s+"
+    r"(?P<cuerpo>.+?)(?:\s+" + _DONDE_MONITOR.replace("?P<tv>", "?P<tv2>").replace("?P<num>", "?P<num2>")
+    + r")?$"
+)
+_DIVIDIR = re.compile(
+    r"^(?:divide|dividi|parte|reparte|comparte)\s+(?:el\s+|la\s+)?(?:(?P<tv>" + _PANTALLA_TV
+    + r")|(?:monitor|pantalla)\s+(?:numero\s+)?(?P<num>" + _NUM_MONITOR.strip("()") + r"))\s+entre\s+"
+    r"(?P<a>.+?)\s+y\s+(?P<b>.+)$"
+)
+
+
+def detectar_acomodar_ventanas(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«en el monitor 2 coloca Jarvis a la izquierda y Claude a la derecha», «pon Brave a la
+    derecha», «divide el monitor 2 entre Jarvis y Claude» → acomodar ventanas."""
+    consulta = _normalizar_consulta(texto)
+
+    def monitor(tv, num) -> dict[str, object]:
+        if tv:
+            return {"screen_name": "tv"}
+        return {"monitor": _numero_monitor(num)} if num else {}
+
+    if (match := _DIVIDIR.fullmatch(consulta)) is not None:
+        ventanas = [{"app": re.sub(r"^a\s+", "", match.group("a").strip()), "position": "left"},
+                    {"app": re.sub(r"^a\s+", "", match.group("b").strip()), "position": "right"}]
+        return "arrange_windows", {"windows": ventanas, **monitor(match.group("tv"), match.group("num"))}
+    match = _ACOMODAR.fullmatch(consulta)
+    if match is None:
+        return None
+    ventanas = []
+    for parte in re.split(r"\s*,\s*|\s+y\s+", match.group("cuerpo")):
+        item = _ITEM_ACOMODAR.fullmatch(parte.strip())
+        if item is None:
+            return None  # una parte no dice dónde va: no es esta orden
+        app = re.sub(r"^a\s+", "", item.group("app").strip())  # «coloca a Claude…»
+        if _ENCADENADA.search(app):
+            return None
+        if not app or re.fullmatch(r"(?:el\s+|la\s+)?(?:monitor|pantalla|escritorio|volumen|video)(?:\s+.*)?", app):
+            return None
+        ventanas.append({"app": app, "position": _POSICION_DICHA[item.group("pos")]})
+    donde = monitor(match.group("tv1") or match.group("tv2"), match.group("num1") or match.group("num2"))
+    return "arrange_windows", {"windows": ventanas, **donde}
+
+
 def detectar_mover_ventana(texto: str) -> tuple[str, dict[str, object]] | None:
     """«manda Brave a la TV», «pon Discord en el monitor 2», «trae todo al monitor 1»."""
     match = _MOVER_VENTANA.fullmatch(_normalizar_consulta(texto))
     if match is None:
         return None
-    app = re.sub(r"^(?:ventanas?\s+(?:de\s+)?)", "", match.group("app")).strip()
+    app = re.sub(r"^(?:ventanas?\s+(?:de\s+)?|a\s+)", "", match.group("app")).strip()
+    if _ENCADENADA.search(app):
+        return None
     if not app or re.fullmatch(r"(?:el\s+|la\s+)?(?:monitor|pantalla|escritorio)(?:\s+.*)?", app):
         return None
     if match.group("tv"):
@@ -824,7 +899,9 @@ _HISTORIAL = {
 # («muestra la hora», «ve a youtube.com», «agranda la letra»).
 _VERBO_VENTANA = {
     "window_minimize": r"minimiza|minimizar|minimizame|esconde",
-    "window_maximize": r"maximiza|maximizar|maximizame",
+    # «agranda» / «amplía»: Whisper a veces oye «minimiza» cuando se dice «maximiza» (2026-11-14);
+    # estas suenan muy distinto. «agranda la letra» no cuenta (``_VENTANA_EXCLUIDAS``).
+    "window_maximize": r"maximiza|maximizar|maximizame|agranda|agrandame|agrandar|amplia|ampliame|ampliar",
     "window_restore": r"restaura|restaurar|desminimiza",
     "window_focus": r"enfoca|enfocar",
 }
@@ -841,8 +918,18 @@ _AL_FRENTE = re.compile(
 )
 # Brave ya tiene sus frases («minimiza Brave») y «minimiza la ventana» es la de Jarvis. «Jarvis» sí
 # pasa (desde 2026-11-14): «maximiza Jarvis» iba a la IA, que no sabía qué hacer.
-_VENTANA_EXCLUIDAS = {"brave", "navegador", "app", "aplicacion", "ventana", "la ventana",
+_VENTANA_EXCLUIDAS = {"letra", "la letra", "las letras", "el texto", "la fuente", "el zoom", "la imagen",
+                      "la foto", "el video", "brave", "navegador", "app", "aplicacion", "ventana", "la ventana",
                       "esta ventana", "pantalla", "musica", "cancion", "video", "volumen"}
+
+
+# «… y luego …», «… y después …», «… y muévelo…»: otra orden pegada, no parte del nombre del programa.
+_ENCADENADA = re.compile(
+    r"\b(?:luego|despues|tambien|entonces)\b|\sy\s+(?:mueve\w*|pon\w*|manda\w*|lleva\w*|pasa\w*|"
+    r"minimiza\w*|maximiza\w*|restaura\w*|cierra\w*|abre\w*|trae\w*)"
+)
+_EN_GRANDE = re.compile(r"^(?:pon|pone|ponme|deja|dejame)\s+(?:(?:la|el)\s+)?(?:ventana\s+(?:de\s+)?)?"
+                        r"(?P<app>.+?)\s+(?:en\s+grande|grande|maximizad[oa])$")
 
 
 def detectar_comando_ventanas(texto: str) -> tuple[str, dict[str, object]] | None:
@@ -859,16 +946,23 @@ def detectar_comando_ventanas(texto: str) -> tuple[str, dict[str, object]] | Non
                     "minimiza todas las ventanas", "ver el escritorio"):
         return "window_control", {"app": "todo", "action": "window_minimize"}
     if (match := _AL_FRENTE.fullmatch(consulta) or _CAMBIA_A_VENTANA.fullmatch(consulta)) is not None:
-        app = match.group("app").strip()
+        app = re.sub(r"^a\s+", "", match.group("app").strip())  # «trae a Jarvis…»
         if app and app not in _VENTANA_EXCLUIDAS:
             return "window_control", {"app": app, "action": "window_focus"}
+        return None
+    if (match := _EN_GRANDE.fullmatch(consulta)) is not None:
+        app = re.sub(r"^a\s+", "", match.group("app").strip())  # «trae a Jarvis…»
+        if app and app not in _VENTANA_EXCLUIDAS and not _ENCADENADA.search(app):
+            return "window_control", {"app": app, "action": "window_maximize"}
         return None
     match = _VENTANA.fullmatch(consulta)
     if match is None:
         return None
-    app = match.group("app").strip()
+    app = re.sub(r"^a\s+", "", match.group("app").strip())
     if not app or app in _VENTANA_EXCLUIDAS or app.startswith(("el monitor", "la pantalla", "el escritorio")):
         return None
+    if _ENCADENADA.search(app):
+        return None  # «minimiza Jarvis y luego muévelo al monitor 2»: son dos órdenes, no un programa
     verbo = match.group("verbo")
     accion = next(a for a, patron in _VERBO_VENTANA.items() if re.fullmatch(patron, verbo))
     return "window_control", {"app": app, "action": accion}
@@ -892,6 +986,8 @@ def detectar_comando_monitores(texto: str) -> tuple[str, dict[str, object]] | No
         return "configure_display", {"action": "disable", "monitor": _numero_monitor(match.group(1))}
     if (match := _EXTEND_MONITOR.fullmatch(consulta)) is not None:
         return "configure_display", {"action": "extend", "monitor": _numero_monitor(match.group(1))}
+    if (acomodo := detectar_acomodar_ventanas(texto)) is not None:
+        return acomodo
     if (movimiento := detectar_mover_ventana(texto)) is not None:
         return movimiento
     if (match := _DUPLICATE_MONITORS.fullmatch(consulta)) is not None:

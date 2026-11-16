@@ -99,7 +99,7 @@ class GamesPageTests(unittest.TestCase):
             self.skipTest(f"Tk no disponible: {error}")
         raiz.withdraw()
         self.addCleanup(raiz.destroy)
-        jugados = []
+        jugados, editados = [], []
 
         class Host:
             _build_games_page = JarvisApp._build_games_page
@@ -118,6 +118,12 @@ class GamesPageTests(unittest.TestCase):
             def _load_games_page(self):
                 pass
 
+            def _game_actions(self, juego):  # «Hades» tiene una acción al abrirse
+                return [{"tool": "routine_wait", "arguments": {"seconds": 5}}] if juego == "Hades" else []
+
+            def _edit_game_actions(self, juego):
+                editados.append(juego)
+
         host = Host()
         pagina = tk.Frame(raiz)
         host._build_games_page(pagina)
@@ -128,9 +134,13 @@ class GamesPageTests(unittest.TestCase):
         self.assertIn("2 juegos reconocidos", host.games_summary.cget("text"))
         botones = [w for fila in host.games_list.winfo_children() for w in fila.winfo_children()
                    if isinstance(w, tk.Button)]
-        self.assertEqual(len(botones), 2)
+        self.assertEqual(len(botones), 4)  # ▶ JUGAR y ⚙ ACCIONES por juego
+        self.assertEqual([b.cget("text") for b in botones[:2]], ["▶  JUGAR", "⚙  1 ACCION"])
+        self.assertEqual(botones[3].cget("text"), "⚙  ACCIONES")
         botones[0].invoke()
+        botones[1].invoke()
         self.assertEqual(jugados, [("launch_game", {"name": "Hades"}, "abre Hades")])
+        self.assertEqual(editados, ["Hades"])
         host.games_filter.set("elden")
         filas = [f for f in host.games_list.winfo_children() if isinstance(f, tk.Frame)]
         self.assertEqual(len(filas), 1)

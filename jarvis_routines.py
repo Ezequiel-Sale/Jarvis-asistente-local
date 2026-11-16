@@ -15,7 +15,7 @@ from jarvis_tool_registry import ToolDefinition, ToolError, ToolRegistry, ToolRi
 DISPARADOR_HORA = "hora"
 # Comando personalizado: se ejecuta al decir o escribir una de sus frases.
 DISPARADOR_FRASE = "frase"
-MAX_PASOS = 10
+MAX_PASOS = 15  # con «Esperar» entre pasos, 10 quedaba corto (2026-11-14)
 DISPARADOR_AURICULARES_CONECTADOS = "auriculares_conectados"
 DISPARADOR_AURICULARES_DESCONECTADOS = "auriculares_desconectados"
 # Modo juego automático (jarvis_games_watch): al abrir el primer juego / al cerrar el último.
@@ -65,6 +65,15 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "video_theater",
         "tv_control",
         "press_window_button",
+        "routine_wait",
+        "say_text",
+        "notify_phone",
+        "close_program",
+        "morning_briefing",
+        "set_compact_mode",
+        "tv_status",
+        "list_reminders",
+        "open_file",
         "tv_open_app",
         "apply_gpu_profile",
         "open_new_browser_tab",
@@ -1258,9 +1267,9 @@ def registrar_herramienta(
     registry.register(
         "schedule_routine",
         (
-            "Guarda una rutina con hasta cinco herramientas registradas. "
+            f"Guarda una rutina con hasta {MAX_PASOS} herramientas registradas. "
             "trigger indica cuándo se ejecuta: time (a una hora; usa time en formato "
-            "HH:MM de 24 horas y days con números del 1 (lunes) al 7 (domingo) "
+            "HH:MM de 24 horas (o HH:MM:SS) y days con números del 1 (lunes) al 7 (domingo) "
             "separados por comas), headphones_connected (al conectar los auriculares) "
             "headphones_disconnected (al desconectarlos), game_started (al abrir un juego) "
             "o game_stopped (al cerrar el último juego). "
@@ -1277,7 +1286,9 @@ def registrar_herramienta(
             "type": "object",
             "properties": {
                 "name": {"type": "string", "minLength": 2, "maxLength": 80},
-                "time": {"type": "string", "minLength": 5, "maxLength": 5},
+                # HH:MM, o HH:MM:SS lo programado al segundo («apaga el equipo dentro de 10 minutos»):
+                # con maxLength 5 esas órdenes fallaban con «el parámetro 'time' es demasiado largo».
+                "time": {"type": "string", "minLength": 5, "maxLength": 8},
                 "days": {"type": "string", "minLength": 1, "maxLength": 13},
                 "steps_json": {
                     "type": "string",

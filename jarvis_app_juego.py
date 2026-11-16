@@ -5,6 +5,7 @@ Parte de ``JarvisApp`` (jarvis_app.py), que hereda de esta clase. Los métodos u
 los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``…).
 """
 
+import jarvis_acciones_juego
 import jarvis_agent
 import jarvis_core as core
 import jarvis_modo_juego
@@ -106,6 +107,54 @@ class JuegoMixin:
             if len(pendientes) > 5:
                 resumen += f" (y {len(pendientes) - 5} avisos más en el chat)."
             self._announce(resumen)
+
+    # --- Acciones al abrir un juego (página 🎮 JUEGOS → «⚙ ACCIONES») -----------------
+    def _game_actions(self, juego: str) -> list[dict]:
+        try:
+            return jarvis_acciones_juego.pasos_de(core.obtener_preferencia, juego)
+        except Exception:
+            logging.exception("No se pudieron leer las acciones del juego %s.", juego)
+            return []
+
+    def _run_game_actions(self, juego: str) -> int:
+        """Después de lanzar el juego, en otro hilo: sus acciones en orden (cortan en la primera
+        que falla). El resultado va solo al chat, sin voz (puede estar cargando el juego)."""
+        pasos = self._game_actions(juego)
+        if not pasos:
+            return 0
+
+        def nombre_de(herramienta: str) -> str:
+            try:
+                return self.tool_registry.get(herramienta).display_name
+            except Exception:
+                return herramienta
+
+        def hacer() -> None:
+            resultados, error = jarvis_acciones_juego.ejecutar(
+                pasos,
+                lambda herramienta, argumentos: self.tool_registry.execute(
+                    herramienta, argumentos, confirmed=True, origin="juego"),
+                nombre_de,
+            )
+            if error:
+                logging.warning("Acciones de %s: %s", juego, error)
+                texto = f"Acciones al abrir {juego}: {error}"
+            else:
+                texto = f"Acciones al abrir {juego}: listas ({len(resultados)})."
+            self.events.put(("game_mode_info", texto))
+
+        threading.Thread(target=hacer, name="JarvisAccionesJuego", daemon=True).start()
+        return len(pasos)
+
+    def _edit_game_actions(self, juego: str) -> None:
+        """Editor de acciones (el de las rutinas, sin nombre ni disparador) para ``juego``."""
+        from jarvis_routine_form import RoutineForm
+
+        def guardar(pasos: list[dict]) -> None:
+            jarvis_acciones_juego.guardar(core.obtener_preferencia, core.guardar_preferencia, juego, pasos)
+
+        RoutineForm(self.root, self.tool_registry, lambda: self._render_games(), juego=juego,
+                    pasos=self._game_actions(juego), al_guardar=guardar)
 
     def _quiet_message(self, text: str) -> None:
         """Mensaje solo en el chat: sin voz, sin notificación y sin burbuja sobre el juego."""

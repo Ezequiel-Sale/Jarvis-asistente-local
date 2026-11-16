@@ -147,9 +147,11 @@ class HerramientasMixin:
 
     def _tool_window_control(self, app: str, action: str) -> str:
         """«minimiza Discord», «maximiza Spotify», «trae el explorador al frente»."""
-        clave = jarvis_windows.normalizar(app)
-        if clave == "jarvis" and action in ("window_minimize", "window_maximize"):
-            return self._tool_manage_window("minimize" if action == "window_minimize" else "maximize")
+        clave = jarvis_windows.nombre_app(app)
+        if clave in jarvis_windows.PROPIAS:  # su propia ventana, aunque esté oculta en la bandeja
+            if action in ("window_minimize", "window_maximize"):
+                return self._tool_manage_window("minimize" if action == "window_minimize" else "maximize")
+            return self._request_tool_ui_action("show_jarvis" if action == "window_focus" else "restore_jarvis")
         hechas, programas = jarvis_windows.cambiar_estado(app, action)
         verbo = jarvis_windows.ACCIONES_ESTADO[action][0]
         if hechas == 0:
@@ -317,7 +319,11 @@ class HerramientasMixin:
     def _tool_launch_game(self, name: str) -> str:
         folder_name, executable = localizar_ejecutable_juego(name)
         iniciar_ejecutable_juego(executable)
-        return f"Inicié {folder_name} con {executable.name}."
+        texto = f"Inicié {folder_name} con {executable.name}."
+        acciones = self._run_game_actions(folder_name)  # «⚙ ACCIONES» de la página Juegos
+        if acciones:
+            texto += f" Después hago sus {acciones} acciones." if acciones > 1 else " Después hago su acción."
+        return texto
 
     def _tool_manage_window(self, action: str) -> str:
         if action in {"brave_minimize", "brave_maximize"}:

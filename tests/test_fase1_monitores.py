@@ -2,6 +2,8 @@
 
 import queue
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import jarvis_displays as d
 import jarvis_monitor_view as mv
@@ -103,8 +105,53 @@ class MoveWindowTests(unittest.TestCase):
         self.assertEqual([v.hwnd for v in w.elegir(self.VENTANAS, "todo", 99)], [1, 2, 4])  # sin Jarvis
         self.assertEqual(w.elegir(self.VENTANAS, "spotify", 99), [])
         # Nombrado, Jarvis sí se mueve («mueve Jarvis al monitor 2»): su ventana principal.
+        self.assertEqual([v.hwnd for v in w.elegir(self.VENTANAS, "a Jarvis", 99)], [3])  # «trae a Jarvis…»
+        self.assertEqual([v.hwnd for v in w.elegir(self.VENTANAS, "a Brave", 99)], [1])
         propias = self.VENTANAS + [w.Ventana(5, "Comandos de voz", "jarvis", 99)]
         self.assertEqual([v.hwnd for v in w.elegir(propias, "Jarvis", 99)], [3])
+
+    def test_positions_inside_the_work_area(self) -> None:
+        area = (0, 0, 2560, 1392)  # sin la barra de tareas
+        self.assertEqual(w.rect_posicion(area, "left"), (0, 0, 1280, 1392))
+        self.assertEqual(w.rect_posicion(area, "right"), (1280, 0, 2560, 1392))
+        self.assertEqual(w.rect_posicion(area, "bottom_right"), (1280, 696, 2560, 1392))
+        # Con los bordes invisibles de Windows (7 px), la parte visible queda justa en la mitad.
+        self.assertEqual(w.rect_posicion(area, "right", (7, 0, 7, 7)), (1273, 0, 2567, 1399))
+        with self.assertRaises(w.ErrorVentana):
+            w.rect_posicion(area, "diagonal")
+
+    def test_arrange_phrases(self) -> None:
+        from jarvis_commands import detectar_comando_monitores as detectar
+
+        izquierda_derecha = [{"app": "jarvis", "position": "left"}, {"app": "claude", "position": "right"}]
+        for frase in ("En el monitor 2 coloca Jarvis a la izquierda y Claude a la derecha.",
+                      "coloca Jarvis a la izquierda y Claude a la derecha en el monitor 2",
+                      "divide el monitor 2 entre Jarvis y Claude",
+                      "En el monitor 2 coloca a Jarvis a la izquierda y a Claude a la derecha.",  # «a» personal
+                      "divide el monitor 2 entre a Jarvis y a Claude"):
+            with self.subTest(frase=frase):
+                self.assertEqual(detectar(frase), ("arrange_windows", {"windows": izquierda_derecha, "monitor": 2}))
+        self.assertEqual(detectar("pon la ventana de Discord arriba a la izquierda del monitor uno"),
+                         ("arrange_windows", {"windows": [{"app": "discord", "position": "top_left"}], "monitor": 1}))
+        self.assertEqual(detectar("pon Spotify en pantalla completa en la tele"),
+                         ("arrange_windows", {"windows": [{"app": "spotify", "position": "full"}],
+                                              "screen_name": "tv"}))
+        self.assertEqual(detectar("pon Discord en el monitor 2"), ("move_window", {"app": "discord", "monitor": 2}))
+        for frase in ("pon el volumen arriba", "sube el volumen a la derecha", "pon el video en pantalla completa"):
+            self.assertIsNone(detectar(frase))
+
+    def test_arrange_tool_reports_each_window(self) -> None:
+        from jarvis_app import JarvisApp
+
+        host = SimpleNamespace(_monitor_por_nombre=lambda n: 3)
+        colocadas = []
+        with patch.object(w, "colocar_ventana", side_effect=lambda app, pos, mon: colocadas.append((app, pos)) or app), \
+                patch("jarvis_vision.listar_monitores", return_value=[]), \
+                patch("jarvis_vision.elegir_monitor", return_value="monitor2"):
+            texto = JarvisApp._tool_arrange_windows(
+                host, [{"app": "Jarvis", "position": "left"}, {"app": "Claude", "position": "right"}], 2)
+        self.assertEqual(colocadas, [("Jarvis", "left"), ("Claude", "right")])
+        self.assertEqual(texto, "Puse Jarvis a la izquierda y Claude a la derecha del monitor 2.")
 
     def test_new_rect_keeps_relative_position_and_fits(self) -> None:
         origen = (0, 0, 2560, 1392)

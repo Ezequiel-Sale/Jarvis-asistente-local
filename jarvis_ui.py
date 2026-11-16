@@ -739,6 +739,11 @@ class JarvisUIMixin:
                 tk.Label(textos, text=f"{juego.carpeta.parent}   ·   {juego.ejecutable.name}", bg=PANEL, fg=MUTED,
                          font=("Consolas", 8), anchor="w").pack(anchor="w")
                 self._ui_button(fila, "▶  JUGAR", lambda n=juego.nombre: self._play_game(n)).pack(side="right")
+                # Acciones al abrirlo (emuladores, launchers con «Jugar»…): el editor de las rutinas.
+                cuantas = len(self._game_actions(juego.nombre))
+                self._ui_button(fila, f"⚙  {cuantas} ACCION{'ES' if cuantas != 1 else ''}" if cuantas else
+                                "⚙  ACCIONES", lambda n=juego.nombre: self._edit_game_actions(n),
+                                fg=None if cuantas else MUTED).pack(side="right", padx=(0, 8))
             if sin_exe:
                 tk.Label(self.games_list, text="CARPETAS SIN UN JUEGO CLARO (no se pueden abrir por nombre)",
                          bg=BG, fg=MUTED, font=("Consolas", 9, "bold")).pack(anchor="w", pady=(16, 4))

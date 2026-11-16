@@ -232,6 +232,79 @@ class MovilMixin:
                     "le llega como notificación para descargarlo.")
         raise ToolError("Solo puedo mandar archivos de Descargas, Documentos o los otros discos (no del disco del sistema).")
 
+    # --- Pestaña «Atajos» y guía de comandos del celular -------------------------------
+    _CACHE_JUEGOS_MOVIL = 60.0
+
+    def _shortcuts_for_mobile(self) -> dict:
+        """Rutinas (cuándo, pasos, activa) y juegos que se pueden abrir (hilo HTTP)."""
+        import jarvis_cards
+        import jarvis_routines
+        import jarvis_system
+
+        rutinas = []
+        for r in jarvis_routines.listar_automatizaciones():
+            rutinas.append({
+                "id": r.identifier, "name": r.name, "active": r.active,
+                "when": jarvis_routines.describir_disparador(r.trigger, r.time, r.days, r.phrases),
+                "steps": [jarvis_cards.describir_paso(p.tool, dict(p.arguments)) or p.tool for p in r.steps],
+            })
+        momento, juegos = getattr(self, "_mobile_games_cache", (0.0, []))
+        if time.monotonic() - momento > self._CACHE_JUEGOS_MOVIL or not juegos:
+            juegos = [j.nombre for j in jarvis_system.listar_juegos() if j.ejecutable is not None]
+            self._mobile_games_cache = (time.monotonic(), juegos)
+        return {
+            "routines": rutinas,
+            "games": [{"name": n, "actions": len(self._game_actions(n))} for n in juegos],
+        }
+
+    def _shortcut_from_mobile(self, pedido: dict) -> str:
+        import jarvis_routines
+
+        if "game" in pedido:
+            return str(self.tool_registry.execute("launch_game", {"name": pedido["game"]},
+                                                  confirmed=True, origin="celular"))
+        rutina = next((r for r in jarvis_routines.listar_automatizaciones()
+                       if r.identifier == pedido["routine"]), None)
+        if rutina is None:
+            raise ToolError("Esa rutina ya no existe.")
+        if pedido["action"] in ("enable", "disable"):
+            activa = pedido["action"] == "enable"
+            jarvis_routines.cambiar_estado_rutina(rutina.identifier, activa)
+            self.events.put(("routines_changed",))
+            return f"«{rutina.name}» {'activada' if activa else 'pausada'}."
+        if self.busy:
+            raise ToolError("Jarvis está ocupado con otra orden; prueba en un momento.")
+        self.events.put(("mobile_run_routine", rutina.identifier))
+        return f"Ejecuto «{rutina.name}»."
+
+    def _run_routine_from_mobile(self, identificador: int) -> None:
+        """Hilo de Tk: la rutina elegida en el celular, como un comando por frase."""
+        import jarvis_routines
+
+        info = next((r for r in jarvis_routines.listar_automatizaciones() if r.identifier == identificador), None)
+        if info is None or self.busy:
+            return
+        rutina = jarvis_routines.Routine(info.identifier, info.name, info.time, info.days, info.steps,
+                                         info.trigger, info.permission, info.phrases)
+        self._add_message("user", f"{info.name} (desde el celular)")
+        self._start_phrase_routine(rutina, info.name)
+
+    def _commands_for_mobile(self) -> dict:
+        """La guía de «? COMANDOS» con tus frases primero."""
+        import jarvis_comandos
+        import jarvis_routines
+
+        secciones = list(jarvis_comandos.CATALOGO)
+        propias = jarvis_comandos.tus_comandos(jarvis_routines.listar_automatizaciones())
+        if propias is not None:
+            secciones.insert(0, propias)
+        return {
+            "sections": [{"icon": s.icono, "title": s.titulo,
+                          "items": [{"phrase": c.frase, "what": c.para_que} for c in s.comandos]}
+                         for s in secciones],
+            "aiHelp": jarvis_comandos.AYUDA_IA,
+        }
+
     def _tool_send_clipboard_to_phone(self) -> str:
         if not self.mobile.activo():
             raise ToolError("La app del celular no está activada en Ajustes.")

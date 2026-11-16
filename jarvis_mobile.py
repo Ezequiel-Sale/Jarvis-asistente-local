@@ -64,6 +64,9 @@ API (JSON, ``Authorization: Bearer <token>`` salvo /api/pair):
   herramienta de riesgo alto ``mobile_remote_control``.
 - ``POST /api/input`` {events} → movimientos, clics, rueda y teclas (jarvis_input),
   solo con el control activo.
+- ``GET  /api/shortcuts`` → rutinas (cuándo, pasos, activa) y juegos; ``POST /api/shortcuts``
+  {routine, action: run|enable|disable} o {game}: ejecutar o pausar una rutina, abrir un juego.
+- ``GET  /api/commands`` → la guía de comandos de voz (la del botón «? COMANDOS») y tus frases.
 - ``GET  /api/tv`` → estado de la tele (encendida, app, volumen, apps); ``POST /api/tv``
   {action} → un botón del control remoto (``tv_control``, o ``app:<id>`` → ``tv_open_app``)
   por ``tool_registry.execute`` (jarvis_tv).
@@ -286,6 +289,9 @@ class ServidorMovil:
         estado_equipo: Callable[[bool], dict] | None = None,
         tele: Callable[[], dict] | None = None,
         tele_accion: Callable[[str], str] | None = None,
+        atajos: Callable[[], dict] | None = None,
+        atajo_accion: Callable[[dict], str] | None = None,
+        comandos: Callable[[], dict] | None = None,
     ) -> None:
         self.eventos_app = eventos_app  # cola de la app: todo lo que toca Tk pasa por ahí
         self.vinculacion = vinculacion
@@ -327,6 +333,9 @@ class ServidorMovil:
         self.estado_equipo = estado_equipo
         self.tele = tele  # estado de la tele (jarvis_tv)
         self.tele_accion = tele_accion  # botón del control → texto; pasa por tool_registry.execute
+        self.atajos = atajos  # rutinas y juegos para la pestaña «Atajos»
+        self.atajo_accion = atajo_accion  # ejecutar/pausar una rutina o abrir un juego → texto
+        self.comandos = comandos  # guía de comandos de voz
 
     # --- Lo que publica la app (hilo de Tk) -------------------------------------
 
@@ -833,6 +842,31 @@ class ServidorMovil:
             except Exception as error:  # la herramienta explica qué falló
                 raise _Error(409, str(error) or "No se pudo completar la acción.") from error
             return self._json({"ok": True, "text": texto})
+        if ruta == "/api/shortcuts" and metodo in ("GET", "POST"):
+            if self.atajos is None or self.atajo_accion is None:
+                raise _Error(501, "Las rutinas y los juegos no están disponibles.")
+            if metodo == "GET":
+                return self._json(self.atajos())
+            datos = self._cuerpo_json(cuerpo)
+            pedido: dict[str, object] = {}
+            if "routine" in datos:
+                accion = str(datos.get("action", "run"))
+                if not isinstance(datos["routine"], int) or accion not in ("run", "enable", "disable"):
+                    raise _Error(400, "Pedido de rutina no válido.")
+                pedido = {"routine": datos["routine"], "action": accion}
+            elif isinstance(datos.get("game"), str) and 1 <= len(datos["game"]) <= 120:
+                pedido = {"game": datos["game"]}
+            else:
+                raise _Error(400, "Indica una rutina o un juego.")
+            try:
+                texto = self.atajo_accion(pedido)
+            except Exception as error:  # la acción explica qué falló
+                raise _Error(409, str(error) or "No se pudo completar.") from error
+            return self._json({"ok": True, "text": texto, "shortcuts": self.atajos()})
+        if metodo == "GET" and ruta == "/api/commands":
+            if self.comandos is None:
+                raise _Error(501, "La guía de comandos no está disponible.")
+            return self._json(self.comandos())
         if ruta == "/api/tv" and metodo in ("GET", "POST"):
             if self.tele is None or self.tele_accion is None:
                 raise _Error(501, "El control de la tele no está disponible.")

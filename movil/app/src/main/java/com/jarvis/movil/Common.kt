@@ -61,13 +61,14 @@ abstract class JarvisActivity : Activity() {
     }
 }
 
-/** Pestañas de abajo: Chat · Pantalla · Música · Tele · Equipo · Ajustes. */
+/** Pestañas de abajo: Chat · Pantalla · Música · Tele · Atajos · Equipo · Ajustes. */
 object Tabs {
     private val items = listOf(
         Triple("chat", "💬\nChat", MainActivity::class.java),
         Triple("screen", "🖥\nPantalla", ScreenActivity::class.java),
         Triple("music", "🎵\nMúsica", MusicActivity::class.java),
         Triple("tv", "📺\nTele", TvActivity::class.java),
+        Triple("shortcuts", "⚡\nAtajos", ShortcutsActivity::class.java),
         Triple("status", "📊\nEquipo", StatusActivity::class.java),
         Triple("settings", "⚙\nAjustes", SettingsActivity::class.java),
     )
@@ -83,7 +84,7 @@ object Tabs {
             bar.addView(TextView(activity).apply {
                 text = label
                 gravity = Gravity.CENTER
-                textSize = 11f
+                textSize = 10f  // 7 pestañas: «Pantalla» entra en pantallas de 360 dp
                 setTextColor(activity.getColor(if (selected) R.color.cyan else R.color.muted))
                 typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
                 setPadding(0, activity.dp(4), 0, activity.dp(4))

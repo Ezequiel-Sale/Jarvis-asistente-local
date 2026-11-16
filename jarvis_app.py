@@ -224,6 +224,9 @@ class JarvisApp(
             portapapeles=(jarvis_archivos.leer_portapapeles, jarvis_archivos.escribir_portapapeles),
             tele=self._tv_for_mobile,
             tele_accion=self._tv_action_from_mobile,
+            atajos=self._shortcuts_for_mobile,
+            atajo_accion=self._shortcut_from_mobile,
+            comandos=self._commands_for_mobile,
         )
         self.fps_meter = jarvis_fps.MedidorFPS()
         self._stt_vocabulary_cache: tuple[float, list[str]] = (0.0, [])
@@ -884,6 +887,14 @@ class JarvisApp(
                             self._set_status("OLLAMA NO DISPONIBLE", ERROR)
                     elif event[0] == "device_event":
                         self._handle_device_event(event[1])
+                    elif event[0] == "routines_changed":  # se activó o pausó una desde el celular
+                        panel = self._routines_panel
+                        if panel is not None and panel.is_open():
+                            panel.refresh()
+                    elif event[0] == "mobile_run_routine":
+                        self._run_routine_from_mobile(event[1])
+                    elif event[0] == "routine_say":
+                        self._announce(event[1])
                     elif event[0] == "tv_state":
                         self._refresh_tv_views()
                     elif event[0] in ("tv_info", "tv_error"):
@@ -1031,8 +1042,17 @@ class JarvisApp(
                                 self._hide_to_tray()
                                 result = "Jarvis se minimizó en la bandeja."
                             elif action == "maximize_jarvis":
+                                self._show_from_tray()  # por si estaba en la bandeja o minimizado
                                 self.root.state("zoomed")
                                 result = "La ventana de Jarvis se maximizó."
+                            elif action in ("show_jarvis", "restore_jarvis"):
+                                # Minimizado, Jarvis queda oculto en la bandeja: la búsqueda de
+                                # ventanas no lo ve, así que se trae desde aquí.
+                                self._show_from_tray()
+                                if action == "restore_jarvis":
+                                    self.root.state("normal")
+                                result = ("Traje Jarvis al frente." if action == "show_jarvis"
+                                          else "Restauré la ventana de Jarvis.")
                             else:
                                 raise ValueError(f"Acción de interfaz desconocida: {action}")
                         except Exception as error:

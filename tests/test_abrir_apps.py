@@ -23,11 +23,13 @@ class LookupTests(unittest.TestCase):
     def test_names_as_people_say_them(self) -> None:
         casos = {"WhatsApp": "WhatsApp", "whatsapp": "WhatsApp", "la app de WhatsApp": "WhatsApp",
                  "guasap": "WhatsApp", "Wasap": "WhatsApp", "Cloudy": "Claude", "bloc de notas": "Bloc de notas",
-                 "visual studio": "Visual Studio Code", "code": "Visual Studio Code"}
+                 "visual studio": "Visual Studio Code", "code": "Visual Studio Code",
+                 "Claude Code": "Claude", "whatsapp web": "WhatsApp",
+                 "Cloud Code": "Claude"}  # así lo escribe Whisper  # sobran palabras al final
         for dicho, app in casos.items():
             with self.subTest(dicho=dicho):
                 self.assertEqual(s.buscar_app(dicho, APPS)[0], app)
-        for dicho in ("photoshop", "x", ""):
+        for dicho in ("photoshop", "x", "", "el discordante nuevo"):
             self.assertIsNone(s.buscar_app(dicho, APPS))
 
     def test_web_links_and_uninstallers_are_skipped(self) -> None:
