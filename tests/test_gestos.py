@@ -106,12 +106,36 @@ class ScrollTests(unittest.TestCase):
         envios = self._recorrido(subiendo)
         self.assertTrue(envios)
         self.assertTrue(all(c < 0 for c in envios))  # rueda negativa: la página baja
-        self.assertLess(len(envios), 8)  # en tandas, no una acción por cuadro
+        self.assertGreaterEqual(len(envios), 8)  # continuo: ~20 tandas por segundo, no 5 a tirones
+        self.assertLessEqual(len(envios), 20)  # pero en tandas, no una acción por cuadro
         total = sum(envios)
         self.assertLess(total, -600)  # ~0,4 de la imagen ≈ unas 8 muescas
         bajando = self._recorrido(list(reversed(subiendo)))
         self.assertTrue(all(c > 0 for c in bajando))
         self.assertTrue(all(c > 0 for c in self._recorrido(subiendo, invertir=True)))
+
+    def test_slow_movement_still_scrolls(self) -> None:
+        """2026-11-16: con la zona muerta por cuadro, mover la mano despacio no hacía nada."""
+        lento = [0.7 - i * 0.0025 for i in range(40)]  # ~6 % de la imagen por segundo
+        envios = self._recorrido(lento)
+        self.assertTrue(envios)
+        self.assertLess(sum(envios), -150)
+
+    def test_odd_frame_does_not_cut_the_scroll(self) -> None:
+        """Un cuadro borroso (otro gesto o sin mano) con «dos dedos» estable no corta el scroll."""
+        eventos: queue.Queue = queue.Queue()
+        envios: list[int] = []
+        detector = g.DetectorGestos(eventos, lambda: True, Path("."), al_desplazar=envios.append)
+        alturas = [0.8 - i * 0.02 for i in range(20)]
+        reloj = iter(i * 0.04 for i in range(100))
+        with patch.object(g.time, "monotonic", side_effect=lambda: next(reloj)):
+            for i, y in enumerate(alturas):
+                puntos = [(x, py + (y - 0.35)) for x, py in mano(("indice", "medio"))]
+                raro = i in (7, 12)
+                detector._desplazar("dos_dedos", "otro" if raro else "dos_dedos", None if i == 12 else puntos)
+        self.assertEqual(detector.desplazamiento.salteados, 2)
+        self.assertEqual(detector.desplazamiento.tandas, len(envios))
+        self.assertLess(sum(envios), -600)  # siguió sumando de punta a punta
 
     def test_still_hand_does_not_scroll(self) -> None:
         temblor = [0.5 + (0.002 if i % 2 else -0.002) for i in range(40)]
@@ -146,6 +170,249 @@ class ScrollTests(unittest.TestCase):
         registro = crear_registro_herramientas(Mock())
         self.assertEqual(registro.get("gesture_scroll").label, "Desplazar con gestos")
         self.assertNotIn("gesture_scroll", {t["function"]["name"] for t in registro.ollama_tools()})
+
+
+MONITOR_1 = SimpleNamespace(numero=1, x=0, y=0, ancho=1920, alto=1080)
+
+
+def apuntando(x=0.5, y=0.45, pellizco=False):
+    """Índice estirado con el nudillo (punto 5) en (x, y); con ``pellizco``, el pulgar toca la punta."""
+    base = mano(("indice",))
+    dx, dy = x - base[5][0], y - base[5][1]
+    puntos = [(px + dx, py + dy) for px, py in base]
+    if pellizco:
+        puntos[4] = (puntos[8][0] - 0.01, puntos[8][1])
+    return puntos
+
+
+class PointerTests(unittest.TestCase):
+    """Fase 3: índice → puntero; pellizco corto → clic; pellizco sostenido → arrastre."""
+
+    def test_screen_mapping(self) -> None:
+        izquierda, arriba, derecha, abajo = g.ZONA_PUNTERO
+        self.assertEqual(g.a_pantalla(izquierda, arriba, MONITOR_1), (0, 0))
+        self.assertEqual(g.a_pantalla(derecha, abajo, MONITOR_1), (1919, 1079))
+        self.assertEqual(g.a_pantalla(0.0, 1.0, MONITOR_1), (0, 1079))  # fuera de la zona: al borde
+        monitor_3 = SimpleNamespace(numero=3, x=1920, y=-200, ancho=3840, alto=2160)
+        x, y = g.a_pantalla((izquierda + derecha) / 2, (arriba + abajo) / 2, monitor_3)
+        self.assertAlmostEqual(x, 3840, delta=1)  # el centro de la zona, al centro del monitor 3
+        self.assertAlmostEqual(y, 880, delta=1)
+
+    def test_small_zone_reaches_the_edges(self) -> None:
+        """2026-11-16: costaba llegar a los bordes; la zona es ahora ~30 % del ancho de la imagen."""
+        izquierda, arriba, derecha, abajo = g.ZONA_PUNTERO
+        self.assertLessEqual(derecha - izquierda, 0.32)
+        self.assertLessEqual(abajo - arriba, 0.30)
+
+    def test_trembling_fingertip_does_not_move_the_pointer(self) -> None:
+        """Sigue el centro de la palma: el temblor de la punta del índice no lo mueve."""
+        cuadros = []
+        for i in range(30):
+            puntos = apuntando()
+            puntos[8] = (puntos[8][0] + (0.01 if i % 2 else -0.01), puntos[8][1])
+            cuadros.append(("indice", puntos))
+        acciones, _ = self._correr(cuadros)
+        self.assertEqual(len([a for a in acciones if a[0] == "mover"]), 1)  # solo la posición inicial
+
+    def test_pointer_freezes_while_the_thumb_approaches(self) -> None:
+        acercando = []
+        for i in range(8):
+            puntos = apuntando(0.5 + i * 0.01)
+            # Pulgar a 0,12 de la punta del índice (relación 0,40 con una mano de 0,30): casi tocando
+            # (por debajo de ACERCA = 0,45) pero todavía no es pellizco (por encima de CIERRA = 0,35).
+            puntos[4] = (puntos[8][0] - 0.12, puntos[8][1])
+            acercando.append(("indice", puntos))
+        acciones, p = self._correr([("indice", apuntando())] * 6 + acercando)
+        movimientos = [a for a in acciones if a[0] == "mover"]
+        self.assertEqual(len(movimientos), 1)  # la mano se corrió al acercar el pulgar: no se movió
+        self.assertFalse(p._pellizco)  # y no fue un pellizco
+
+    @staticmethod
+    def _mundo(separacion_cm: float):
+        """Puntos 3D en metros: solo importan el pulgar (4) y la punta del índice (8)."""
+        m = [(0.0, 0.0, 0.0)] * 21
+        m[8] = (0.0, -0.08, 0.0)
+        m[4] = (0.0, -0.08, separacion_cm / 100)  # separados en profundidad
+        return m
+
+    def _con_mundo(self, cuadros, separacion_cm_por_cuadro):
+        p = g.Puntero(MONITOR_1)
+        acciones = []
+        for i, ((estable, puntos), cm) in enumerate(zip(cuadros, separacion_cm_por_cuadro)):
+            acciones += p.actualizar(estable, puntos, i * 0.04, self._mundo(cm))
+        return acciones, p
+
+    def test_overlap_in_the_image_but_apart_in_depth_is_not_a_pinch(self) -> None:
+        """2026-11-16: clics sin pellizcar; en la imagen el pulgar quedaba «encima» del índice."""
+        cuadros = [("indice", apuntando())] * 6 + [("indice", apuntando(pellizco=True))] * 4 + \
+                  [("indice", apuntando())] * 4
+        acciones, _ = self._con_mundo(cuadros, [8.0] * 14)  # en 3D, siempre a 8 cm
+        self.assertNotIn("click", [a[0] for a in acciones])
+
+    def test_real_pinch_in_3d_clicks(self) -> None:
+        cuadros = [("indice", apuntando())] * 6 + [("indice", apuntando(pellizco=True))] * 4 + \
+                  [("indice", apuntando())] * 4
+        separacion = [8.0] * 6 + [1.5] * 4 + [8.0] * 4
+        with self.assertLogs(level="INFO") as registro:
+            acciones, _ = self._con_mundo(cuadros, separacion)
+        self.assertEqual([a[0] for a in acciones].count("click"), 1)
+        self.assertTrue(any("Clic con gestos" in linea and "1.5 cm" in linea for linea in registro.output))
+
+    def test_too_short_or_moving_pinch_is_not_a_click(self) -> None:
+        # Dos cuadros de ruido: se detecta y se suelta enseguida (menos de CLIC_MINIMO).
+        cuadros = [("indice", apuntando())] * 6 + [("indice", apuntando(pellizco=True))] * 2 + \
+                  [("indice", apuntando())] * 2
+        p = g.Puntero(MONITOR_1)
+        acciones = []
+        for i, (estable, puntos) in enumerate(cuadros):
+            acciones += p.actualizar(estable, puntos, i * 0.02)  # cuadros más seguidos: ~40 ms en total
+        self.assertNotIn("click", [a[0] for a in acciones])
+        self.assertEqual(p.descartados, 1)
+        # La mano cruzando la imagen mientras el pulgar «toca» el índice: no es un clic.
+        moviendo = [("indice", apuntando())] * 6 + \
+                   [("indice", apuntando(0.4 + i * 0.05, pellizco=True)) for i in range(4)] + \
+                   [("indice", apuntando(0.6))] * 4
+        acciones, p = self._correr(moviendo)
+        self.assertNotIn("click", [a[0] for a in acciones])
+        self.assertEqual(p.descartados, 1)
+
+    def test_still_hand_with_camera_noise_does_not_tremble(self) -> None:
+        """2026-11-16: con la mano quieta, ±1 píxel de cámara (≈10 px en pantalla) hacía temblar el puntero."""
+        import random
+
+        azar = random.Random(7)
+        ruido = 1 / 640  # un píxel de la cámara
+        # x = 0,42 deja el centro de la palma cerca del centro de la zona (y del monitor).
+        quieta = [("indice", apuntando(0.42 + azar.uniform(-ruido, ruido), 0.45 + azar.uniform(-ruido, ruido)))
+                  for _ in range(60)]
+        acciones, _ = self._correr(quieta)
+        movimientos = [a for a in acciones if a[0] == "mover"]
+        self.assertLessEqual(len(movimientos), 2)  # la posición inicial y, a lo sumo, un ajuste
+        # Pero moviendo la mano de verdad, el puntero la sigue sin atrasarse.
+        moviendo = quieta[:10] + [("indice", apuntando(0.42 + i * 0.008, 0.45)) for i in range(15)]
+        acciones, _ = self._correr(moviendo)
+        xs = [a[1] for a in acciones if a[0] == "mover"]
+        recorrido_mano = 14 * 0.008 / (g.ZONA_PUNTERO[2] - g.ZONA_PUNTERO[0]) * 1919
+        self.assertGreater(xs[-1] - xs[0], recorrido_mano * 0.8)
+
+    def test_tucked_thumb_does_not_freeze_the_pointer(self) -> None:
+        """2026-11-16: con ACERCA = 0,60, el pulgar recogido al apuntar congelaba el puntero solo."""
+        cuadros = []
+        for i in range(10):
+            puntos = apuntando(0.4 + i * 0.02)
+            puntos[4] = (puntos[8][0] - 0.15, puntos[8][1])  # relación 0,50: recogido, no acercándose
+            cuadros.append(("indice", puntos))
+        acciones, _ = self._correr(cuadros)
+        self.assertGreater(len([a for a in acciones if a[0] == "mover"]), 5)
+
+    def test_frame_without_hand_does_not_release_or_jump(self) -> None:
+        """2026-11-16: un cuadro sin mano soltaba el puntero; se frenaba y al siguiente saltaba."""
+        def maximo_paso(cuadros):
+            acciones, p = self._correr(cuadros)
+            xs = [a[1] for a in acciones if a[0] == "mover"]
+            return max(b - a for a, b in zip(xs, xs[1:])), p
+
+        normal = [("indice", apuntando(0.45 + i * 0.005)) for i in range(10)]
+        con_hueco = list(normal)
+        con_hueco[5] = ("indice", None)  # la cámara perdió la mano un cuadro
+        paso_normal, _ = maximo_paso(normal)
+        paso_hueco, p = maximo_paso(con_hueco)
+        self.assertTrue(p.armado)
+        self.assertEqual(p._sin_mano, 1)
+        # Al volver la mano recupera el movimiento de dos cuadros, nada más (antes: se reiniciaba
+        # el filtro y el puntero arrancaba de cero, un salto).
+        self.assertLessEqual(paso_hueco, 2 * paso_normal + 5)
+
+    def test_other_gesture_keeps_it_but_fist_releases(self) -> None:
+        p = self._correr([("indice", apuntando())] * 6)[1]
+        p.actualizar("otro", apuntando(), 1.0)  # el dedo medio un poco abierto un momento
+        self.assertTrue(p.armado)
+        p.actualizar(None, None, 1.1)  # la mano se fue de verdad (gesto estable sin mano)
+        self.assertFalse(p.armado)
+        p = self._correr([("indice", apuntando())] * 6)[1]
+        p.actualizar("puno", mano(()), 1.0)
+        self.assertFalse(p.armado)
+        self.assertEqual(g.Puntero(MONITOR_1).actualizar("otro", apuntando(), 0.0), [])  # «otro» no arma
+
+    def test_jitter_is_measured_in_the_log(self) -> None:
+        p = g.Puntero(MONITOR_1)
+        self._correr([("indice", apuntando(0.4 + (i % 3) * 0.002)) for i in range(50)], puntero=p)
+        with self.assertLogs(level="INFO") as registro:
+            p.soltar()
+        self.assertIn("salto por cuadro", registro.output[0])
+
+    def test_one_euro_filter(self) -> None:
+        f = g.FiltroUnEuro()
+        self.assertEqual(f(100.0, 0.0), 100.0)
+        quieto = [f(100.0 + (3 if i % 2 else -3), i * 0.04) for i in range(1, 30)]
+        self.assertLess(max(quieto) - min(quieto), 3)  # el temblor de ±3 px casi no se ve
+        rapido = g.FiltroUnEuro()
+        rapido(0.0, 0.0)
+        valores = [rapido(i * 80.0, i * 0.04) for i in range(1, 12)]
+        self.assertGreater(valores[-1], 880 * 0.75)  # moviéndose rápido sigue de cerca
+
+    def _correr(self, cuadros, inicio=0.0, paso=0.04, puntero=None):
+        p = puntero or g.Puntero(MONITOR_1)
+        acciones = []
+        for i, (estable, puntos) in enumerate(cuadros):
+            acciones += p.actualizar(estable, puntos, inicio + i * paso)
+        return acciones, p
+
+    def test_index_moves_the_pointer(self) -> None:
+        acciones, p = self._correr([("indice", apuntando(0.3 + i * 0.02)) for i in range(10)])
+        movimientos = [a for a in acciones if a[0] == "mover"]
+        self.assertTrue(p.armado)
+        self.assertGreater(len(movimientos), 5)
+        self.assertLess(movimientos[0][1], movimientos[-1][1])  # mano a la derecha → puntero a la derecha
+        self.assertEqual({a[0] for a in acciones}, {"mover"})
+
+    def test_short_pinch_clicks_where_it_was_pointing(self) -> None:
+        cuadros = [("indice", apuntando())] * 6 + [("indice", apuntando(pellizco=True))] * 4 + \
+                  [("indice", apuntando())] * 4
+        acciones, p = self._correr(cuadros)
+        clics = [a for a in acciones if a[0] == "click"]
+        self.assertEqual(len(clics), 1)
+        ultimo_antes = [a for a in acciones[:acciones.index(clics[0])] if a[0] == "mover"][-1]
+        self.assertEqual(clics[0][1:], ultimo_antes[1:])
+        self.assertNotIn("down", {a[0] for a in acciones})
+        self.assertFalse(p.arrastrando)
+
+    def test_held_pinch_drags_and_releases(self) -> None:
+        cuadros = ([("indice", apuntando())] * 6
+                   + [("pellizco", apuntando(0.5 + i * 0.01, pellizco=True)) for i in range(20)]
+                   + [("indice", apuntando(0.7))] * 4)
+        acciones, p = self._correr(cuadros)
+        tipos = [a[0] for a in acciones]
+        self.assertIn("down", tipos)
+        self.assertIn("up", tipos)
+        self.assertLess(tipos.index("down"), tipos.index("up"))
+        self.assertNotIn("click", tipos)
+        entre = tipos[tipos.index("down"):tipos.index("up")]
+        self.assertIn("mover", entre)  # arrastra con la mano
+        self.assertFalse(p.arrastrando)
+
+    def test_two_quick_pinches_are_a_double_click(self) -> None:
+        abierta, cerrada = ("indice", apuntando()), ("indice", apuntando(pellizco=True))
+        cuadros = [abierta] * 6 + [cerrada] * 3 + [abierta] * 3 + [cerrada] * 3 + [abierta] * 3
+        acciones, _ = self._correr(cuadros)
+        clics = [a for a in acciones if a[0] == "click"]
+        self.assertEqual(len(clics), 2)
+        self.assertEqual(clics[0][1:], clics[1][1:])  # en el mismo punto: Windows lo toma como doble clic
+
+    def test_other_gesture_releases_the_button(self) -> None:
+        cuadros = [("indice", apuntando())] * 6 + [("pellizco", apuntando(pellizco=True))] * 20
+        acciones, p = self._correr(cuadros)
+        self.assertTrue(p.arrastrando)
+        soltar = p.actualizar("puno", mano(()), 10.0)
+        self.assertEqual([a[0] for a in soltar], ["up"])
+        self.assertFalse(p.armado)
+        p2 = self._correr(cuadros)[1]
+        self.assertEqual([a[0] for a in p2.soltar()], ["up"])  # al apagar los gestos
+
+    def test_pinch_without_pointing_first_does_nothing(self) -> None:
+        acciones, p = self._correr([("pellizco", apuntando(pellizco=True))] * 20)
+        self.assertEqual(acciones, [])
+        self.assertFalse(p.armado)
 
 
 class ImageTests(unittest.TestCase):
@@ -301,6 +568,8 @@ def _host(**estado) -> Mock:
     host._gestures_active = lambda: JarvisApp._gestures_active(host)
     host._start_gestures = lambda: JarvisApp._start_gestures(host)
     host._stop_gestures = lambda: JarvisApp._stop_gestures(host)
+    host._gesture_queue = lambda: JarvisApp._gesture_queue(host)
+    host._merge_gesture_actions = JarvisApp._merge_gesture_actions
     for clave, valor in estado.items():
         setattr(host, clave, valor)
     return host
@@ -371,6 +640,76 @@ class AppTests(unittest.TestCase):
         args, kwargs = host.tool_registry.execute.call_args
         self.assertEqual(args, ("gesture_scroll", {"amount": -240}))
         self.assertEqual(kwargs, {"confirmed": True, "origin": "gestos"})
+
+    def test_actions_are_merged_in_order(self) -> None:
+        merge = JarvisApp._merge_gesture_actions
+        self.assertEqual(merge([("scroll", -120), ("scroll", -60), ("mover", 1, 1), ("mover", 5, 5),
+                                ("click", 5, 5), ("mover", 6, 6), ("down", 6, 6), ("up", 6, 6)]),
+                         [("scroll", -180), ("mover", 5, 5), ("click", 5, 5), ("mover", 6, 6),
+                          ("down", 6, 6), ("up", 6, 6)])
+
+    def test_pointer_glides_and_clicks_through_the_registry(self) -> None:
+        host = _host(_gesture_actions=None)
+        hecho = threading.Event()
+        host.tool_registry.execute.side_effect = lambda *a, **k: hecho.set()
+        host._gesture_action_worker = lambda cola: JarvisApp._gesture_action_worker(host, cola)
+        host._merge_gesture_actions = JarvisApp._merge_gesture_actions
+        JarvisApp._queue_gesture_pointer(host, [("mover", 10, 20), ("click", 10, 20)])
+        self.assertTrue(hecho.wait(2))
+        host._closing = True
+        self.assertEqual(host._set_pointer_target.call_args_list[0].args, (10, 20))  # deslizar
+        self.assertEqual(host._set_pointer_target.call_args_list[1].kwargs, {"saltar": True})  # clic: directo
+        self.assertEqual(host.tool_registry.execute.call_args.args,
+                         ("gesture_click", {"action": "click", "x": 10, "y": 20}))
+
+    def test_glide_step(self) -> None:
+        """2026-11-16: a 24 cuadros/s el puntero iba a saltos; ahora avanza de a poco entre cuadros."""
+        actual = (0.0, 0.0)
+        pasos = []
+        for _ in range(30):
+            actual = g.deslizar(actual, (300, -120))
+            pasos.append(actual)
+        self.assertLess(pasos[0][0], 120)  # el primer paso no salta de golpe
+        self.assertEqual(pasos[-1], (300.0, -120.0))  # y llega exacto
+        tiempo_en_llegar = next(i for i, p in enumerate(pasos) if abs(p[0] - 300) < 10) * g.PASO_DESLIZAR
+        self.assertLess(tiempo_en_llegar, 0.08)  # sin sentirse atrasado
+
+    def test_glide_worker_moves_smoothly_and_stops_when_released(self) -> None:
+        host = _host(_pointer_target=None)
+        movidas: list[tuple[int, int]] = []
+
+        def mover(x, y):
+            movidas.append((x, y))
+            if len(movidas) == 1:
+                host._pointer_target = (200, 100)  # la mano se movió
+            elif (x, y) == (200, 100):
+                host._pointer_target = None  # se soltó el puntero
+                host._closing = True
+
+        host._pointer_target = (0, 0)
+        with patch("jarvis_screen_actions.mover_rapido", side_effect=mover), patch.object(g, "PASO_DESLIZAR", 0):
+            hilo = threading.Thread(target=JarvisApp._pointer_glide_worker, args=(host,))
+            hilo.start()
+            hilo.join(3)
+        self.assertGreater(len(movidas), 4)  # varios pasos intermedios, no un salto
+        self.assertEqual(movidas[-1], (200, 100))
+        self.assertTrue(all(movidas[i][0] <= movidas[i + 1][0] for i in range(len(movidas) - 1)))
+
+    @patch("jarvis_vision.listar_monitores")
+    def test_pointer_monitor_by_voice(self, monitores: Mock) -> None:
+        monitores.return_value = [SimpleNamespace(numero=1, descripcion="Monitor 1"),
+                                  SimpleNamespace(numero=3, descripcion="Monitor 3 (3840×2160)")]
+        detector = Mock()
+        host = _host(gesture_detector=detector, _PREFERENCIA_MONITOR="gestos_monitor")
+        with patch("jarvis_vision.elegir_monitor", side_effect=lambda ms, n: next(m for m in ms if m.numero == n)), \
+                patch("jarvis_core.guardar_preferencia") as guardar, patch("jarvis_core.guardar_turno"):
+            JarvisApp._set_gesture_monitor(host, 3, "puntero en el monitor 3")
+        guardar.assert_called_with("gestos_monitor", "3")
+        self.assertEqual(detector.puntero.monitor.numero, 3)
+        self.assertIn("monitor 3", host._add_message.call_args.args[1])
+        self.assertEqual(detectar_comando_gestos("puntero en el monitor 3"), 3)
+        self.assertEqual(detectar_comando_gestos("Jarvis, pon el puntero en el monitor dos"), 2)
+        self.assertIsNone(detectar_comando_gestos("mueve Brave al monitor 3"))
 
     def test_scroll_direction_toggle(self) -> None:
         guardado = {}

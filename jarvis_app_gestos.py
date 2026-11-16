@@ -8,10 +8,13 @@ se reconocen los gestos (se ven en la barra lateral y en la vista de cámara); l
 import logging
 import queue
 import threading
+import time
 import tkinter as tk
 
 import jarvis_core as core
 import jarvis_gestos
+import jarvis_screen_actions
+import jarvis_vision
 from jarvis_theme import BG, BORDER, CYAN, MUTED, PANEL, TEXT
 
 
@@ -51,7 +54,8 @@ class GestosMixin:
             return falta
         self.gesture_detector = jarvis_gestos.DetectorGestos(
             self.events, self._can_use_camera, core.APP_DIR,
-            al_desplazar=self._queue_gesture_scroll, invertir_scroll=self._gesture_scroll_inverted())
+            al_desplazar=self._queue_gesture_scroll, invertir_scroll=self._gesture_scroll_inverted(),
+            al_apuntar=self._queue_gesture_pointer, monitor=self._gesture_monitor())
         self.gesture_detector.start()
         return None
 
@@ -75,33 +79,158 @@ class GestosMixin:
             detector.desplazamiento.signo = -1.0 if invertido else 1.0
         self._refresh_gesture_indicator()
 
-    def _queue_gesture_scroll(self, cantidad: int) -> None:
-        """Hilo de la cámara: deja el scroll en una cola y sigue (nunca espera a Windows)."""
+    def _gesture_queue(self) -> queue.Queue:
         cola = getattr(self, "_gesture_actions", None)
         if cola is None:
             cola = self._gesture_actions = queue.Queue()
             threading.Thread(target=self._gesture_action_worker, args=(cola,),
                              name="JarvisAccionesGestos", daemon=True).start()
-        cola.put(cantidad)
+        return cola
+
+    def _queue_gesture_scroll(self, cantidad: int) -> None:
+        """Hilo de la cámara: deja el scroll en la cola y sigue (nunca espera a Windows)."""
+        self._gesture_queue().put(("scroll", cantidad))
+
+    def _queue_gesture_pointer(self, acciones: list) -> None:
+        """Hilo de la cámara: movimientos y clics del puntero, en orden, a la misma cola."""
+        cola = self._gesture_queue()
+        for accion in acciones:
+            cola.put(tuple(accion))
+
+    @staticmethod
+    def _merge_gesture_actions(pendientes: list[tuple]) -> list[tuple]:
+        """Junta lo que se acumuló mientras Windows respondía: scrolls seguidos se suman y de
+        movimientos seguidos queda el último. Los clics nunca se juntan ni cambian de orden."""
+        juntas: list[tuple] = []
+        for accion in pendientes:
+            if juntas and accion[0] == juntas[-1][0] == "scroll":
+                juntas[-1] = ("scroll", juntas[-1][1] + accion[1])
+            elif juntas and accion[0] == juntas[-1][0] == "mover":
+                juntas[-1] = accion
+            else:
+                juntas.append(accion)
+        return juntas
 
     def _gesture_action_worker(self, cola: queue.Queue) -> None:
-        """Ejecuta el scroll por el registro de herramientas (límite de tiempo y registro). Si se
-        juntaron varias tandas mientras Windows respondía, las suma en una sola."""
+        """Hace lo que piden los gestos: el scroll y los clics por el registro de herramientas
+        (límite de tiempo y registro); el movimiento del puntero, directo (24 por segundo)."""
         while not self._closing:
             try:
-                cantidad = cola.get(timeout=1.0)
+                pendientes = [cola.get(timeout=1.0)]
             except queue.Empty:
                 continue
             while True:
                 try:
-                    cantidad += cola.get_nowait()
+                    pendientes.append(cola.get_nowait())
                 except queue.Empty:
                     break
+            for accion in self._merge_gesture_actions(pendientes):
+                try:
+                    if accion[0] == "scroll":
+                        self.tool_registry.execute("gesture_scroll", {"amount": max(-3000, min(3000, accion[1]))},
+                                                   confirmed=True, origin="gestos")
+                    elif accion[0] == "mover":
+                        self._set_pointer_target(accion[1], accion[2])  # el hilo de deslizar lo lleva suave
+                    else:  # click / down / up
+                        self._set_pointer_target(accion[1], accion[2], saltar=True)
+                        self.tool_registry.execute("gesture_click", {"action": accion[0], "x": accion[1],
+                                                                     "y": accion[2]},
+                                                   confirmed=True, origin="gestos")
+                except Exception:
+                    logging.debug("Falló una acción de los gestos (%s).", accion[0], exc_info=True)
+
+    # --- Deslizamiento del puntero entre cuadros -----------------------------------------
+    def _set_pointer_target(self, x: int, y: int, saltar: bool = False) -> None:
+        """Nuevo destino del puntero; un hilo lo lleva hasta ahí de a poco (``saltar``: va directo,
+        para que un clic no arrastre un deslizamiento pendiente)."""
+        self._pointer_target = (int(x), int(y))
+        if saltar:
+            self._pointer_jump = True
+        hilo = getattr(self, "_pointer_glide_thread", None)
+        if hilo is None or not hilo.is_alive():
+            self._pointer_glide_thread = threading.Thread(target=self._pointer_glide_worker,
+                                                          name="JarvisPunteroSuave", daemon=True)
+            self._pointer_glide_thread.start()
+
+    def _pointer_glide_worker(self) -> None:
+        actual: tuple[float, float] | None = None
+        mostrado: tuple[int, int] | None = None
+        quieto_desde = None
+        while not self._closing:
+            objetivo = getattr(self, "_pointer_target", None)
+            if objetivo is None:  # el puntero se soltó: esperar sin gastar
+                actual = mostrado = None
+                if quieto_desde is None:
+                    quieto_desde = time.monotonic()
+                elif time.monotonic() - quieto_desde > 30:
+                    return  # sin uso hace rato: el próximo destino lo vuelve a arrancar
+                time.sleep(0.05)
+                continue
+            quieto_desde = None
+            if actual is None or getattr(self, "_pointer_jump", False):
+                self._pointer_jump = False
+                actual = (float(objetivo[0]), float(objetivo[1]))
+            else:
+                actual = jarvis_gestos.deslizar(actual, objetivo)
+            redondo = (round(actual[0]), round(actual[1]))
+            if redondo != mostrado:
+                try:
+                    jarvis_screen_actions.mover_rapido(*redondo)
+                except Exception:
+                    logging.debug("No se pudo mover el puntero.", exc_info=True)
+                mostrado = redondo
+            time.sleep(jarvis_gestos.PASO_DESLIZAR)
+
+    # --- Monitor del puntero (fase 3) ---------------------------------------------------
+    _PREFERENCIA_MONITOR = "gestos_monitor"
+
+    def _gesture_monitor_number(self) -> int:
+        try:
+            return int(core.obtener_preferencia(self._PREFERENCIA_MONITOR) or 1)
+        except (TypeError, ValueError):
+            return 1
+        except Exception:
+            return 1
+
+    def _gesture_monitor(self):
+        """El monitor que recorre el puntero (el 1 por defecto: la cámara está centrada sobre él)."""
+        try:
+            return jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), self._gesture_monitor_number())
+        except Exception:
+            logging.warning("No pude leer los monitores para el puntero con gestos.", exc_info=True)
+            return None
+
+    def _set_gesture_monitor(self, numero: int, command: str | None = None) -> None:
+        try:
+            monitor = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), numero)
+        except (OSError, ValueError) as error:
+            if command is not None:
+                self._add_message("assistant", str(error))
+            return
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_MONITOR, str(monitor.numero))
+        except Exception:
+            logging.exception("No se pudo guardar el monitor del puntero con gestos.")
+        detector = getattr(self, "gesture_detector", None)
+        if detector is not None and detector.puntero is not None:
+            detector.puntero.monitor = monitor
+        if command is not None:
+            respuesta = f"El puntero con gestos ahora recorre el {monitor.descripcion.lower()}."
             try:
-                self.tool_registry.execute("gesture_scroll", {"amount": max(-3000, min(3000, cantidad))},
-                                           confirmed=True, origin="gestos")
+                core.guardar_turno(self.conversation_id, command, respuesta)
             except Exception:
-                logging.debug("El scroll con gestos falló.", exc_info=True)
+                logging.exception("No se pudo guardar el cambio de monitor en memoria.")
+            self._add_message("assistant", respuesta)
+        self._refresh_gesture_indicator()
+
+    def _cycle_gesture_monitor(self) -> None:
+        try:
+            numeros = sorted(m.numero for m in jarvis_vision.listar_monitores())
+        except OSError:
+            return
+        actual = self._gesture_monitor_number()
+        siguiente = next((n for n in numeros if n > actual), numeros[0]) if numeros else 1
+        self._set_gesture_monitor(siguiente)
 
     def _stop_gestures(self) -> None:
         detector = getattr(self, "gesture_detector", None)
@@ -148,6 +277,12 @@ class GestosMixin:
         self._gesture = gesto
         self._refresh_gesture_indicator()
 
+    def _on_gesture_pointer(self, estado: str | None) -> None:
+        self._gesture_pointer = estado
+        if estado is None:
+            self._pointer_target = None  # se soltó: el deslizamiento se detiene
+        self._refresh_gesture_indicator()
+
     def _on_gesture_stats(self, cuadros_por_s: float, brillo: int) -> None:
         self._gesture_fps, self._gesture_brightness = cuadros_por_s, brillo
 
@@ -166,8 +301,13 @@ class GestosMixin:
             if not activo:
                 etiqueta.pack_forget()
             else:
+                puntero = getattr(self, "_gesture_pointer", None)
                 if getattr(self, "_gestures_paused_for_game", False):
                     texto, color = "✋ GESTOS EN PAUSA (JUEGO)", MUTED
+                elif puntero == "arrastrando":
+                    texto, color = "✋ ARRASTRANDO", CYAN
+                elif puntero == "puntero":
+                    texto, color = f"✋ PUNTERO · MONITOR {self._gesture_monitor_number()}", CYAN
                 elif self._gesture is None:
                     texto, color = "✋ GESTOS · SIN MANO", MUTED
                 else:
@@ -178,6 +318,9 @@ class GestosMixin:
         boton = getattr(self, "gestures_button", None)
         if boton is not None:
             boton.configure(text="GESTOS ON" if activo else "GESTOS OFF", fg=CYAN if activo else MUTED)
+        boton = getattr(self, "gesture_monitor_button", None)
+        if boton is not None:
+            boton.configure(text=f"🖱  PUNTERO: MONITOR {self._gesture_monitor_number()}")
         boton = getattr(self, "gesture_scroll_button", None)
         if boton is not None:
             boton.configure(text="↕  SCROLL: INVERTIDO" if self._gesture_scroll_inverted()

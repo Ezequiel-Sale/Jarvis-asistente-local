@@ -1217,9 +1217,19 @@ _GESTOS_VISTA = re.compile(
 )
 
 
-def detectar_comando_gestos(texto: str) -> str | None:
-    """«activa los gestos» → "on"; «desactiva los gestos» → "off"; «muéstrame la cámara» → "vista"."""
+_GESTOS_MONITOR = re.compile(
+    r"^(?:(?:pon|usa|lleva|manda|cambia|pasa)\s+(?:el\s+)?puntero\s+(?:de\s+(?:los\s+)?gestos\s+)?(?:al|en\s+el|a\s+el)"
+    r"|(?:el\s+)?puntero\s+(?:de\s+(?:los\s+)?gestos\s+)?(?:en\s+el|al)"
+    r"|(?:usa|pon)\s+(?:los\s+)?gestos\s+en\s+el)\s+(?:monitor|pantalla)\s+" + _NUM_MONITOR + r"$"
+)
+
+
+def detectar_comando_gestos(texto: str) -> str | int | None:
+    """«activa los gestos» → "on"; «desactiva los gestos» → "off"; «muéstrame la cámara» → "vista";
+    «puntero en el monitor 3» → 3 (el monitor que recorre el puntero con la mano)."""
     consulta = re.sub(r"^(?:(?:hey|oye)\s+)?jarvis\s+", "", _normalizar_consulta(texto))
+    if (m := _GESTOS_MONITOR.fullmatch(consulta)) is not None:
+        return _numero_monitor(m.group(1))
     if _GESTOS_ON.fullmatch(consulta):
         return "on"
     if _GESTOS_OFF.fullmatch(consulta):

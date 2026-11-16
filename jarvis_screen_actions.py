@@ -443,6 +443,33 @@ def mover_puntero(x: int, y: int) -> None:
     )
 
 
+def mover_rapido(x: int, y: int, user32=None) -> bool:
+    """Puntero a (x, y) físicos, sin comprobaciones (para el puntero con gestos: 24 veces por
+    segundo; ``mover_puntero`` verifica y registra cada movimiento)."""
+    _per_monitor_dpi()
+    user32 = user32 or ctypes.windll.user32
+    return bool(user32.SetCursorPos(int(x), int(y)))
+
+
+ACCIONES_BOTON = ("click", "down", "up")
+
+
+def boton_raton(action: str, x: int, y: int, *, user32=None, pausa: float = 0.03) -> str:
+    """Botón izquierdo en (x, y): ``click`` (apretar y soltar), ``down`` (empezar a arrastrar) o
+    ``up`` (soltar). Lo usa el pellizco de los gestos (herramienta ``gesture_click``)."""
+    if action not in ACCIONES_BOTON:
+        raise ValueError(f"Acción de botón no válida: {action}.")
+    user32 = user32 or ctypes.WinDLL("user32", use_last_error=True)
+    mover_rapido(x, y, user32)
+    if action in ("click", "down"):
+        _enviar_raton(user32, _MOUSEEVENTF_LEFTDOWN)
+    if action == "click":
+        time.sleep(pausa)
+    if action in ("click", "up"):
+        _enviar_raton(user32, _MOUSEEVENTF_LEFTUP)
+    return {"click": "Hice clic.", "down": "Apreté el botón.", "up": "Solté el botón."}[action]
+
+
 def hacer_clic(x: int, y: int) -> None:
     mover_puntero(x, y)
     user32 = ctypes.WinDLL("user32", use_last_error=True)

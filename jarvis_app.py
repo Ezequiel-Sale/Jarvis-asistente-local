@@ -1164,6 +1164,8 @@ class JarvisApp(
                         self._execute_continuous_toggle(enabled, command)
                     elif event[0] == "gesture":
                         self._on_gesture(event[1])
+                    elif event[0] == "gesture_pointer":
+                        self._on_gesture_pointer(event[1])
                     elif event[0] == "gesture_stats":
                         self._on_gesture_stats(event[1], event[2])
                     elif event[0] == "gestures_error":
@@ -1173,6 +1175,8 @@ class JarvisApp(
                         self._set_idle()
                         if valor == "vista":
                             self._open_gesture_preview()
+                        elif isinstance(valor, int):
+                            self._set_gesture_monitor(valor, command)
                         else:
                             self._execute_gestures_toggle(valor == "on", command)
                     elif event[0] == "navigate":

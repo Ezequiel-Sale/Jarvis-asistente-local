@@ -572,13 +572,17 @@ class JarvisUIMixin:
             self.speaker_strictness_button.pack(side="left", padx=(8, 0))
             self._refresh_speaker_buttons()
             marco = fila("Gestos con la mano",
-                         "La cámara reconoce tu mano. Dos dedos (índice y medio) moviéndose arriba o abajo "
-                         "hacen scroll en la ventana bajo el puntero; el puntero y el clic llegan después. Las "
-                         "imágenes no se guardan; en modo juego la cámara se cierra. También: «activa los gestos».",
+                         "Índice estirado: el puntero sigue tu mano; pellizco corto (pulgar con índice): clic; "
+                         "pellizco sostenido: arrastrar. Dos dedos arriba o abajo: scroll. Puño o mano abierta: "
+                         "suelta. Las imágenes no se guardan; en modo juego la cámara se cierra. También: "
+                         "«activa los gestos», «puntero en el monitor 2».",
                          "gestures_button", "GESTOS …", self._toggle_gestures_button)
             extras = tk.Frame(marco, bg=PANEL)
             extras.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
             self._ui_button(extras, "📷  VER CÁMARA", self._open_gesture_preview, fg=CYAN).pack(side="left")
+            self.gesture_monitor_button = self._ui_button(extras, "🖱  PUNTERO …", self._cycle_gesture_monitor,
+                                                          fg=MUTED)
+            self.gesture_monitor_button.pack(side="left", padx=(8, 0))
             self.gesture_scroll_button = self._ui_button(extras, "↕  SCROLL …", self._toggle_gesture_scroll_direction,
                                                          fg=MUTED)
             self.gesture_scroll_button.pack(side="left", padx=(8, 0))

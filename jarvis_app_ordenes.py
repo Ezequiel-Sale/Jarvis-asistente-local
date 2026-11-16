@@ -112,6 +112,8 @@ class OrdenesMixin:
         if gestos is not None:
             if gestos == "vista":
                 self._open_gesture_preview()
+            elif isinstance(gestos, int):
+                self._set_gesture_monitor(gestos, text)
             else:
                 self._execute_gestures_toggle(gestos == "on", text)
             return

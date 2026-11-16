@@ -611,11 +611,34 @@ def crear_registro_herramientas(
             "required": ["amount"],
             "additionalProperties": False,
         },
-        lambda amount: jarvis_screen_actions.girar_rueda(amount),
+        # Tandas de ~50 ms: dos eventos por tanda, 10 ms entre sí (suave y sin atrasar la cola).
+        lambda amount: jarvis_screen_actions.girar_rueda(amount, pasos=2, pausa=0.01),
         label="Desplazar con gestos",
         timeout_seconds=2,
         record_result=False,
         exposed=False,  # solo la cámara de gestos; el modelo no la ve
+    )
+    registry.register(
+        "gesture_click",
+        (
+            "Botón izquierdo del mouse en un punto (action: click, down para empezar a arrastrar, "
+            "up para soltar). Solo la usa el pellizco de los gestos con la mano."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": list(jarvis_screen_actions.ACCIONES_BOTON)},
+                "x": {"type": "integer", "minimum": -20000, "maximum": 20000},
+                "y": {"type": "integer", "minimum": -20000, "maximum": 20000},
+            },
+            "required": ["action", "x", "y"],
+            "additionalProperties": False,
+        },
+        lambda action, x, y: jarvis_screen_actions.boton_raton(action, x, y),
+        label="Clic con gestos",
+        timeout_seconds=2,
+        record_result=False,
+        exposed=False,  # solo el pellizco de los gestos, en tiempo real; el modelo no la ve
     )
     registry.register(
         "screen_click",

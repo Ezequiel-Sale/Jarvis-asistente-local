@@ -139,7 +139,7 @@ flowchart LR
    ```bash
    mkdir -p gestos-modelo && curl -L -o gestos-modelo/hand_landmarker.task https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
    ```
-   Se activan en **⚙ Ajustes → Gestos con la mano** o con «activa los gestos». Jarvis reconoce el índice, dos dedos, el pellizco, el puño y la mano abierta (barra lateral y «📷 VER CÁMARA»). **Scroll**: con el índice y el medio estirados, subir o bajar la mano desplaza la ventana que está bajo el puntero (subir la mano baja la página, como en el celular; se puede invertir en Ajustes). El puntero y el clic llegan en la próxima fase. Las imágenes nunca se guardan y la cámara se cierra en modo juego.
+   Se activan en **⚙ Ajustes → Gestos con la mano** o con «activa los gestos». Jarvis reconoce el índice, dos dedos, el pellizco, el puño y la mano abierta (barra lateral y «📷 VER CÁMARA»). **Scroll**: con el índice y el medio estirados, subir o bajar la mano desplaza la ventana que está bajo el puntero (subir la mano baja la página, como en el celular; se puede invertir en Ajustes). **Puntero**: con el índice estirado, el puntero sigue tu mano por el monitor 1 (u otro: «puntero en el monitor 3» o en Ajustes); un **pellizco** corto (pulgar con índice) hace clic donde apuntabas, dos seguidos hacen doble clic y un pellizco sostenido arrastra. El puño o la mano abierta sueltan todo. Las imágenes nunca se guardan y la cámara se cierra en modo juego.
 
 ## Uso
 
