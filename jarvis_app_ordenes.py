@@ -44,6 +44,7 @@ from jarvis_commands import (
     detectar_comando_energia,
     detectar_comando_escucha,
     detectar_modo_continuo,
+    detectar_navegacion,
     detectar_comando_gpu,
     detectar_comando_inicio_windows,
     detectar_comando_juego,
@@ -85,6 +86,10 @@ class OrdenesMixin:
         rutina = self._find_phrase_routine(text)
         if rutina is not None:
             self._start_phrase_routine(rutina, text)
+            return
+        seccion = detectar_navegacion(text)  # «Jarvis rutinas», «ve a ajustes»
+        if seccion is not None:
+            self._navigate_by_voice(seccion, text)
             return
         orden_tele = jarvis_tv.detectar(text)  # antes que volumen/multimedia: «… de la tele»
         if orden_tele is not None:
@@ -237,6 +242,10 @@ class OrdenesMixin:
             rutina = self._find_phrase_routine(transcript)
             if rutina is not None:
                 self.events.put(("phrase_routine", rutina, transcript))
+                return
+            seccion = detectar_navegacion(transcript)  # «Jarvis rutinas», «ve a ajustes»
+            if seccion is not None:
+                self.events.put(("navigate", seccion, transcript))
                 return
             orden_tele = jarvis_tv.detectar(transcript)  # antes que volumen/multimedia
             if orden_tele is not None:

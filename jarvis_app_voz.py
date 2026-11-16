@@ -23,6 +23,23 @@ from audio_capture import GrabadorAudio
 from jarvis_theme import CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET
 
 
+
+def palabra_suelta_desconocida(texto: str, orden_directa) -> bool:
+    """¿Es una sola palabra que no es una orden conocida (sección, orden directa o frase de
+    una rutina)? En la escucha continua eso es ruido mal transcripto: no va a la IA."""
+    import re
+
+    import jarvis_commands
+
+    if len(re.findall(r"\w+", texto)) != 1:
+        return False
+    if jarvis_commands.detectar_navegacion(texto) or orden_directa(texto):
+        return False
+    try:
+        return jarvis_routines.buscar_rutina_por_frase(texto) is None
+    except Exception:
+        return False
+
 class VozMixin:
     def _toggle_recording(self) -> None:
         if self.recorder is not None:
@@ -468,6 +485,10 @@ class VozMixin:
             # La continuación de una frase cortada por una pausa: «… de» + «fútbol».
             texto = f"{anterior} {texto}"
             self._continuous_partial = None
+        elif palabra_suelta_desconocida(texto, self._direct_tool_for):
+            # «Yerda» (2026-11-16): una palabra suelta que no es ninguna orden no va a la IA.
+            logging.info("Escucha continua: palabra suelta que no es una orden; se ignora.")
+            return
         elif frase_incompleta(texto):
             # Termina en «de», «la», «que»…: seguramente hiciste una pausa; espero el resto.
             self._continuous_partial = texto

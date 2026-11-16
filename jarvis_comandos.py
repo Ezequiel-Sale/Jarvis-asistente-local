@@ -43,6 +43,9 @@ CATALOGO: tuple[Seccion, ...] = (
        ("Deja de escucharme / Activa la palabra de activación", "Apaga o enciende la escucha de «Hey Jarvis»."),
        ("Escúchame siempre / Desactiva la escucha continua",
         "Sin «Hey Jarvis»: con el micrófono abierto, todo lo que digas es una orden."),
+       ("Jarvis rutinas / Jarvis chat / Ve a ajustes / Muéstrame la tele",
+        "Abre esa sección de Jarvis (Inicio, Chat, Rutinas, Juegos, Tele, Ajustes), aunque esté en la "
+        "bandeja. «Jarvis comandos» abre esta guía."),
        ("Cambia tu voz a la argentina", "Elige otra voz (España, México o Argentina)."),
        ("Silencia el sonido de Jarvis / Activa el sonido", "Jarvis responde solo por escrito o vuelve a hablar.")),
     _s("🔊", "Volumen y sonido",

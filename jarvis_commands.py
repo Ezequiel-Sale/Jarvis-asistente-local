@@ -536,6 +536,7 @@ _CORRECCIONES_VOZ = (
     (r"\bpesta[nñ]a\s+de\s+you\s+tube\b", "pestaña de YouTube"),
     (r"\byou\s+tube\b", "YouTube"),
     (r"\ben\s+la\s+tel(?:ena|eta|el)\b", "en la tele"),  # «Abre triplay en la telena» (2026-11-13)
+    (r"\bpanta(?:ja|ya|lia|la|da)\b", "pantalla"),  # «Pantaja completa» (2026-11-16)
     # «Busca la obra del partido entre Argentina y Costa Rica» (2026-11-16)
     (r"\b(la|a\s+qu[eé])\s+obra\s+(del?\s+(?:partido|juego|evento|show|concierto|recital|vuelo|"
      r"pel[ií]cula|estreno|clase|reuni[oó]n|turno|cita|carrera|pelea|final))\b", r"\1 hora \2"),
@@ -1200,6 +1201,36 @@ def detectar_modo_continuo(texto: str) -> bool | None:
         if _CONTINUA_OFF.fullmatch(consulta):
             return False
     return None
+
+
+# --- Navegar por las secciones de la app por voz [2026-11-16] -------------------------
+
+SECCIONES = {
+    "inicio": ("inicio", "home", "panel", "panel principal", "pantalla principal", "principal", "resumen",
+               "pagina principal", "tablero"),
+    "chat": ("chat", "conversacion", "la conversacion", "mensajes", "charla"),
+    "rutinas": ("rutinas", "rutina", "automatizaciones", "tareas programadas"),
+    "juegos": ("juegos", "biblioteca de juegos", "mis juegos"),
+    "tele": ("tele", "television", "televisor", "tv", "control de la tele", "control remoto"),
+    "ajustes": ("ajustes", "configuracion", "opciones", "preferencias", "settings"),
+    "comandos": ("comandos", "lista de comandos", "comandos de voz", "ayuda", "guia de comandos"),
+}
+_NOMBRE_SECCION = {nombre: clave for clave, nombres in SECCIONES.items() for nombre in nombres}
+_SECCION_RE = "|".join(sorted(map(re.escape, _NOMBRE_SECCION), key=len, reverse=True))
+_NAVEGAR = re.compile(
+    r"^(?:(?:hey|oye|ey|ok)\s+)?(?:jarvis\s+)?(?:por\s+favor\s+)?"
+    r"(?:(?:ve|ir|anda|vamos|vuelve|volve|volver|regresa|pasa|cambia|salta|llevame|lleva|muestrame|muestra|"
+    r"mostrame|ensename|abre|abri|abrime|entra|entrar)\s+(?:a\s+|al\s+|en\s+)?)?"
+    r"(?:(?:la|el|los|las|mi|mis)\s+)?(?:(?:pagina|seccion|pestana|parte|vista|menu)\s+(?:de\s+|del\s+)?"
+    r"(?:(?:la|el|los|las)\s+)?)?(?P<seccion>" + _SECCION_RE + r")(?:\s+(?:de\s+)?jarvis)?$"
+)
+
+
+def detectar_navegacion(texto: str) -> str | None:
+    """«Jarvis rutinas», «ve a ajustes», «muéstrame la tele», «vuelve al inicio» → la sección
+    («inicio», «chat», «rutinas», «juegos», «tele», «ajustes» o «comandos»), o None."""
+    match = _NAVEGAR.fullmatch(_normalizar_consulta(texto))
+    return _NOMBRE_SECCION[match.group("seccion")] if match else None
 
 
 # Lo que Whisper «oye» en el ruido o en un silencio (aprendido de subtítulos de vídeos).

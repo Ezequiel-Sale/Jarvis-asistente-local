@@ -249,6 +249,19 @@ class JarvisUIMixin:
         _PAGE_TITLES = {"inicio": "INICIO", "chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES",
                         "juegos": "JUEGOS", "tele": "TELEVISOR", "ajustes": "AJUSTES"}
 
+        def _navigate_by_voice(self, seccion: str, command: str) -> None:
+            """«Jarvis rutinas», «ve a ajustes»: muestra la ventana (aunque esté en la bandeja) y
+            esa sección; «comandos» abre la guía. Sin mensaje en el chat: el cambio ya se ve."""
+            logging.info("Navegación por voz: %s.", seccion)
+            if getattr(self, "busy", False):
+                self._set_idle()
+            self._show_from_tray()
+            if seccion == "comandos":
+                self._show_commands_help()
+            else:
+                self._show_page(seccion)
+            self._set_status(self._PAGE_TITLES.get(seccion, "COMANDOS DE VOZ").upper(), CYAN)
+
         def _show_page(self, nombre: str) -> None:
             if nombre not in self._pages:
                 return

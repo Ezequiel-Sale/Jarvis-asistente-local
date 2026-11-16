@@ -1158,6 +1158,8 @@ class JarvisApp(
                         _, enabled, command = event
                         self._set_idle()
                         self._execute_continuous_toggle(enabled, command)
+                    elif event[0] == "navigate":
+                        self._navigate_by_voice(event[1], event[2])
                     elif event[0] == "speaker_rejected":
                         self._on_speaker_rejected(event[1])
                     elif event[0] == "continuous_utterance":
