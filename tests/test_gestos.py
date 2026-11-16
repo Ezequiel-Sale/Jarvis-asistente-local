@@ -92,6 +92,62 @@ class StabilizerTests(unittest.TestCase):
         self.assertIsNone(e.agregar(None))  # la mano se fue (None, no False)
 
 
+class ScrollTests(unittest.TestCase):
+    """Fase 2: dos dedos que suben o bajan → rueda del mouse."""
+
+    def _recorrido(self, alturas, invertir=False, paso=0.04):
+        d = g.Desplazamiento(invertir)
+        envios = [c for i, y in enumerate(alturas) if (c := d.mover(y, i * paso)) is not None]
+        final = d.terminar(len(alturas) * paso)
+        return envios + ([final] if final else [])
+
+    def test_raising_the_hand_scrolls_the_page_down(self) -> None:
+        subiendo = [0.8 - i * 0.02 for i in range(20)]  # de abajo hacia arriba, ~0,8 s
+        envios = self._recorrido(subiendo)
+        self.assertTrue(envios)
+        self.assertTrue(all(c < 0 for c in envios))  # rueda negativa: la página baja
+        self.assertLess(len(envios), 8)  # en tandas, no una acción por cuadro
+        total = sum(envios)
+        self.assertLess(total, -600)  # ~0,4 de la imagen ≈ unas 8 muescas
+        bajando = self._recorrido(list(reversed(subiendo)))
+        self.assertTrue(all(c > 0 for c in bajando))
+        self.assertTrue(all(c > 0 for c in self._recorrido(subiendo, invertir=True)))
+
+    def test_still_hand_does_not_scroll(self) -> None:
+        temblor = [0.5 + (0.002 if i % 2 else -0.002) for i in range(40)]
+        self.assertEqual(self._recorrido(temblor), [])
+
+    def test_first_frame_is_only_a_reference(self) -> None:
+        d = g.Desplazamiento()
+        self.assertIsNone(d.mover(0.9, 0.0))  # meter la mano en la imagen no salta
+        self.assertIsNone(d.terminar())
+
+    def test_fingertip_height(self) -> None:
+        self.assertAlmostEqual(g.altura_dos_dedos(mano(("indice", "medio"))), 0.35)
+
+    def test_wheel_input(self) -> None:
+        import jarvis_screen_actions as s
+
+        user32 = Mock()
+        user32.SendInput.return_value = 1
+        with patch.object(s.time, "sleep"):
+            texto = s.girar_rueda(-360, user32=user32)
+        self.assertEqual(user32.SendInput.call_count, 3)
+        mouse_datos = [llamada.args[1]._obj.u.mi.mouseData for llamada in user32.SendInput.call_args_list]
+        self.assertEqual(mouse_datos, [(-120) & 0xFFFFFFFF] * 3)  # negativo, como DWORD con signo
+        self.assertIn("hacia abajo", texto)
+        self.assertEqual(s.girar_rueda(0, user32=user32), "Nada que desplazar.")
+        with patch.object(s.time, "sleep"):
+            s.girar_rueda(99999, user32=user32)  # se limita a RUEDA_MAXIMA
+
+    def test_tool_is_hidden_from_the_model(self) -> None:
+        from jarvis_tools import crear_registro_herramientas
+
+        registro = crear_registro_herramientas(Mock())
+        self.assertEqual(registro.get("gesture_scroll").label, "Desplazar con gestos")
+        self.assertNotIn("gesture_scroll", {t["function"]["name"] for t in registro.ollama_tools()})
+
+
 class ImageTests(unittest.TestCase):
     def test_dark_frames_are_brightened(self) -> None:
         import cv2
@@ -170,6 +226,28 @@ class DetectorThreadTests(unittest.TestCase):
         self.assertTrue(camaras[0].cerrada)
         self.assertTrue(modelo.cerrado)
         self.assertEqual(detector.ultima_imagen.shape, (48, 64, 3))  # para la vista, en memoria
+
+    def test_two_fingers_moving_up_scroll(self) -> None:
+        eventos: queue.Queue = queue.Queue()
+        desplazamientos: list[int] = []
+        alturas = iter([0.0] * 4 + [-0.02 * i for i in range(1, 30)])
+
+        class ModeloQueSube(_ModeloFalso):
+            def detect_for_video(self, imagen, ms):
+                d = next(alturas, -0.6)
+                self.puntos = [(x, y + d) for x, y in mano(("indice", "medio"))]
+                return super().detect_for_video(imagen, ms)
+
+        detector = g.DetectorGestos(eventos, lambda: True, Path("."), crear_modelo=lambda: ModeloQueSube(None),
+                                    abrir_camara=lambda: _CamaraFalsa(34, detector),
+                                    al_desplazar=desplazamientos.append)
+        reloj = iter(range(10_000))
+        with patch.object(g.time, "monotonic", side_effect=lambda: next(reloj) * 0.04):
+            hilo = threading.Thread(target=detector._bucle)
+            hilo.start()
+            hilo.join(5)
+        self.assertTrue(desplazamientos)
+        self.assertTrue(all(c < 0 for c in desplazamientos))
 
     def test_no_hand_no_events(self) -> None:
         eventos, camaras, modelo, detector = self._correr(None)
@@ -281,6 +359,42 @@ class AppTests(unittest.TestCase):
         JarvisApp._on_gestures_error(host, "la cámara no entrega imágenes")
         self.assertIsNone(host.gesture_detector)
         self.assertIn("la cámara no entrega imágenes", host._add_message.call_args.args[1])
+
+    def test_scroll_goes_through_the_tool_registry_without_blocking(self) -> None:
+        host = _host(_gesture_actions=None)
+        hecho = threading.Event()
+        host.tool_registry.execute.side_effect = lambda *a, **k: hecho.set()
+        host._gesture_action_worker = lambda cola: JarvisApp._gesture_action_worker(host, cola)
+        JarvisApp._queue_gesture_scroll(host, -240)
+        self.assertTrue(hecho.wait(2))
+        host._closing = True
+        args, kwargs = host.tool_registry.execute.call_args
+        self.assertEqual(args, ("gesture_scroll", {"amount": -240}))
+        self.assertEqual(kwargs, {"confirmed": True, "origin": "gestos"})
+
+    def test_scroll_direction_toggle(self) -> None:
+        guardado = {}
+        detector = Mock()
+        host = _host(gesture_detector=detector, _PREFERENCIA_SCROLL_INVERTIDO="gestos_scroll_invertido")
+        host._gesture_scroll_inverted = lambda: guardado.get("gestos_scroll_invertido") == "1"
+        with patch("jarvis_core.guardar_preferencia", side_effect=guardado.__setitem__):
+            JarvisApp._toggle_gesture_scroll_direction(host)
+        self.assertEqual(guardado, {"gestos_scroll_invertido": "1"})
+        self.assertEqual(detector.desplazamiento.signo, -1.0)
+
+    def test_successful_gesture_actions_do_not_fill_the_database(self) -> None:
+        import jarvis_actions
+        from jarvis_actions import EstadoAccion, ResultadoAccion
+
+        def resultado(origen, estado=EstadoAccion.EXITO):
+            return ResultadoAccion(herramienta="gesture_scroll", etiqueta="Desplazar con gestos", origen=origen,
+                                   estado=estado, duracion=0.01, argumentos={"amount": -120})
+
+        with patch.object(jarvis_actions, "guardar_accion") as guardar:
+            jarvis_actions.registrar_accion(resultado("gestos"))
+            guardar.assert_not_called()
+            jarvis_actions.registrar_accion(resultado("gestos", EstadoAccion.ERROR))
+            guardar.assert_called_once()  # los errores sí quedan
 
     def test_voice_routes_gestures(self) -> None:
         host = Mock()

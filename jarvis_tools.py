@@ -599,6 +599,25 @@ def crear_registro_herramientas(
     )
     _registrar_energia(registry)
     registry.register(
+        "gesture_scroll",
+        (
+            "Gira la rueda del mouse sobre la ventana bajo el puntero (amount: 120 = una muesca; "
+            "positivo sube, negativo baja). Solo la usan los gestos con la mano."
+        ),
+        {
+            "type": "object",
+            "properties": {"amount": {"type": "integer", "minimum": -jarvis_screen_actions.RUEDA_MAXIMA,
+                                      "maximum": jarvis_screen_actions.RUEDA_MAXIMA}},
+            "required": ["amount"],
+            "additionalProperties": False,
+        },
+        lambda amount: jarvis_screen_actions.girar_rueda(amount),
+        label="Desplazar con gestos",
+        timeout_seconds=2,
+        record_result=False,
+        exposed=False,  # solo la cámara de gestos; el modelo no la ve
+    )
+    registry.register(
         "screen_click",
         (
             "Hace clic en un punto de la pantalla y, opcionalmente, escribe texto. Solo la "

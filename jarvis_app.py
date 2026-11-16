@@ -1256,9 +1256,9 @@ class JarvisApp(
                             self._set_status("ACCIÓN CANCELADA", MUTED)
                         self._set_idle()
                     elif event[0] == "action_result":
-                        if event[1].origen == "celular" and event[1].exitosa:
-                            # Deslizadores y botones de la pestaña Música: ya se ven en el
-                            # celular y quedan en el registro; en el chat solo serían ruido.
+                        if event[1].origen in ("celular", "gestos") and event[1].exitosa:
+                            # Deslizadores y botones de la pestaña Música (celular) o el scroll con
+                            # la mano (gestos): ya se ven y quedan en el registro; en el chat, ruido.
                             continue
                         self._show_action_result(event[1])
                         try:

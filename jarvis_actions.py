@@ -209,7 +209,10 @@ def guardar_accion(resultado: ResultadoAccion) -> None:
 
 def registrar_accion(resultado: ResultadoAccion) -> None:
     """Deja constancia de una acción en el log, las métricas y la base de datos."""
-    log = logging.info if resultado.exitosa else logging.warning
+    # Las tandas de scroll de los gestos son varias por segundo: si salen bien, solo métricas y
+    # log de depuración (sin una fila por tanda en la base); los errores sí quedan registrados.
+    continuas = resultado.exitosa and resultado.origen == "gestos"
+    log = logging.debug if continuas else (logging.info if resultado.exitosa else logging.warning)
     log(
         "Acción %s [%s] %s en %.2fs%s",
         resultado.herramienta,
@@ -224,7 +227,8 @@ def registrar_accion(resultado: ResultadoAccion) -> None:
         origen=resultado.origen,
     ).inc()
     ACTION_DURATION.labels(herramienta=resultado.herramienta).observe(resultado.duracion)
-    guardar_accion(resultado)
+    if not continuas:
+        guardar_accion(resultado)
 
 
 def listar_acciones(limite: int = 10) -> list[dict[str, object]]:

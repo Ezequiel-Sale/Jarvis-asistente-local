@@ -31,7 +31,7 @@ TAMANO_MODELO = 7_819_105  # bytes (verificado al descargarlo)
 
 GESTOS = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "otro")
 NOMBRES = {
-    "indice": "índice", "dos_dedos": "dos dedos", "pellizco": "pellizco", "puno": "puño",
+    "indice": "índice", "dos_dedos": "dos dedos · scroll", "pellizco": "pellizco", "puno": "puño",
     "mano_abierta": "mano abierta", "otro": "otro",
 }
 
@@ -110,6 +110,61 @@ class Estabilizador:
         return False
 
 
+class Desplazamiento:
+    """Scroll con dos dedos (fase 2): el movimiento vertical de las puntas del índice y el
+    medio se convierte en rueda del mouse mientras se mueve la mano, como en un touchpad.
+
+    Subir la mano baja la página (como deslizar en el celular); ``invertir`` lo da vuelta.
+    ``GANANCIA``: unidades de rueda por recorrer toda la altura de la imagen (120 = una
+    muesca). Se suaviza la posición, se ignora el temblor (``ZONA_MUERTA`` por cuadro) y se
+    manda en tandas cada ``INTERVALO`` s, para no hacer 24 acciones por segundo.
+    """
+
+    GANANCIA = 2600.0
+    ZONA_MUERTA = 0.004  # fracción de la altura por cuadro: menos es temblor de la mano
+    SUAVIZADO = 0.5  # peso del cuadro nuevo en el promedio exponencial
+    INTERVALO = 0.2
+    MINIMO = 60  # unidades: menos no vale una acción
+
+    def __init__(self, invertir: bool = False) -> None:
+        self.signo = -1.0 if invertir else 1.0
+        self._y: float | None = None
+        self._acumulado = 0.0
+        self._ultimo_envio = 0.0
+
+    def mover(self, y: float, ahora: float) -> int | None:
+        """Nueva altura (0 arriba – 1 abajo) de los dedos; devuelve cuánto girar la rueda, o None."""
+        if self._y is None:
+            self._y, self._ultimo_envio = y, ahora  # primer cuadro: solo referencia (sin salto)
+            return None
+        suave = self._y + (y - self._y) * self.SUAVIZADO
+        dy = suave - self._y
+        self._y = suave
+        if abs(dy) >= self.ZONA_MUERTA:
+            # Subir la mano (dy < 0) → rueda negativa → la página baja.
+            self._acumulado += dy * self.GANANCIA * self.signo
+        if ahora - self._ultimo_envio >= self.INTERVALO and abs(self._acumulado) >= self.MINIMO:
+            return self._enviar(ahora)
+        return None
+
+    def terminar(self, ahora: float = 0.0) -> int | None:
+        """Se soltó el gesto: lo que quedó acumulado (si vale la pena) y vuelve a empezar."""
+        pendiente = self._enviar(ahora) if abs(self._acumulado) >= self.MINIMO / 2 else None
+        self._y, self._acumulado = None, 0.0
+        return pendiente
+
+    def _enviar(self, ahora: float) -> int:
+        cantidad = int(round(self._acumulado))
+        self._acumulado -= cantidad
+        self._ultimo_envio = ahora
+        return cantidad
+
+
+def altura_dos_dedos(puntos: Sequence[Punto]) -> float:
+    """Altura media de las puntas del índice y del medio (lo que mueve el scroll)."""
+    return (puntos[PUNTA_INDICE][1] + puntos[12][1]) / 2
+
+
 def aclarar(cuadro, cv2, clahe):
     """Imagen oscura (brillo < 70): ganancia hasta x4 y realce local de contraste."""
     brillo = float(cuadro.mean())
@@ -149,7 +204,10 @@ class DetectorGestos(threading.Thread):
     """
 
     def __init__(self, events: queue.Queue, puede_usar: Callable[[], bool], carpeta: Path, *,
-                 abrir_camara: Callable | None = None, crear_modelo: Callable | None = None) -> None:
+                 abrir_camara: Callable | None = None, crear_modelo: Callable | None = None,
+                 al_desplazar: Callable[[int], None] | None = None, invertir_scroll: bool = False) -> None:
+        """``al_desplazar(cantidad)``: girar la rueda (la app lo hace en otro hilo, por el registro
+        de herramientas; este hilo nunca espera)."""
         super().__init__(name="JarvisGestos", daemon=True)
         self.events = events
         self.puede_usar = puede_usar
@@ -161,6 +219,8 @@ class DetectorGestos(threading.Thread):
         self.ultima_imagen = None  # RGB (numpy) para la vista; solo en memoria
         self.gesto: str | None = None
         self.cuadros_por_s = 0.0
+        self.al_desplazar = al_desplazar
+        self.desplazamiento = Desplazamiento(invertir_scroll)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -241,6 +301,7 @@ class DetectorGestos(threading.Thread):
                 cambio = estabilizador.agregar(gesto)
                 if cambio is not False:
                     self._publicar_gesto(cambio)
+                self._desplazar(estabilizador.actual, gesto, puntos)
                 if self.vista:
                     self.ultima_imagen = dibujar(rgb, puntos, cv2)
                 cuadros_en_segundo += 1
@@ -256,6 +317,17 @@ class DetectorGestos(threading.Thread):
                 modelo.close()
             except Exception:
                 pass
+
+    def _desplazar(self, estable: str | None, gesto: str | None, puntos) -> None:
+        """Fase 2: con «dos dedos» estable, el movimiento vertical hace scroll."""
+        if self.al_desplazar is None:
+            return
+        if estable == "dos_dedos" and gesto == "dos_dedos" and puntos:
+            cantidad = self.desplazamiento.mover(altura_dos_dedos(puntos), time.monotonic())
+        else:
+            cantidad = self.desplazamiento.terminar(time.monotonic())
+        if cantidad:
+            self.al_desplazar(cantidad)
 
     def _publicar_gesto(self, gesto: str | None) -> None:
         self.gesto = gesto

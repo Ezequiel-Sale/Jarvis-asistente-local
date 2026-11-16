@@ -6,6 +6,8 @@ se reconocen los gestos (se ven en la barra lateral y en la vista de cámara); l
 """
 
 import logging
+import queue
+import threading
 import tkinter as tk
 
 import jarvis_core as core
@@ -47,9 +49,59 @@ class GestosMixin:
         if falta is not None:
             logging.warning("Gestos no disponibles: %s.", falta)
             return falta
-        self.gesture_detector = jarvis_gestos.DetectorGestos(self.events, self._can_use_camera, core.APP_DIR)
+        self.gesture_detector = jarvis_gestos.DetectorGestos(
+            self.events, self._can_use_camera, core.APP_DIR,
+            al_desplazar=self._queue_gesture_scroll, invertir_scroll=self._gesture_scroll_inverted())
         self.gesture_detector.start()
         return None
+
+    # --- Acciones de los gestos (fase 2: scroll) ----------------------------------------
+    _PREFERENCIA_SCROLL_INVERTIDO = "gestos_scroll_invertido"
+
+    def _gesture_scroll_inverted(self) -> bool:
+        try:
+            return core.obtener_preferencia(self._PREFERENCIA_SCROLL_INVERTIDO) == "1"
+        except Exception:
+            return False
+
+    def _toggle_gesture_scroll_direction(self) -> None:
+        invertido = not self._gesture_scroll_inverted()
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_SCROLL_INVERTIDO, "1" if invertido else "0")
+        except Exception:
+            logging.exception("No se pudo guardar el sentido del scroll con gestos.")
+        detector = getattr(self, "gesture_detector", None)
+        if detector is not None:
+            detector.desplazamiento.signo = -1.0 if invertido else 1.0
+        self._refresh_gesture_indicator()
+
+    def _queue_gesture_scroll(self, cantidad: int) -> None:
+        """Hilo de la cámara: deja el scroll en una cola y sigue (nunca espera a Windows)."""
+        cola = getattr(self, "_gesture_actions", None)
+        if cola is None:
+            cola = self._gesture_actions = queue.Queue()
+            threading.Thread(target=self._gesture_action_worker, args=(cola,),
+                             name="JarvisAccionesGestos", daemon=True).start()
+        cola.put(cantidad)
+
+    def _gesture_action_worker(self, cola: queue.Queue) -> None:
+        """Ejecuta el scroll por el registro de herramientas (límite de tiempo y registro). Si se
+        juntaron varias tandas mientras Windows respondía, las suma en una sola."""
+        while not self._closing:
+            try:
+                cantidad = cola.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            while True:
+                try:
+                    cantidad += cola.get_nowait()
+                except queue.Empty:
+                    break
+            try:
+                self.tool_registry.execute("gesture_scroll", {"amount": max(-3000, min(3000, cantidad))},
+                                           confirmed=True, origin="gestos")
+            except Exception:
+                logging.debug("El scroll con gestos falló.", exc_info=True)
 
     def _stop_gestures(self) -> None:
         detector = getattr(self, "gesture_detector", None)
@@ -126,6 +178,10 @@ class GestosMixin:
         boton = getattr(self, "gestures_button", None)
         if boton is not None:
             boton.configure(text="GESTOS ON" if activo else "GESTOS OFF", fg=CYAN if activo else MUTED)
+        boton = getattr(self, "gesture_scroll_button", None)
+        if boton is not None:
+            boton.configure(text="↕  SCROLL: INVERTIDO" if self._gesture_scroll_inverted()
+                            else "↕  SCROLL: COMO EL CELULAR")
 
     def _open_gesture_preview(self) -> None:
         """Ventana con la cámara y los puntos de la mano, para ver cómo te reconoce."""

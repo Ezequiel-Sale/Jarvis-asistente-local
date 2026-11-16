@@ -353,6 +353,34 @@ def _enviar_raton(user32, flags: int, dx: int = 0, dy: int = 0) -> bool:
     return user32.SendInput(1, ctypes.byref(entrada), ctypes.sizeof(INPUT)) == 1
 
 
+_MOUSEEVENTF_WHEEL = 0x0800
+RUEDA_MAXIMA = 3000  # por llamada: unas 25 muescas
+
+
+def girar_rueda(cantidad: int, *, pasos: int = 3, pausa: float = 0.015, user32=None) -> str:
+    """Rueda del mouse sobre la ventana que está bajo el puntero (``cantidad`` en unidades de
+    Windows: 120 = una muesca; positiva sube, negativa baja). Se reparte en ``pasos`` eventos
+    seguidos para que el desplazamiento se vea suave (gestos con la mano, fase 2)."""
+    cantidad = max(-RUEDA_MAXIMA, min(RUEDA_MAXIMA, int(cantidad)))
+    if cantidad == 0:
+        return "Nada que desplazar."
+    user32 = user32 or ctypes.windll.user32
+    MOUSEINPUT, _KEYBDINPUT, INPUT = _estructuras_entrada()
+    restante = cantidad
+    for paso in range(pasos, 0, -1):
+        trozo = round(restante / paso)
+        restante -= trozo
+        if not trozo:
+            continue
+        entrada = INPUT(type=_INPUT_MOUSE)
+        entrada.u.mi = MOUSEINPUT(0, 0, trozo & 0xFFFFFFFF, _MOUSEEVENTF_WHEEL, 0, 0)  # DWORD con signo
+        if user32.SendInput(1, ctypes.byref(entrada), ctypes.sizeof(INPUT)) != 1:
+            raise OSError("Windows no aceptó el movimiento de la rueda.")
+        if paso > 1:
+            time.sleep(pausa)
+    return f"Desplacé {'hacia arriba' if cantidad > 0 else 'hacia abajo'} ({abs(cantidad)})."
+
+
 def coordenadas_absolutas(x: int, y: int, izquierda: int, arriba: int,
                           ancho: int, alto: int) -> tuple[int, int]:
     """Punto físico del escritorio virtual → escala 0–65535 de SendInput (VIRTUALDESK)."""
