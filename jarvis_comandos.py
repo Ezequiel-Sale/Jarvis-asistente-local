@@ -41,6 +41,8 @@ CATALOGO: tuple[Seccion, ...] = (
        ("Deshaz lo último / Déjalo como estaba", "Vuelve atrás el último cambio: volumen, salida de audio, "
         "pestañas, vídeos, ventanas, tema o monitores (de la última media hora)."),
        ("Deja de escucharme / Activa la palabra de activación", "Apaga o enciende la escucha de «Hey Jarvis»."),
+       ("Escúchame siempre / Desactiva la escucha continua",
+        "Sin «Hey Jarvis»: con el micrófono abierto, todo lo que digas es una orden."),
        ("Cambia tu voz a la argentina", "Elige otra voz (España, México o Argentina)."),
        ("Silencia el sonido de Jarvis / Activa el sonido", "Jarvis responde solo por escrito o vuelve a hablar.")),
     _s("🔊", "Volumen y sonido",
@@ -84,7 +86,9 @@ CATALOGO: tuple[Seccion, ...] = (
         "Acomoda varias ventanas en una pantalla, cada una en su mitad."),
        ("Pon Brave a la derecha / Pon Discord arriba a la izquierda del monitor 1",
         "Mitad izquierda o derecha, arriba, abajo, una esquina, el centro o pantalla completa."),
-       ("Divide el monitor 2 entre Jarvis y Claude", "Una ventana en cada mitad.")),
+       ("Divide el monitor 2 entre Jarvis y Claude", "Una ventana en cada mitad."),
+       ("Mueve Jarvis al monitor 2 y posiciónalo a la izquierda",
+        "Lo lleva a esa pantalla y lo acomoda (también «mueve Jarvis al monitor 2 a la izquierda»).")),
     _s("🗔", "Programas, juegos y ventanas",
        ("Abre WhatsApp / Abre la calculadora", "Abre cualquier aplicación por su nombre."),
        ("Abre Elden Ring", "Abre un juego de tu biblioteca. Al jugar, Jarvis libera la tarjeta gráfica, se "

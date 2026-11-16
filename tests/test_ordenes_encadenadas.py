@@ -43,6 +43,34 @@ class ChainedOrdersTests(unittest.TestCase):
         self.assertEqual(_pasos("minimiza Discord luego maximizalo")[1],
                          ("window_control", {"app": "discord", "action": "window_maximize"}))
 
+    def test_y_splits_when_every_part_is_a_direct_order(self) -> None:
+        """2026-11-16: «Mueve Brave al monitor 3 y pon pantalla completa» fue a la IA, que lo hizo
+        pero respondió «no pude mover la ventana»."""
+        self.assertEqual(_pasos("Mueve Brave al monitor 3 y pon pantalla completa"), [
+            ("move_window", {"app": "brave", "monitor": 3}),
+            ("video_fullscreen", {"enabled": True, "monitor": 3}),  # el monitor del paso anterior
+        ])
+        self.assertEqual(_pasos("prende la tele y ponla en HDMI 1"),
+                         [("tv_control", {"action": "power_on"}), ("tv_control", {"action": "hdmi1"})])
+        self.assertIsNone(_pasos("pausa el video y el audio"))  # «el audio» no es una orden
+        self.assertIsNone(_pasos("qué es Python y cómo se usa"))
+
+    def test_move_then_place_with_pronoun(self) -> None:
+        """2026-11-16: la IA respondió «Puse Jarvis a la izquierda del monitor 2» sin hacer nada."""
+        esperado = [("move_window", {"app": "jarvis", "monitor": 2}),
+                    ("arrange_windows", {"windows": [{"app": "jarvis", "position": "left"}], "monitor": 2})]
+        self.assertEqual(_pasos("Mueve Jarvis al monitor 2 y posiciónalo a la izquierda"), esperado)
+
+    def test_placement_phrases(self) -> None:
+        from jarvis_commands import detectar_acomodar_ventanas
+
+        self.assertEqual(detectar_acomodar_ventanas("posiciona Jarvis a la izquierda"),
+                         ("arrange_windows", {"windows": [{"app": "jarvis", "position": "left"}]}))
+        self.assertEqual(detectar_acomodar_ventanas("mueve Jarvis al monitor 2 a la izquierda"),
+                         ("arrange_windows", {"windows": [{"app": "jarvis", "position": "left"}], "monitor": 2}))
+        self.assertEqual(detectar_acomodar_ventanas("ubica Brave en la pantalla 3 arriba a la derecha"),
+                         ("arrange_windows", {"windows": [{"app": "brave", "position": "top_right"}], "monitor": 3}))
+
     def test_unknown_part_goes_to_the_ai(self) -> None:
         self.assertIsNone(_pasos("pausa el video luego explicame la fisica cuantica"))
         self.assertIsNone(_pasos("minimiza Discord"))  # una sola orden: no es una cadena

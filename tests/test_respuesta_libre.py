@@ -47,6 +47,7 @@ class ShortAnswerRecordingTests(unittest.TestCase):
 
 def _host(**estado) -> Mock:
     host = Mock()
+    host._speaker_rejected = lambda _ruta: False  # «Solo mi voz» desactivado
     host._pending_plan_reply = object()
     host._pending_approval_kind = "power"
     host._pending_power_action = "shutdown"

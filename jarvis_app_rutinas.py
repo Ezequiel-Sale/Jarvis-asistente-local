@@ -26,6 +26,10 @@ from jarvis_tool_registry import (
 )
 
 
+# En una orden encadenada, estas toman el monitor del paso anterior si no dicen otro.
+HEREDAN_MONITOR = ("video_fullscreen", "video_theater", "media_control", "arrange_windows")
+
+
 class RutinasMixin:
     def _request_routine_save_confirmation(
         self,
@@ -148,9 +152,15 @@ class RutinasMixin:
         """«X luego Y después Z»: si Jarvis reconoce cada parte sola (orden directa o rutina por
         frase), arma una rutina al vuelo y la hace en orden. Si alguna parte no la reconoce, None
         (va a la IA, que arma un plan)."""
-        from jarvis_commands import dividir_ordenes
+        from jarvis_commands import dividir_ordenes, dividir_por_y
 
+        # «… y …» también, si cada parte es una orden directa: «mueve Brave al monitor 3 y pon
+        # pantalla completa» iba a la IA, que lo hizo pero resumió «no pude mover la ventana».
         partes = dividir_ordenes(texto)
+        if not partes and self._direct_tool_for(texto) is None:
+            # Si la frase entera ya es una orden («pausa el video y reanuda el otro» es una
+            # secuencia multimedia; «coloca Jarvis a la izquierda y Claude a la derecha»), no se parte.
+            partes = dividir_por_y(texto)
         if not partes:
             return None
         import re
@@ -178,7 +188,12 @@ class RutinasMixin:
                 orden = self._direct_tool_for(parte)
             if orden is None:
                 return None
-            pasos.append(jarvis_routines.RoutineStep(orden[0], dict(orden[1])))
+            argumentos = dict(orden[1])
+            if (pasos and orden[0] in HEREDAN_MONITOR and argumentos.get("monitor") is None
+                    and isinstance(pasos[-1].arguments.get("monitor"), int)):
+                # «… al monitor 3 y pon pantalla completa»: el vídeo es el que se acaba de llevar ahí.
+                argumentos["monitor"] = pasos[-1].arguments["monitor"]
+            pasos.append(jarvis_routines.RoutineStep(orden[0], argumentos))
         if not pasos or len(pasos) > jarvis_routines.MAX_PASOS:
             return None
         return jarvis_routines.Routine(0, "Órdenes", "", (), tuple(pasos), jarvis_routines.DISPARADOR_FRASE)

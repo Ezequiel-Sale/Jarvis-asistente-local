@@ -9,6 +9,12 @@ Privacidad: el audio de la escucha solo vive en memoria (unos segundos para
 estimar el ruido de fondo) y nunca sale del equipo; únicamente la orden
 posterior a la palabra se guarda en un WAV temporal que la app borra tras
 transcribirlo.
+
+Escucha continua [2026-11-16]: con ``continua`` en True no se usa el modelo; cada
+frase que supera el ruido de fondo (el micrófono abierto) se graba y se publica
+como ``("continuous_utterance", ruta)``; la app la transcribe y decide si es una
+orden. Con el micrófono silenciado (auriculares con el brazo levantado) llega
+silencio y no se graba nada.
 """
 
 import logging
@@ -123,6 +129,12 @@ MAXIMO_RESPUESTA = 4.0
 MINIMO_VOZ_RESPUESTA = 0.15
 MAXIMO_VOZ_RESPUESTA = 2.5
 
+# Escucha continua: frases sin «Hey Jarvis».
+PREVIO_FRASE = 5  # bloques (~0,4 s) antes de que la energía suba: el inicio de la palabra
+SILENCIO_FRASE = 1.3  # como en las órdenes tras «Hey Jarvis»
+MAXIMO_FRASE = 20.0
+MINIMO_VOZ_FRASE = 0.35  # menos es un golpe, una tos o un clic
+
 
 def umbral_voz(ruido: float) -> float:
     """Energía a partir de la cual un bloque cuenta como voz."""
@@ -199,6 +211,7 @@ class DetectorPalabraActivacion(threading.Thread):
         *,
         umbral: float = UMBRAL_DETECCION,
         escucha_libre: Callable[[], bool] | None = None,
+        continua: Callable[[], bool] | None = None,
     ) -> None:
         """``escucha_libre``: mientras devuelva True (hay una confirmación abierta),
         cualquier frase corta se graba sin esperar «Hey Jarvis» y se publica como
@@ -208,6 +221,7 @@ class DetectorPalabraActivacion(threading.Thread):
         self.puede_escuchar = puede_escuchar
         self.umbral = umbral
         self.escucha_libre = escucha_libre
+        self.continua = continua  # True: toda frase es una posible orden (sin el modelo)
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
@@ -239,7 +253,7 @@ class DetectorPalabraActivacion(threading.Thread):
         energias: deque[float] = deque(maxlen=int(5 / SEGUNDOS_POR_BLOQUE))
         bloqueado_hasta = 0.0
         registrar_desde = 0.0
-        previos: deque[bytes] = deque(maxlen=PREVIO_RESPUESTA)
+        previos: deque[bytes] = deque(maxlen=PREVIO_FRASE)
         try:
             while not self._stop_event.is_set():
                 bloque = stream.read(BLOQUE, exception_on_overflow=False)
@@ -256,11 +270,23 @@ class DetectorPalabraActivacion(threading.Thread):
                         energias.append(energia)
                         previos.append(bloque)
                         continue
-                    ruta = self._grabar_respuesta(stream, ruido, [*previos, bloque])
+                    ruta = self._grabar_respuesta(stream, ruido, [*list(previos)[-PREVIO_RESPUESTA:], bloque])
                     previos.clear()
                     bloqueado_hasta = time.monotonic() + 0.5
                     if ruta is not None:
                         self.events.put(("approval_utterance", ruta))
+                    continue
+                if self.continua is not None and self.continua():
+                    modelo.reset()
+                    ruido = estimar_ruido(energias)
+                    if energia < umbral_voz(ruido):
+                        energias.append(energia)
+                        previos.append(bloque)
+                        continue
+                    ruta = self._grabar_frase(stream, ruido, [*previos, bloque])
+                    previos.clear()
+                    if ruta is not None:
+                        self.events.put(("continuous_utterance", ruta))
                     continue
                 previos.clear()
                 energias.append(energia)
@@ -311,6 +337,27 @@ class DetectorPalabraActivacion(threading.Thread):
         duracion_voz = voz * SEGUNDOS_POR_BLOQUE
         if not MINIMO_VOZ_RESPUESTA <= duracion_voz <= MAXIMO_VOZ_RESPUESTA:
             return None
+        return guardar_wav(bloques)
+
+    def _grabar_frase(self, stream, ruido: float, previos: list[bytes]) -> str | None:
+        """Escucha continua: graba la frase hasta 1,1 s de silencio (máx. 20 s).
+
+        Se descarta si la voz dura menos de 0,35 s (un golpe, una tos, un clic).
+        """
+        segmentador = SegmentadorVoz(ruido, espera_inicio=0.0, silencio_final=SILENCIO_FRASE,
+                                     maximo=MAXIMO_FRASE, ignorar_inicio=0.0)
+        bloques = list(previos)
+        terminado = False
+        for bloque in bloques:
+            terminado = segmentador.agregar(rms(bloque)) and segmentador.hablo
+        while not terminado and not self._stop_event.is_set():
+            bloque = stream.read(BLOQUE, exception_on_overflow=False)
+            bloques.append(bloque)
+            terminado = segmentador.agregar(rms(bloque))
+        voz = len(segmentador._voz) * SEGUNDOS_POR_BLOQUE
+        if voz < MINIMO_VOZ_FRASE - _EPS:
+            return None
+        logging.info("Frase grabada (escucha continua): %.1f s, voz %.1f s.", segmentador.duracion, voz)
         return guardar_wav(bloques)
 
     def _grabar_orden(self, stream, ruido: float) -> str | None:

@@ -536,6 +536,9 @@ _CORRECCIONES_VOZ = (
     (r"\bpesta[nñ]a\s+de\s+you\s+tube\b", "pestaña de YouTube"),
     (r"\byou\s+tube\b", "YouTube"),
     (r"\ben\s+la\s+tel(?:ena|eta|el)\b", "en la tele"),  # «Abre triplay en la telena» (2026-11-13)
+    # «Busca la obra del partido entre Argentina y Costa Rica» (2026-11-16)
+    (r"\b(la|a\s+qu[eé])\s+obra\s+(del?\s+(?:partido|juego|evento|show|concierto|recital|vuelo|"
+     r"pel[ií]cula|estreno|clase|reuni[oó]n|turno|cita|carrera|pelea|final))\b", r"\1 hora \2"),
     (r"^(?:aranda|agrandar?a)\b", "agranda"),
     (r"^tres\s+(.+?)\s+al\s+frente\b", r"trae \1 al frente"),  # «Tres Jarvis al frente» (2026-11-15)  # «Agrandá Jarvis» → «Aranda Jarvis» (2026-11-14)
     # Vistos al comparar modelos con 84 órdenes sintetizadas (2026-11-13); sirven sobre todo
@@ -563,6 +566,17 @@ _SEPARADOR_ORDENES = re.compile(
     r"\s*[,.;]?\s*\b(?:y\s+)?(?:luego|despues|después|entonces|a\s+continuacion|a\s+continuación)\b\s*[,]?\s*",
     re.IGNORECASE,
 )
+
+
+def dividir_por_y(texto: str) -> list[str]:
+    """«Mueve Brave al monitor 3 y pon pantalla completa» → las dos partes; [] si no hay «y».
+
+    Solo sirve si cada parte resulta ser una orden directa (lo comprueba quien llama): «pausa
+    el vídeo y el audio» no se divide porque «el audio» no es una orden.
+    """
+    partes = [p.strip(" ,.;") for p in re.split(r"\s*,?\s+y\s+", texto.strip(), flags=re.IGNORECASE)]
+    partes = [p for p in partes if p]
+    return partes if len(partes) >= 2 else []
 
 
 def dividir_ordenes(texto: str) -> list[str]:
@@ -824,7 +838,8 @@ _DONDE_MONITOR = (r"(?:en|sobre|de|del)\s+(?:el\s+|la\s+)?(?:(?P<tv>" + _PANTALL
                   r"(?:monitor|pantalla)\s+(?:numero\s+)?(?P<num>" + _NUM_MONITOR.strip("()") + r"))")
 _ACOMODAR = re.compile(
     r"^(?:" + _DONDE_MONITOR.replace("?P<tv>", "?P<tv1>").replace("?P<num>", "?P<num1>") + r"\s+)?"
-    r"(?:coloca|colocame|pon|ponme|acomoda|acomodame|ubica|mueve|manda|lleva|deja|organiza)\s+"
+    r"(?:coloca|colocame|pon|ponme|acomoda|acomodame|ubica|ubicame|mueve|manda|lleva|deja|organiza|"
+    r"posiciona|posicioname|situa|situame|alinea|tira|pasa)\s+"
     r"(?P<cuerpo>.+?)(?:\s+" + _DONDE_MONITOR.replace("?P<tv>", "?P<tv2>").replace("?P<num>", "?P<num2>")
     + r")?$"
 )
@@ -852,8 +867,16 @@ def detectar_acomodar_ventanas(texto: str) -> tuple[str, dict[str, object]] | No
     match = _ACOMODAR.fullmatch(consulta)
     if match is None:
         return None
+    cuerpo = match.group("cuerpo")
+    # «mueve Jarvis al monitor 2 a la izquierda»: el monitor en el medio (2026-11-16).
+    medio = re.search(r"\s+(?:al|a\s+la|en\s+el|en\s+la)\s+(?:monitor|pantalla)\s+(?:numero\s+)?"
+                      + _NUM_MONITOR + r"(?=\s)", cuerpo)
+    numero_medio = None
+    if medio is not None:
+        numero_medio = medio.group(1)
+        cuerpo = (cuerpo[:medio.start()] + cuerpo[medio.end():]).strip()
     ventanas = []
-    for parte in re.split(r"\s*,\s*|\s+y\s+", match.group("cuerpo")):
+    for parte in re.split(r"\s*,\s*|\s+y\s+", cuerpo):
         item = _ITEM_ACOMODAR.fullmatch(parte.strip())
         if item is None:
             return None  # una parte no dice dónde va: no es esta orden
@@ -863,7 +886,8 @@ def detectar_acomodar_ventanas(texto: str) -> tuple[str, dict[str, object]] | No
         if not app or re.fullmatch(r"(?:el\s+|la\s+)?(?:monitor|pantalla|escritorio|volumen|video)(?:\s+.*)?", app):
             return None
         ventanas.append({"app": app, "position": _POSICION_DICHA[item.group("pos")]})
-    donde = monitor(match.group("tv1") or match.group("tv2"), match.group("num1") or match.group("num2"))
+    donde = monitor(match.group("tv1") or match.group("tv2"),
+                    match.group("num1") or match.group("num2") or numero_medio)
     return "arrange_windows", {"windows": ventanas, **donde}
 
 
@@ -1141,6 +1165,120 @@ def detectar_comando_escucha(texto: str) -> bool | None:
     if _ESCUCHA_OFF.fullmatch(consulta):
         return False
     return None
+
+
+# --- Escucha continua [2026-11-16] ---------------------------------------------
+
+# «escucha continua», «escucha activa», «modo de escucha permanente», «escucha siempre activa»…
+_CONTINUA = (r"(?:(?:el\s+)?modo\s+(?:de\s+)?)?(?:la\s+)?escucha\s+"
+             r"(?:continua|continuada|activa|permanente|constante|siempre(?:\s+activa)?|todo\s+el\s+tiempo)")
+_SIEMPRE = r"(?:siempre|todo\s+el\s+tiempo|todo\s+el\s+rato|en\s+todo\s+momento|sin\s+parar|constantemente)"
+_CONTINUA_ON = re.compile(
+    r"^(?:(?:quiero|necesito)\s+que\s+)?(?:me\s+)?(?:activa|activar|actives|actives|enciende|encender|"
+    r"prende|prender|habilita|habilitar|pon|poner|pone|pasa\s+a|cambia\s+a|usa|usar)\s+(?:la\s+|el\s+)?"
+    + _CONTINUA + r"$"
+    r"|^(?:(?:quiero|necesito)\s+que\s+)?(?:escuchame|escucha|escuchame|me\s+escuches|escuchar(?:me)?)\s+"
+    + _SIEMPRE + r"$"
+)
+_CONTINUA_OFF = re.compile(
+    r"^(?:desactiva|desactivar|apaga|apagar|deshabilita|deshabilitar|quita|quitar|saca|sacar)\s+"
+    r"(?:la\s+|el\s+)?" + _CONTINUA + r"$"
+    r"|^(?:deja|dejar)\s+de\s+escuchar(?:me)?\s+" + _SIEMPRE + r"$"
+    r"|^(?:vuelve|volve|volver)\s+a\s+(?:usar\s+)?(?:la\s+palabra\s+de\s+activacion|hey\s+jarvis)$"
+    r"|^(?:usa|usar)\s+(?:la\s+palabra\s+de\s+activacion|hey\s+jarvis)$"
+)
+_SALUDO_JARVIS = re.compile(r"^(?:(?:hey|oye|ey|ok)\s+)?(?:jarvis\s+)?(?:por\s+favor\s+)?|\s+(?:por\s+favor|jarvis)$")
+
+
+def detectar_modo_continuo(texto: str) -> bool | None:
+    """«activa la escucha continua/activa» / «escúchame siempre» → True;
+    «desactiva la escucha continua» / «vuelve a usar Hey Jarvis» → False."""
+    normalizada = _normalizar_consulta(texto)
+    for consulta in (normalizada, _SALUDO_JARVIS.sub("", normalizada).strip()):
+        if _CONTINUA_ON.fullmatch(consulta):
+            return True
+        if _CONTINUA_OFF.fullmatch(consulta):
+            return False
+    return None
+
+
+# Lo que Whisper «oye» en el ruido o en un silencio (aprendido de subtítulos de vídeos).
+_ALUCINACIONES = re.compile(
+    r"amara|subtitulos? (?:realizados|hechos|por)|suscribete|suscribanse|gracias por ver"
+    r"|gracias por mirar|nos vemos en el proximo|hasta la proxima|dale like|\bwww\b|^musica$"
+)
+_MULETILLAS = {
+    "eh", "ehm", "em", "mm", "mmm", "hm", "hmm", "ah", "aja", "uh", "oh", "ay", "bueno", "ok", "okay",
+    "vale", "si", "no", "gracias", "chau", "hola", "dale", "ya", "a ver", "que", "jarvis", "hey jarvis",
+    "oye", "listo", "claro", "bien", "jaja", "jajaja",
+}
+_CALLAR = re.compile(
+    r"^(?:(?:hey|oye|ey)\s+)?(?:jarvis\s+)?(?:para|parate|basta|callate|silencio|detente|stop|"
+    r"cancela|cancelalo|ya\s+esta|suficiente|deja\s+de\s+hablar|no\s+hables\s+mas)(?:\s+jarvis)?$"
+)
+_PREFIJO_JARVIS = re.compile(r"^\s*(?:(?:hey|oye|ey|ok)[\s,]+)?jarvis\b[\s,.:;!?]*", re.IGNORECASE)
+
+
+# Palabras con las que una frase no termina: si la grabación acaba en una, fue una pausa
+# a mitad de frase («… la selección argentina de» + «fútbol», 2026-11-16).
+_FINALES_COLGADOS = {
+    "de", "del", "la", "el", "los", "las", "lo", "en", "y", "e", "o", "u", "ni", "que", "a", "al",
+    "con", "para", "por", "un", "una", "unos", "unas", "mi", "mis", "tu", "tus", "su", "sus", "como",
+    "cuando", "donde", "cual", "sobre", "entre", "hasta", "desde", "sin", "pero", "si", "este", "esta",
+    "ese", "esa", "muy", "mas", "menos", "hacia", "segun", "tras", "le", "les", "se", "me", "te",
+}
+
+
+def frase_incompleta(texto: str) -> bool:
+    palabras = _normalizar_consulta(texto).split()
+    return len(palabras) >= 2 and palabras[-1] in _FINALES_COLGADOS
+
+
+CARACTERES_POR_SEGUNDO_VOZ = 50  # holgado: se habla ~15–25 por segundo de voz
+CARACTERES_EXTRA = 40
+
+
+def es_alucinacion(texto: str, segundos_voz: float | None = None) -> bool:
+    """Texto que Whisper inventa sin voz real (2026-11-16: 0,4 s de un ruido → 456 caracteres:
+    «Rápido Brave YouTube Discord Facebook Instagram Instagram Instagram…»).
+
+    - Más texto del que cabe en la voz que hubo (con mucho margen).
+    - Una misma palabra repetida 4 veces seguidas, o muy pocas palabras distintas en un texto largo.
+    """
+    palabras = _normalizar_consulta(texto).split()
+    if segundos_voz is not None and len(texto) > CARACTERES_EXTRA + CARACTERES_POR_SEGUNDO_VOZ * segundos_voz:
+        return True
+    seguidas = 1
+    for anterior, actual in zip(palabras, palabras[1:]):
+        seguidas = seguidas + 1 if actual == anterior else 1
+        if seguidas >= 4:
+            return True
+    return len(palabras) >= 12 and len(set(palabras)) / len(palabras) < 0.4
+
+
+def frase_continua(texto: str, hablando: bool = False,
+                   segundos_voz: float | None = None) -> tuple[str, str] | None:
+    """Decide qué hacer con una frase de la escucha continua.
+
+    ``("orden", texto)``: procesarla como una orden de voz (sin «Hey Jarvis» delante);
+    ``("callar", "")``: «para», «cállate»… mientras Jarvis habla; None: ignorarla (ruido
+    que Whisper convierte en «Gracias por ver» o en una lista de palabras repetidas, una
+    muletilla, o charla mientras habla).
+    """
+    consulta = _normalizar_consulta(texto)
+    if not consulta or _ALUCINACIONES.search(consulta) or es_alucinacion(texto, segundos_voz):
+        return None
+    if _CALLAR.fullmatch(consulta):
+        return ("callar", "") if hablando else None
+    if consulta in _MULETILLAS or re.sub(r"^(?:hey|oye|ey)\s+", "", consulta) in _MULETILLAS:
+        return None
+    if hablando and not _PREFIJO_JARVIS.match(texto):
+        # Mientras habla solo cuenta lo dirigido a él: «Jarvis, …» o «para».
+        return None
+    orden = _PREFIJO_JARVIS.sub("", texto).strip(" ,.")
+    if len(re.sub(r"[^a-záéíóúñü]", "", orden.casefold())) < 3:
+        return None
+    return ("orden", orden)
 
 
 _CON_WINDOWS = (

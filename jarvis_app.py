@@ -373,6 +373,10 @@ class JarvisApp(
         self.taskbar_watcher.start()
         self._refresh_taskbar_button()
         self.wakeword_detector: jarvis_wakeword.DetectorPalabraActivacion | None = None
+        self._continuous_enabled = self._continuous_preferred()
+        self._init_speaker_filter()
+        self._refresh_speaker_buttons()
+        self._continuous_transcribing = False
         if self._wakeword_preferida():
             self._start_wakeword()
         self._refresh_wakeword_indicator()
@@ -810,7 +814,7 @@ class JarvisApp(
                     elif event[0] == "mobile_text":
                         self._on_mobile_text(event[1])
                     elif event[0] == "mobile_audio":
-                        self._on_wakeword_command(event[1])
+                        self._on_wakeword_command(event[1], verificar_voz=False)
                     elif event[0] == "mobile_answer":
                         respuestas = self._mobile_callbacks.pop(event[1], None)
                         if respuestas is not None:
@@ -1150,8 +1154,19 @@ class JarvisApp(
                         _, enabled, command = event
                         self._set_idle()
                         self._execute_wakeword_toggle(enabled, command)
+                    elif event[0] == "continuous_toggle":
+                        _, enabled, command = event
+                        self._set_idle()
+                        self._execute_continuous_toggle(enabled, command)
+                    elif event[0] == "speaker_rejected":
+                        self._on_speaker_rejected(event[1])
+                    elif event[0] == "continuous_utterance":
+                        self._on_continuous_utterance(event[1])
+                    elif event[0] == "continuous_result":
+                        self._on_continuous_result(event[1])
                     elif event[0] == "wakeword_ready":
-                        logging.info("Escuchando «Hey Jarvis».")
+                        logging.info("Escucha lista (%s).",
+                                     "continua" if self._continuous_listening() else "«Hey Jarvis»")
                         self._refresh_wakeword_indicator()
                     elif event[0] == "wakeword_detected":
                         self._on_wakeword_detected()

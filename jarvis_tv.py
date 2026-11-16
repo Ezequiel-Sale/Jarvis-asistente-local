@@ -350,6 +350,20 @@ def responde(ip: str, puerto: int = 6466, segundos: float = 1.5) -> bool:
         return False
 
 
+POCO_EN_RED = 0.1  # h: menos de 6 minutos en la red tras apagarla
+
+
+def texto_duracion(horas: float) -> str:
+    """0,02 h → «enseguida»; 0,4 h → «unos 24 minutos»; 3,5 h → «unas 3,5 horas»."""
+    minutos = round(horas * 60)
+    if minutos <= 1:
+        return "enseguida"
+    if minutos < 60:
+        return f"unos {minutos} minutos"
+    valor = f"{horas:.1f}".replace(".", ",").replace(",0", "")
+    return f"unas {valor} horas" if valor != "1" else "una hora"
+
+
 class ControlTV:
     """Conexión con la TV. ``al_cambiar`` se llama (desde otro hilo) cuando cambia el estado."""
 
@@ -635,7 +649,7 @@ class ControlTV:
                 logging.info("La tele volvió a la red.")
             else:
                 horas = (time.time() - self._apagada_desde) / 3600 if self._apagada_desde else None
-                detalle = f" ({horas:.1f} h después de apagarla)" if horas is not None else ""
+                detalle = f" ({texto_duracion(horas)} después de apagarla)" if horas is not None else ""
                 logging.info("La tele dejó de responder en la red: se apagó del todo%s.", detalle)
                 historial = list(self._config.get("historial_red") or [])
                 historial.append({
@@ -651,7 +665,7 @@ class ControlTV:
 
     def horas_red_en_espera(self) -> float | None:
         """Lo que suele durar en la red tras apagarla (la menor de las medidas), o None."""
-        horas = [h["horas"] for h in self._config.get("historial_red") or [] if h.get("horas")]
+        horas = [h["horas"] for h in self._config.get("historial_red") or [] if h.get("horas") is not None]
         return min(horas) if horas else None
 
     def intentar_en_segundo_plano(self) -> bool:
@@ -852,8 +866,11 @@ class ControlTV:
             # En la TCL (Google TV) del usuario: Ajustes → Sistema → Encendido y energía → Modo de Espera.
             # El 2026-11-13 pasó con «Red en Espera» ya elegido: la tele se había apagado del todo.
             horas = self.horas_red_en_espera()
-            cuanto = (f" Según lo que medí, tu tele deja la red unas {horas:.1f} h después de apagarla."
-                      if horas is not None else "")
+            cuanto = ""
+            if horas is not None:
+                cuanto = f" Según lo que medí, tu tele deja la red {texto_duracion(horas)} después de apagarla."
+                if horas < POCO_EN_RED:
+                    cuanto += " Es muy poco: parece que no se está quedando en «Red en Espera»."
             raise ErrorTV("La tele no aparece en la red: parece apagada del todo (sin corriente o en reposo "
                           "profundo), así que hay que prenderla con su control." + cuanto + " Si pasa siempre, "
                           "revisa en la tele Ajustes → Sistema → Encendido y energía → Modo de Espera: tiene que "

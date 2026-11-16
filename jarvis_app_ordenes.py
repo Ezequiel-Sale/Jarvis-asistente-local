@@ -43,6 +43,7 @@ from jarvis_commands import (
     detectar_comando_dispositivo_salida,
     detectar_comando_energia,
     detectar_comando_escucha,
+    detectar_modo_continuo,
     detectar_comando_gpu,
     detectar_comando_inicio_windows,
     detectar_comando_juego,
@@ -100,6 +101,10 @@ class OrdenesMixin:
         audio_enabled = detectar_comando_audio(text)
         if audio_enabled is not None:
             self._execute_audio_toggle(audio_enabled, text)
+            return
+        continua = detectar_modo_continuo(text)
+        if continua is not None:
+            self._execute_continuous_toggle(continua, text)
             return
         escucha = detectar_comando_escucha(text)
         if escucha is not None:
@@ -195,16 +200,19 @@ class OrdenesMixin:
         plan_approval: bool = False,
         approval_kind: str = "plan",
         cancel_token: CancellationToken | None = None,
+        transcript: str | None = None,
     ) -> None:
+        """``transcript``: ya transcripta (escucha continua); entonces ``audio_path`` es None."""
         try:
-            transcript = limpiar_transcripcion_voz(
-                ejecutar_con_limites(
-                    lambda: core.procesar_stt(audio_path),
-                    timeout=core.STT_TIMEOUT + 10,
-                    descripcion="transcripción de voz",
-                    cancel_token=cancel_token,
+            if transcript is None:
+                transcript = limpiar_transcripcion_voz(
+                    ejecutar_con_limites(
+                        lambda: core.procesar_stt(audio_path),
+                        timeout=core.STT_TIMEOUT + 10,
+                        descripcion="transcripción de voz",
+                        cancel_token=cancel_token,
+                    )
                 )
-            )
             transcript = jarvis_memory.normalizar_transcripcion_memoria_voz(transcript)
             if plan_approval:
                 if transcript:
@@ -245,6 +253,10 @@ class OrdenesMixin:
             audio_enabled = detectar_comando_audio(transcript)
             if audio_enabled is not None:
                 self.events.put(("audio_toggle", audio_enabled, transcript))
+                return
+            continua = detectar_modo_continuo(transcript)
+            if continua is not None:
+                self.events.put(("continuous_toggle", continua, transcript))
                 return
             escucha = detectar_comando_escucha(transcript)
             if escucha is not None:

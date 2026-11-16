@@ -32,6 +32,15 @@ class CorrectionTests(unittest.TestCase):
         texto = limpiar_transcripcion_voz("Pausa el video del monitor 2 y ya anuda el video del monitor 1.")
         self.assertEqual(detectar_comando_multimedia(texto)[0], "media_sequence")
 
+    def test_obra_del_partido_is_hora(self) -> None:
+        """2026-11-16: «Busca la hora del partido…» se transcribió «la obra del partido»."""
+        from jarvis_commands import limpiar_transcripcion_voz
+
+        self.assertEqual(limpiar_transcripcion_voz("Busca la obra del partido entre Argentina y Costa Rica"),
+                         "Busca la hora del partido entre Argentina y Costa Rica")
+        self.assertEqual(limpiar_transcripcion_voz("a qué obra del partido"), "a qué hora del partido")
+        self.assertEqual(limpiar_transcripcion_voz("la obra de teatro de mañana"), "la obra de teatro de mañana")
+
     def test_prompt_is_short(self) -> None:
         # Una pista larga se cuela a veces en la transcripción.
         self.assertLess(len(core.STT_PROMPT), 220)

@@ -146,5 +146,39 @@ class PluginTests(unittest.TestCase):
         self.assertIsNone(b.procesar_comando("busca en internet qué es MCP", contexto))
 
 
+class TodayTests(unittest.TestCase):
+    """2026-11-16: «el próximo amistoso» trajo partidos de septiembre presentados como próximos."""
+
+    HOY = __import__("datetime").datetime(2026, 11, 16, 4, 26)
+
+    def test_time_sensitive_queries_get_month_and_year(self) -> None:
+        casos = {
+            "cuándo es el próximo amistoso de la selección argentina de fútbol":
+                "cuándo es el próximo amistoso de la selección argentina de fútbol noviembre 2026",
+            "precio del dólar hoy": "precio del dólar hoy noviembre 2026",
+            "resultados del mundial 2022": "resultados del mundial 2022",  # ya dice el año
+            "qué es MCP": "qué es MCP",
+            "historia de Roma": "historia de Roma",
+        }
+        for consulta, esperada in casos.items():
+            with self.subTest(consulta=consulta):
+                self.assertEqual(b.consulta_con_fecha(consulta, self.HOY), esperada)
+
+    def test_results_carry_todays_date_and_the_rule(self) -> None:
+        with patch.object(b, "datetime") as reloj:
+            reloj.now.return_value = self.HOY
+            texto = b.formatear(b.Busqueda("x", "Tavily", [b.Resultado("T", "https://x.com", "c")]))
+        self.assertIn("Hoy es 16 de noviembre de 2026", texto)
+        self.assertIn("lo que ya pasó no es «próximo»", texto)
+
+    def test_tool_searches_with_the_date(self) -> None:
+        with patch.object(b, "buscar", return_value=b.Busqueda("q", "Tavily")) as buscar, \
+                patch.object(b, "leer_clave", return_value=None), \
+                patch.object(b, "consulta_con_fecha", wraps=lambda c: c + " noviembre 2026"), \
+                patch.dict(b._preferencias, obtener=lambda _c: None, guardar=lambda _c, _v: None):
+            b.buscar_en_internet("próximo partido de River")
+        self.assertEqual(buscar.call_args.args[0], "próximo partido de River noviembre 2026")
+
+
 if __name__ == "__main__":
     unittest.main()

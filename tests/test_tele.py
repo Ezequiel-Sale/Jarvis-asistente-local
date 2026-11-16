@@ -230,7 +230,22 @@ class ControlTests(unittest.TestCase):
         with patch.object(tv.time, "sleep"), patch.object(self.control, "_esperar_red", return_value=False):
             with self.assertRaises(tv.ErrorTV) as error:
                 self.control.encender()
-        self.assertIn("unas 3.5 h", str(error.exception))
+        self.assertIn("unas 3,5 horas", str(error.exception))
+        self.assertNotIn("Es muy poco", str(error.exception))
+        # Si alguna vez dejó la red enseguida, lo dice claro.
+        self.control._config["historial_red"].append({"horas": 0.0})
+        with patch.object(tv.time, "sleep"), patch.object(self.control, "_esperar_red", return_value=False):
+            with self.assertRaises(tv.ErrorTV) as error:
+                self.control.encender()
+        self.assertIn("deja la red enseguida después de apagarla. Es muy poco", str(error.exception))
+
+    def test_duration_text(self) -> None:
+        """2026-11-16: decía «unas 0.0 h» cuando dejó la red al minuto."""
+        casos = {0.0: "enseguida", 0.02: "enseguida", 0.4: "unos 24 minutos", 1.0: "una hora",
+                 3.5: "unas 3,5 horas", 12.0: "unas 12 horas"}
+        for horas, texto in casos.items():
+            with self.subTest(horas=horas):
+                self.assertEqual(tv.texto_duracion(horas), texto)
 
     def test_settings_and_inputs_hold_home(self) -> None:
         """La TCL ignora SETTINGS y TV_INPUT: INICIO presionado abre el panel de Google TV."""

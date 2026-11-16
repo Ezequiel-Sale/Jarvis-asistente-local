@@ -34,6 +34,8 @@ tv/
 # --- Modelos pesados (se descargan aparte; ver PROJECT_CONTEXT.md) ---
 whisper-models/
 whisper-onnx/
+speaker-onnx/
+huella_voz.json
 piper-voices/
 ollama-data/
 *.onnx

@@ -532,8 +532,29 @@ def _tecla_en(hwnd: int, vk: int, con_alt: bool = False) -> bool:
     return True
 
 
-def pantalla_completa(enabled: bool, monitor: int | None = None, *, espera: float = 1.5,
-                      comprobar=None, esperar_cambio: float = ESPERA_CAMBIO) -> str:
+ESPERA_REINTENTO_UIA = 0.8
+
+
+def _es_error_com(error: BaseException) -> bool:
+    return type(error).__name__ == "COMError"
+
+
+def pantalla_completa(enabled: bool, monitor: int | None = None, **opciones) -> str:
+    """Como ``_pantalla_completa``, con un reintento si la accesibilidad falla al recorrer la
+    ventana mientras Windows la mueve (2026-11-16: «mueve Brave al monitor 3 y pon pantalla
+    completa» → COMError «Un evento no pudo invocar a ninguno de los suscriptores»)."""
+    try:
+        return _pantalla_completa(enabled, monitor, **opciones)
+    except Exception as error:
+        if not _es_error_com(error):
+            raise
+        logging.info("La accesibilidad falló al buscar el reproductor (%s); reintento.", error.args[:1])
+        time.sleep(ESPERA_REINTENTO_UIA)
+        return _pantalla_completa(enabled, monitor, **opciones)
+
+
+def _pantalla_completa(enabled: bool, monitor: int | None = None, *, espera: float = 1.5,
+                       comprobar=None, esperar_cambio: float = ESPERA_CAMBIO) -> str:
     """Pone el vídeo en pantalla completa o lo saca, y comprueba que de verdad cambió.
 
     Intenta, de más suave a más directo, hasta que la ventana del navegador cubra el

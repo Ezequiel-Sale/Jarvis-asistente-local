@@ -77,6 +77,21 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(lector.call_count, 2)
         botones["exit_fullscreen"].GetInvokePattern.return_value.Invoke.assert_called_once()
 
+    def test_retries_once_after_a_uia_com_error(self) -> None:
+        """2026-11-16: justo después de mover Brave al monitor 3, UIA falló con COMError."""
+        class COMError(Exception):
+            pass
+
+        botones = self._botones("fullscreen")
+        with patch.object(m.time, "sleep"):
+            texto, lector = self._ejecutar(True, [COMError(-2147220991, "Un evento no pudo invocar…"), [botones]])
+        self.assertEqual(texto, "Puse el vídeo en pantalla completa.")
+        self.assertEqual(lector.call_count, 2)
+
+    def test_other_errors_are_not_retried(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self._ejecutar(True, [RuntimeError("otro"), [self._botones("fullscreen")]])
+
     def test_no_player_and_no_browser(self) -> None:
         with self.assertRaisesRegex(LookupError, "navegador"):
             self._ejecutar(True, [[], []])

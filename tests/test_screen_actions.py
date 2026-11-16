@@ -223,6 +223,7 @@ class WorkerTests(unittest.TestCase):
         host = Mock()
         host.events = queue.Queue()
         host._request_screen_approval.side_effect = aprobaciones
+        host._find_learned_click.return_value = None  # nada aprendido
         return host
 
     def _eventos(self, host) -> list[tuple]:
@@ -240,7 +241,7 @@ class WorkerTests(unittest.TestCase):
         pedido = {"accion": "click", "consulta": "me enamore", "texto": "", "monitor": 1}
         JarvisApp._screen_action_worker(host, pedido, MONITOR_2, Mock(), "haz clic", "c1")
         vision.assert_not_called()
-        self.assertEqual(self._eventos(host), [("screen_execute", objetivo, "", "haz clic", "c1")])
+        self.assertEqual(self._eventos(host), [("screen_execute", objetivo, "", "haz clic", "c1", "me enamore")])
 
     @patch.object(s, "buscar_por_vision")
     @patch.object(s, "buscar_por_accesibilidad", return_value=None)

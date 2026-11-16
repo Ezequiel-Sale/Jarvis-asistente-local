@@ -26,7 +26,7 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Juegos** | Página 🎮 JUEGOS: los juegos que reconoce Jarvis (en «Games», «Epic Games» y «SteamLibrary» de cada disco, en la carpeta «Games» de tu usuario —p. ej. un emulador— y en Steam), con buscador, el .exe que abre y ▶ JUGAR; también «abre Elden Ring» |
 | **Abrir aplicaciones** | «Abre WhatsApp», «inicia Discord», «abre la calculadora»: cualquier app del menú Inicio por su nombre, también las de la Microsoft Store; primero busca entre tus juegos (en las carpetas «Games», «Epic Games» y «SteamLibrary» de todos los discos, en la carpeta «Games» de tu usuario y en Steam) y si no es un juego, la abre como aplicación |
 | **Ventanas y navegador** | «Minimiza Discord», «maximiza Spotify», «restaura el explorador», «trae WhatsApp al frente», «muestra el escritorio»; en Brave: «página anterior», «página siguiente», «recarga la página» o «F5». También como pasos de rutinas |
-| **Clic en pantalla** | «Haz clic en el vídeo que dice Me enamoré del monitor 1», «pulsa Aceptar en el monitor 2», «escribe "hola" en el buscador del monitor 3» (siempre muestra dónde va a hacer clic y espera tu «sí») |
+| **Clic en pantalla** | «Haz clic en el vídeo que dice Me enamoré del monitor 1», «pulsa Aceptar en el monitor 2», «escribe "hola" en el buscador del monitor 3» (siempre muestra dónde va a hacer clic y espera tu «sí»). También «Ahora hacé clic donde dice …» o «Analiza el monitor 3 y luego haz clic en …». **Aprende**: tras un clic hecho, recuerda dónde estaba en esa ventana, y la próxima vez lo propone al instante en vez de esperar 20–30 s al modelo de visión; si le dices «no», lo olvida |
 | **Visión de pantalla** | «Mira el monitor 2 y dime qué error sale» (con vista previa y confirmación) |
 | **Integraciones** | Búsqueda en internet con fuentes cuando le preguntas algo reciente o que no conoce ([Tavily](https://tavily.com), plan gratuito, clave `TAVILY_API_KEY` en el `.env`; DuckDuckGo de respaldo), clima (Open-Meteo, sin cuenta) y lectura de archivos de Documentos vía [MCP](https://modelcontextprotocol.io) |
 | **Voz** | «Hey Jarvis… sube el volumen», «desactiva la palabra de activación», «deja de escucharme». Con los auriculares puestos, decir «Hey Jarvis» mientras habla lo interrumpe. Seis voces (España, México y Argentina) para elegir en **⚙ Ajustes** o con «cambia tu voz a la argentina» |
@@ -49,6 +49,8 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 - **Permisos según el riesgo**: las acciones delicadas (navegar, abrir juegos, gestionar ventanas o monitores) piden confirmación cuando las propone el asistente; los planes de varios pasos se aprueban completos antes de ejecutarse. Para responder cualquier confirmación basta con decir «sí» o «no», sin «Hey Jarvis».
 - **Automatizaciones**: solo pueden ejecutarse sin preguntar si todas sus acciones son de riesgo bajo.
 - **Palabra de activación**: la escucha de «Hey Jarvis» es local y se queda en memoria; solo se transcribe lo que dices después. Se desactiva con «deja de escucharme».
+- **Solo mi voz**: con la opción activada, cada orden dicha por voz (escucha continua, «Hey Jarvis» y los «sí/no» de las confirmaciones) se compara con la huella de tu voz antes de transcribirla; si no se parece, se descarta. La huella (256 números, nunca el audio) queda en `huella_voz.json` junto a Jarvis. Tres niveles de exigencia; F9 no se filtra.
+- **Escucha continua**: con «escúchame siempre» (o en **⚙ Ajustes**) no hace falta «Hey Jarvis»: cada frase que dices con el micrófono abierto se transcribe en el equipo y se toma como orden. Silenciar el micrófono la pausa. Ignora el ruido que Whisper convierte en «Gracias por ver», las muletillas sueltas y, mientras Jarvis habla, todo salvo «para/cállate» o «Jarvis, …». Se apaga con «desactiva la escucha continua».
 - **Rutinas que apagan, reinician o suspenden**: al llegar la hora avisan por voz con 60 s de cuenta atrás y se cancelan con un clic o diciendo «cancela».
 - **Apagar, reiniciar y suspender**: siempre piden confirmación (con botones o diciendo «sí»/«no»), aunque lo digas directamente; apagar y reiniciar esperan 10 s para que puedas decir «cancela el apagado».
 - **Cambios de monitores**: se validan antes de aplicarse y se revierten solos a los 15 s si no los confirmas (con el botón, ENTER o diciendo «sí»/«no»).
@@ -127,6 +129,11 @@ flowchart LR
    .venv313/Scripts/python.exe -c "from huggingface_hub import hf_hub_download as d; [d('onnx-community/whisper-large-v3-turbo', f, local_dir='whisper-onnx') for f in ('onnx/encoder_model_fp16.onnx', 'onnx/decoder_model_merged.onnx', 'tokenizer.json')]"
    ```
    Sin esto, Jarvis usa el contenedor de voz a texto de siempre.
+7. Opcional, **«Solo mi voz»** (que Jarvis obedezca solo a tu voz): descargar el modelo de reconocimiento de hablante (26,5 MB) en `speaker-onnx/`, junto a `Jarvis.exe`:
+   ```bash
+   .venv313/Scripts/python.exe -c "from huggingface_hub import hf_hub_download as d; d('Wespeaker/wespeaker-voxceleb-resnet34-LM', 'voxceleb_resnet34_LM.onnx', local_dir='speaker-onnx')"
+   ```
+   Modelo [WeSpeaker ResNet34-LM](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) del proyecto [WeSpeaker](https://github.com/wenet-e2e/wespeaker), licencia CC BY 4.0 (SHA-256 `7bb2f06e…ec068`). Después, en **⚙ Ajustes → Solo mi voz**, lees 6 frases para registrar tu voz.
 
 ## Uso
 

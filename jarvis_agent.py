@@ -120,6 +120,36 @@ def _extract_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"function": payload} for payload in payloads]
 
 
+def _llamada_escrita(texto: str) -> bool:
+    """¿Empieza con una llamada a herramienta escrita como JSON ({"name": …, "arguments": …})?"""
+    limpio = (texto or "").strip()
+    if limpio.startswith("```"):
+        limpio = limpio.split("\n", 1)[1] if "\n" in limpio else ""
+    if not limpio.startswith(("{", "[")):
+        return False
+    try:
+        dato, _ = json.JSONDecoder().raw_decode(limpio)
+    except json.JSONDecodeError:
+        return bool(re.match(r'[\[{]\s*\{?\s*"name"\s*:', limpio))
+    datos = dato if isinstance(dato, list) else [dato]
+    return bool(datos) and all(isinstance(d, dict) and "name" in d and "arguments" in d for d in datos)
+
+
+def _sin_llamadas_escritas(texto: str) -> str:
+    """Quita del principio las llamadas en JSON (y las vallas ```) y deja el resto."""
+    limpio = (texto or "").strip()
+    decoder = json.JSONDecoder()
+    while True:
+        limpio = re.sub(r"^```[a-z]*\s*|^```\s*", "", limpio).strip()
+        if not limpio.startswith(("{", "[")):
+            return limpio
+        try:
+            _, fin = decoder.raw_decode(limpio)
+        except json.JSONDecodeError:
+            return limpio
+        limpio = limpio[fin:].strip()
+
+
 def _requested_action_count(text: str) -> int:
     if _ROUTINE_CREATION.search(text):
         return 1
@@ -149,9 +179,28 @@ def _tool_message(
 TextCallback = Callable[[str | None], None]
 
 
+# Respuestas que afirman una acción hecha («Puse…», «Moví…»): sin haber llamado a ninguna
+# herramienta son inventadas (2026-11-16: «Mueve Jarvis al monitor 2 y posiciónalo a la izquierda»
+# → «Puse Jarvis a la izquierda del monitor 2.» sin hacer nada).
+_ACCION_INVENTADA = re.compile(
+    r"^\s*(?:(?:listo|hecho|perfecto|de\s+acuerdo|claro)[,.!:]?\s*)?(?:ya\s+)?"
+    r"(?:puse|mov[ií]|abr[ií]|cerr[eé]|traje|coloqu[eé]|maximic[eé]|minimic[eé]|restaur[eé]|sub[ií]|"
+    r"baj[eé]|encend[ií]|prend[ií]|apagu[eé]|activ[eé]|desactiv[eé]|cambi[eé]|paus[eé]|reanud[eé]|"
+    r"silenci[eé]|envi[eé]|mand[eé]|program[eé]|guard[eé]|borr[eé]|elimin[eé]|hice\s+clic|"
+    r"he\s+(?:puesto|movido|abierto|cerrado|hecho|colocado|cambiado|activado|desactivado|apagado|"
+    r"encendido|maximizado|minimizado|subido|bajado|pausado|enviado|programado|guardado))\b",
+    re.IGNORECASE,
+)
+AVISO_SIN_ACCION = ("No llegué a hacerlo: no encontré qué acción usar para eso. Prueba a decirlo de otra "
+                    "forma o en pasos separados.")
+
+
 class _CompuertaTexto:
     """Deja pasar el texto del modelo salvo que sea una llamada a herramienta en
-    JSON (algunos modelos la escriben en el contenido): eso no se lee en voz alta."""
+    JSON (algunos modelos la escriben en el contenido) o empiece afirmando una acción
+    hecha: eso no se lee en voz alta mientras llega."""
+
+    MIRAR = 24  # caracteres que se esperan antes de decidir
 
     def __init__(self, destino: TextCallback) -> None:
         self.destino = destino
@@ -166,11 +215,27 @@ class _CompuertaTexto:
             visible = self._inicio.lstrip()
             if not visible:
                 return
-            self._decidido = visible[0] not in "{[`"
-            if self._decidido:
-                self.destino(visible)
+            if visible[0] in "{[`":
+                self._decidido = False
+                return
+            if len(visible) < self.MIRAR:
+                return  # aún no se sabe si empieza con «Puse…», «Moví…»
+            # «Puse Jarvis a la izquierda» sin haber hecho nada (2026-11-16): no se dice en vivo;
+            # si de verdad se hizo, la respuesta completa se habla al terminar.
+            self._decidir(visible)
             return
         self.destino(trozo)
+
+    def _decidir(self, visible: str) -> None:
+        self._decidido = not _ACCION_INVENTADA.match(visible)
+        if self._decidido:
+            self.destino(visible)
+
+    def terminar(self) -> None:
+        """Fin del texto: si era corto y aún no se decidió, se decide con lo que hay."""
+        visible = self._inicio.lstrip()
+        if self._decidido is None and visible:
+            self._decidir(visible)
 
 
 ESPERA_REINTENTO_OLLAMA = 3.0
@@ -348,6 +413,9 @@ def _leer_stream(response, entregar: Callable[[str], None], started: float) -> d
             if datos.get("done_reason"):
                 resultado_final = datos["done_reason"]
             break
+    terminar = getattr(entregar, "terminar", None)
+    if terminar is not None and not tool_calls:
+        terminar()  # una respuesta más corta que lo que la compuerta espera para decidir
     total = time.perf_counter() - started
     core.registrar_latencia("llm", total)
     if primero is not None:
@@ -448,6 +516,7 @@ INSTRUCCION_SEGUIMIENTO = (
 
 
 HERRAMIENTA_BUSQUEDA = "web_search"  # plugins/busqueda.py
+MAX_BUSQUEDAS = 2  # por pregunta: después, la ronda siguiente es para responder
 INSTRUCCION_BUSQUEDA = (
     "\nTienes la herramienta web_search para buscar en internet. Si te preguntan por algo "
     "que no conoces con seguridad o que puede ser posterior a 2024, llama a web_search "
@@ -458,9 +527,35 @@ INSTRUCCION_BUSQUEDA = (
 _DICE_QUE_NO_SABE = re.compile(
     r"no\s+tengo\s+(?:informaci[oó]n|datos|conocimiento)|no\s+(?:estoy\s+familiarizad[oa]|conozco)"
     r"|no\s+dispongo\s+de\s+informaci[oó]n|no\s+s[eé]\s+(?:qu[eé]|a\s+qu[eé])\s+(?:es|te\s+refieres)"
-    r"|mi\s+(?:conocimiento|informaci[oó]n)\s+(?:llega|est[aá]\s+actualizad)",
+    r"|mi\s+(?:conocimiento|informaci[oó]n)\s+(?:llega|est[aá]\s+actualizad)"
+    # 2026-11-16: «Lo siento, pero no puedo buscar en internet en tiempo real…»
+    r"|no\s+(?:puedo|tengo\s+(?:la\s+)?(?:capacidad|posibilidad)\s+de)\s+(?:buscar|acceder|navegar|consultar)"
+    r"|no\s+tengo\s+acceso\s+(?:a\s+)?(?:internet|la\s+web|informaci[oó]n\s+(?:actual|en\s+tiempo))"
+    r"|te\s+recomiendo\s+(?:que\s+)?(?:consultes|consultar|visitar|visites|revisar|revises)",
     re.IGNORECASE,
 )
+# «Busca en internet cuándo juega…», «googlea …», «averigua en la web …», «… búscalo en internet».
+_INICIO_PEDIDO = (r"^[\s¿¡]*(?:(?:hey|oye)\s+)?(?:jarvis[\s,]+)?(?:por\s+favor[\s,]+)?"
+                  r"(?:(?:puedes|podr[ií]as|pod[eé]s)\s+)?")
+_PIDE_BUSCAR = re.compile(
+    _INICIO_PEDIDO
+    + r"(?:busc[aá](?:r|me)?|b[uú]scame|busques?|b[uú]squeme|investig[aá](?:r)?|investigue|"
+    r"averigu[aá](?:r)?|averig[uü]e|googlea(?:r)?|f[ií]jate)\s+"
+    r"(?:en\s+(?:internet|la\s+web|la\s+red|google|l[ií]nea)|por\s+internet|online)[\s,:]+(?P<consulta>.+?)\s*[.?!]*$"
+    r"|" + _INICIO_PEDIDO + r"(?:googlea(?:r)?|googl[eé]ame)\s+(?P<consulta2>.+?)\s*[.?!]*$"
+    r"|^[\s¿¡]*(?P<consulta3>.+?)[\s,]+(?:b[uú]scalo|b[uú]scala|b[uú]scamelo|busc[aá](?:r)?)\s+"
+    r"en\s+(?:internet|la\s+web|google)\s*[.?!]*$",
+    re.IGNORECASE,
+)
+
+
+def consulta_explicita(texto: str) -> str | None:
+    """Lo que hay que buscar si el usuario pidió buscar en internet en voz alta, o None."""
+    m = _PIDE_BUSCAR.match(texto or "")
+    if m is None:
+        return None
+    consulta = (m.group("consulta") or m.group("consulta2") or m.group("consulta3") or "").strip(" ,.")
+    return consulta or None
 
 
 def _sin_respuestas_sin_saber(
@@ -531,7 +626,10 @@ def _procesar_con_herramientas(
                 "Nunca abras un juego salvo que el usuario pida explícitamente abrirlo "
                 "o iniciarlo. No inventes capacidades ni afirmes que una "
                 "acción tuvo éxito si el resultado de la herramienta indica un error "
-                "o cancelación. Las herramientas de mayor riesgo pedirán aprobación "
+                "o cancelación. Sin llamar a una herramienta en esta respuesta, nunca "
+                "digas que hiciste, buscaste o no encontraste algo: no copies respuestas "
+                "anteriores de la conversación. No puedes hacer clic en la pantalla; "
+                "para eso el usuario dice «haz clic en …». Las herramientas de mayor riesgo pedirán aprobación "
                 "explícita al usuario. Usa las llamadas de herramienta proporcionadas; "
                 "si el modelo no puede emitir llamadas nativas, devuelve únicamente "
                 "uno o varios objetos JSON, cada uno con las claves name y arguments, "
@@ -561,10 +659,13 @@ def _procesar_con_herramientas(
     tool_rounds = 0
     plan_stopped = False
     plan_retry_used = False
+    solo_redactar = False  # tras una búsqueda pedida: la ronda siguiente es para responder
+    reescritura_pedida = False
+    busquedas = 0
     for _ in range(max_tool_rounds + 2):
         available_tools = (
             tool_schemas
-            if tool_rounds < max_tool_rounds and not plan_stopped
+            if tool_rounds < max_tool_rounds and not plan_stopped and not solo_redactar
             else []
         )
         if time.monotonic() >= deadline:
@@ -580,11 +681,22 @@ def _procesar_con_herramientas(
             requested_action_count and calls_made < requested_action_count and not plan_stopped
         )
         transmitir = on_text if on_text is not None and not espera_herramientas else None
-        if transmitir is not None:
-            transmitir(None)
-        assistant_message = _solicitar_chat(messages, available_tools, cancel_token, transmitir)
-        cortada = assistant_message.pop("done_reason", None) == "length"
-        tool_calls = _extract_tool_calls(assistant_message)
+        pedida = consulta_explicita(texto) if puede_buscar and calls_made == 0 and not busqueda_insistida else None
+        if pedida is not None:
+            # Pidió buscar en internet: se busca sin preguntarle al modelo, que a veces
+            # contestaba «no puedo buscar en tiempo real» (2026-11-16).
+            logging.info("Pidió buscar en internet: se busca directamente.")
+            tool_calls = [{"function": {"name": HERRAMIENTA_BUSQUEDA, "arguments": {"query": pedida[:300]}}}]
+            assistant_message = {"role": "assistant", "content": "", "tool_calls": tool_calls}
+            busqueda_insistida = True
+            solo_redactar = True
+            cortada = False
+        else:
+            if transmitir is not None:
+                transmitir(None)
+            assistant_message = _solicitar_chat(messages, available_tools, cancel_token, transmitir)
+            cortada = assistant_message.pop("done_reason", None) == "length"
+            tool_calls = _extract_tool_calls(assistant_message)
 
         content = assistant_message.get("content", "")
         if not isinstance(content, str):
@@ -605,6 +717,35 @@ def _procesar_con_herramientas(
                                         "arguments": {"query": texto.strip()[:300]}}}]
             assistant_message = {"role": "assistant", "content": "", "tool_calls": tool_calls}
             busqueda_insistida = True
+        # Pidió una herramienta en una ronda sin herramientas (ya buscó lo suficiente o llegó al
+        # límite): no se corta con «Ollama siguió solicitando herramientas…» (2026-11-16, tres
+        # búsquedas y error); se le pide que responda con lo que ya tiene.
+        ignoradas = bool(tool_calls) and not available_tools and not plan_stopped
+        if ignoradas:
+            logging.info("El modelo pidió otra herramienta sin rondas disponibles; se le pide responder.")
+            tool_calls = []
+        if not tool_calls and (ignoradas or _llamada_escrita(content)):
+            # Escribió una llamada en JSON (a veces seguida de «Fuentes: …») en lugar de
+            # responder: eso no se muestra ni se lee (2026-11-16, tras buscar en internet).
+            if not reescritura_pedida and (tool_rounds > 0 or ignoradas):
+                logging.warning("El modelo escribió una llamada como respuesta; se le pide redactar.")
+                reescritura_pedida = True
+                solo_redactar = True
+                messages.append({"role": "assistant", "content": content or "(pidió otra herramienta)"})
+                messages.append({"role": "user", "content": (
+                    "No llames más herramientas: ya tienes los resultados. Responde ahora a mi "
+                    "pregunta con texto normal en español, sin JSON, usando esos resultados.")})
+                continue
+            resto = _sin_llamadas_escritas(content)
+            fuentes = re.search(r"(?is)fuentes:.*", resto)
+            sin_fuentes = resto[:fuentes.start()] if fuentes else resto
+            if not re.search(r"[a-záéíóúñ]{4}", sin_fuentes, re.IGNORECASE):
+                # Solo quedaba la llamada (y las fuentes): mejor un aviso que JSON.
+                inicio = ("Encontré resultados, pero no pude redactar la respuesta." if busquedas
+                          else "No pude terminar la respuesta.")
+                resto = (inicio + " Prueba a preguntarlo de nuevo.\n\n"
+                         + (fuentes.group(0) if fuentes else "")).strip()
+            content = resto
         if not tool_calls:
             answer = content.strip()
             if (
@@ -643,6 +784,9 @@ def _procesar_con_herramientas(
                 )
             if not answer:
                 raise ValueError("Ollama devolvió una respuesta vacía.")
+            if calls_made == 0 and _ACCION_INVENTADA.match(answer):
+                logging.warning("El modelo afirmó una acción sin llamar a ninguna herramienta; se avisa.")
+                answer = AVISO_SIN_ACCION
             if cortada:
                 logging.warning("La respuesta del modelo se cortó al llegar a %d tokens.", MAX_TOKENS_RESPUESTA)
                 answer += AVISO_CORTADA
@@ -712,6 +856,9 @@ def _procesar_con_herramientas(
             plan_stopped = len(prepared) > 1
             continue
         calls_made += len(prepared)
+        busquedas += sum(1 for name, _, _ in prepared if name == HERRAMIENTA_BUSQUEDA)
+        if busquedas >= MAX_BUSQUEDAS:
+            solo_redactar = True  # con dos búsquedas alcanza: la próxima ronda, a responder
 
         if validation_errors:
             for index, (name, _, _) in enumerate(prepared):

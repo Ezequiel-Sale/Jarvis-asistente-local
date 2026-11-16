@@ -8,6 +8,7 @@ import audio_capture
 import jarvis_audio_devices
 import jarvis_cards
 import jarvis_core as core
+import jarvis_hablante
 import jarvis_routines
 import jarvis_voices
 import jarvis_voz_stream
@@ -99,7 +100,7 @@ class VozMixin:
             self.mic_button.configure(state="disabled")
             self._set_status("RECONOCIENDO CONFIRMACIÓN…", CYAN)
         threading.Thread(
-            target=self._voice_worker,
+            target=self._voice_worker,  # F9: decides tú cuándo grabar; «Solo mi voz» no filtra
             args=(
                 audio_path,
                 time.perf_counter(),
@@ -110,6 +111,15 @@ class VozMixin:
             ),
             daemon=True,
         ).start()
+
+    def _wakeword_voice_worker(self, audio_path: str, started: float, conversation_id: str,
+                               plan_approval: bool, approval_kind: str, cancel_token) -> None:
+        """Orden tras «Hey Jarvis»: si «Solo mi voz» la rechaza, no se transcribe."""
+        if self._speaker_rejected(audio_path):
+            audio_capture.limpiar_audio(audio_path)
+            self.events.put(("speaker_rejected", plan_approval))
+            return
+        self._voice_worker(audio_path, started, conversation_id, plan_approval, approval_kind, cancel_token)
 
     def _new_live_speaker(self) -> "jarvis_voz_stream.HabladorEnVivo | None":
         if not self.audio_enabled:
@@ -276,6 +286,7 @@ class VozMixin:
             text="HEY JARVIS ON" if activo else "HEY JARVIS OFF",
             fg=CYAN if activo else MUTED,
         )
+        self._refresh_continuous_button()
 
     def _toggle_wakeword_button(self) -> None:
         activar = not self._wakeword_active()
@@ -315,7 +326,7 @@ class VozMixin:
         (por los altavoces el micrófono oiría su propia voz) y la interrupción está
         activada: así «Hey Jarvis» lo puede cortar.
         """
-        if self._closing or self.recorder is not None:
+        if self._closing or self.recorder is not None or getattr(self, "_enrolling", False):
             return False
         if self._jarvis_speaking():
             return getattr(self, "_interrupt_enabled", True) and self._headphones_output()
@@ -333,6 +344,7 @@ class VozMixin:
             self.events,
             self._can_listen_for_wakeword,
             escucha_libre=self._free_approval_listening,
+            continua=self._continuous_listening,
         )
         self.wakeword_detector.start()
         return True
@@ -342,6 +354,276 @@ class VozMixin:
         self.wakeword_detector = None
         if detector is not None:
             detector.stop()
+
+    # --- Escucha continua [2026-11-16] --------------------------------------------
+    _PREFERENCIA_CONTINUA = "escucha_continua"
+
+    def _continuous_preferred(self) -> bool:
+        try:
+            return core.obtener_preferencia(self._PREFERENCIA_CONTINUA) == "1"
+        except Exception:
+            logging.exception("No se pudo leer la preferencia de la escucha continua.")
+            return False
+
+    def _continuous_listening(self) -> bool:
+        """El detector lo consulta desde su hilo (solo lee un atributo)."""
+        return bool(getattr(self, "_continuous_enabled", False))
+
+    def _refresh_continuous_button(self) -> None:
+        boton = getattr(self, "continuous_button", None)
+        if boton is None:
+            return
+        activo = self._continuous_listening() and self._wakeword_active()
+        boton.configure(text="ESCUCHA CONTINUA ON" if activo else "ESCUCHA CONTINUA OFF",
+                        fg=CYAN if activo else MUTED)
+
+    def _toggle_continuous_button(self) -> None:
+        activar = not (self._continuous_listening() and self._wakeword_active())
+        self._execute_continuous_toggle(
+            activar, "Botón: activar la escucha continua" if activar else "Botón: desactivar la escucha continua"
+        )
+
+    def _execute_continuous_toggle(self, enabled: bool, command: str) -> None:
+        logging.info("Escucha continua %s.", "activada" if enabled else "desactivada")
+        self._continuous_enabled = enabled
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_CONTINUA, "1" if enabled else "0")
+            if enabled:
+                core.guardar_preferencia(self._PREFERENCIA_WAKEWORD, "1")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia de la escucha continua.")
+        if enabled and not self._start_wakeword():
+            respuesta = "No pude activar la escucha: falta openWakeWord. Sigue disponible F9."
+        elif enabled:
+            respuesta = ("Escucha continua activada: con el micrófono abierto, todo lo que digas es una orden. "
+                         "Silencia el micrófono para hablar sin que te escuche.")
+        elif self._wakeword_active():
+            respuesta = "Escucha continua desactivada. Vuelvo a esperar «Hey Jarvis»."
+        else:
+            respuesta = "Escucha continua desactivada. Usa F9 para hablar."
+        try:
+            core.guardar_turno(self.conversation_id, command, respuesta)
+        except Exception:
+            logging.exception("No se pudo guardar el cambio de escucha en memoria.")
+        self._add_message("assistant", respuesta)
+        self._refresh_wakeword_indicator()
+        self._set_status(self._listening_status(), CYAN)
+
+    def _listening_status(self) -> str:
+        if not self._wakeword_active():
+            return "F9 PARA HABLAR"
+        return "TE ESCUCHO SIEMPRE" if self._continuous_listening() else "ESCUCHANDO «HEY JARVIS»"
+
+    def _on_continuous_utterance(self, audio_path: str) -> None:
+        """Una frase de la escucha continua: se transcribe aparte, sin «ocupar» a Jarvis."""
+        hablando = self._jarvis_speaking()
+        if (self._closing or self.recorder is not None or self._pending_plan_reply is not None
+                or getattr(self, "_continuous_transcribing", False)
+                or not self._continuous_listening() or (self.busy and not hablando)):
+            audio_capture.limpiar_audio(audio_path)
+            return
+        self._continuous_transcribing = True
+        self._preload_llm("escucha continua")
+        threading.Thread(target=self._continuous_worker, args=(audio_path, hablando),
+                         name="JarvisEscuchaContinua", daemon=True).start()
+
+    def _continuous_worker(self, audio_path: str, hablando: bool) -> None:
+        from jarvis_actions import ejecutar_con_limites
+        from jarvis_commands import frase_continua, limpiar_transcripcion_voz
+
+        decision = None
+        try:
+            # «Solo mi voz»: si no es tu voz, ni se transcribe (decision queda en None).
+            if not self._speaker_rejected(audio_path):
+                texto = limpiar_transcripcion_voz(ejecutar_con_limites(
+                    lambda: core.procesar_stt(audio_path), timeout=core.STT_TIMEOUT + 10,
+                    descripcion="transcripción de voz",
+                ))
+                try:  # cuánta voz hubo de verdad: con 0,4 s no caben 456 caracteres
+                    segundos_voz = jarvis_hablante.solo_voz(jarvis_hablante.leer_wav(audio_path))[1]
+                except Exception:
+                    segundos_voz = None
+                decision = frase_continua(texto, hablando, segundos_voz)
+                logging.info("Escucha continua: %s (%s caracteres).",
+                             decision[0] if decision else "ignorada", len(texto))
+        except Exception:
+            logging.exception("No se pudo transcribir una frase de la escucha continua.")
+        finally:
+            audio_capture.limpiar_audio(audio_path)
+        self.events.put(("continuous_result", decision))
+
+    def _on_continuous_result(self, decision: tuple[str, str] | None) -> None:
+        self._continuous_transcribing = False
+        if decision is None:
+            return
+        accion, texto = decision
+        if self._jarvis_speaking():
+            self._interrupt_speech()
+        if accion != "orden":
+            return
+        from jarvis_commands import frase_incompleta
+
+        anterior = getattr(self, "_continuous_partial", None)
+        if anterior:
+            # La continuación de una frase cortada por una pausa: «… de» + «fútbol».
+            texto = f"{anterior} {texto}"
+            self._continuous_partial = None
+        elif frase_incompleta(texto):
+            # Termina en «de», «la», «que»…: seguramente hiciste una pausa; espero el resto.
+            self._continuous_partial = texto
+            self._continuous_partial_token = token = object()
+            self._set_status("TE ESCUCHO…", CYAN)
+            self.root.after(int(self.ESPERA_CONTINUACION * 1000), lambda: self._flush_continuous_partial(token))
+            return
+        self._run_continuous_command(texto)
+
+    ESPERA_CONTINUACION = 4.0  # s para seguir una frase que quedó colgada
+
+    def _flush_continuous_partial(self, token) -> None:
+        """No llegó la continuación: se hace la orden tal como quedó."""
+        if getattr(self, "_continuous_partial_token", None) is not token or not getattr(self, "_continuous_partial", None):
+            return
+        texto, self._continuous_partial = self._continuous_partial, None
+        self._run_continuous_command(texto)
+
+    def _run_continuous_command(self, texto: str) -> None:
+        if (self.busy and self._pending_plan_reply is None and not self._closing
+                and time.monotonic() < getattr(self, "_interrupt_deadline", 0.0)):
+            # Se acaba de interrumpir una respuesta: esperar a que termine de cancelarse.
+            self.root.after(250, lambda: self._run_continuous_command(texto))
+            return
+        if self._closing or self.recorder is not None or self.busy or self._pending_plan_reply is not None:
+            return
+        self._start_busy("PROCESANDO…")
+        threading.Thread(
+            target=self._voice_worker,
+            args=(None, time.perf_counter(), self.conversation_id, False, "plan", self.cancel_token),
+            kwargs={"transcript": texto},
+            daemon=True,
+        ).start()
+
+    # --- «Solo mi voz» [2026-11-16] ---------------------------------------------------
+    _PREFERENCIA_SOLO_MI_VOZ = "solo_mi_voz"
+    _PREFERENCIA_EXIGENCIA = "exigencia_voz"
+
+    def _init_speaker_filter(self) -> None:
+        self.speaker_verifier = jarvis_hablante.Verificador()
+        self._enrolling = False
+        try:
+            activo = core.obtener_preferencia(self._PREFERENCIA_SOLO_MI_VOZ) == "1"
+            exigencia = core.obtener_preferencia(self._PREFERENCIA_EXIGENCIA)
+        except Exception:
+            logging.exception("No se pudieron leer las preferencias de «Solo mi voz».")
+            activo, exigencia = False, None
+        self._speaker_strictness = exigencia if exigencia in jarvis_hablante.EXIGENCIAS \
+            else jarvis_hablante.EXIGENCIA_POR_DEFECTO
+        self._speaker_filter = activo and self.speaker_verifier.registrada()
+
+    def _speaker_rejected(self, audio_path: str) -> bool:
+        """Hilos de voz: True si «Solo mi voz» está activo y no es tu voz. Ante un error, deja pasar."""
+        if not getattr(self, "_speaker_filter", False):
+            return False
+        try:
+            resultado = self.speaker_verifier.verificar(audio_path, self._speaker_strictness)
+        except Exception:
+            logging.exception("No se pudo comprobar de quién es la voz; se acepta la frase.")
+            return False
+        if resultado.similitud is not None:
+            logging.info("Voz %s (parecido %.2f, %.1f s de voz, exigencia %s).",
+                         "reconocida" if resultado.aceptada else "ajena: ignorada",
+                         resultado.similitud, resultado.segundos_voz, self._speaker_strictness)
+        return not resultado.aceptada
+
+    def _on_speaker_rejected(self, plan_approval: bool) -> None:
+        if plan_approval:
+            self.events.put(("plan_voice_unrecognized",))
+            return
+        if self.busy:
+            self._set_idle()
+        self._set_status("NO RECONOCÍ TU VOZ", MUTED)
+
+    def _refresh_speaker_buttons(self) -> None:
+        activo = getattr(self, "_speaker_filter", False)
+        registrada = getattr(self, "speaker_verifier", None) is not None and self.speaker_verifier.registrada()
+        boton = getattr(self, "speaker_button", None)
+        if boton is not None:
+            boton.configure(text="SOLO MI VOZ: SÍ" if activo else "SOLO MI VOZ: NO", fg=CYAN if activo else MUTED)
+        boton = getattr(self, "speaker_enroll_button", None)
+        if boton is not None:
+            boton.configure(text="🎙  VOLVER A REGISTRAR MI VOZ" if registrada else "🎙  REGISTRAR MI VOZ")
+        boton = getattr(self, "speaker_strictness_button", None)
+        if boton is not None:
+            nombre = jarvis_hablante.NOMBRES_EXIGENCIA.get(getattr(self, "_speaker_strictness", ""), "MEDIA")
+            boton.configure(text=f"EXIGENCIA: {nombre}")
+
+    def _toggle_speaker_filter(self) -> None:
+        if getattr(self, "_speaker_filter", False):
+            self._set_speaker_filter(False)
+            self._add_message("assistant", "«Solo mi voz» desactivado: vuelvo a aceptar órdenes de cualquier voz.")
+            return
+        if not self.speaker_verifier.modelo_disponible():
+            self._add_message("assistant", "Falta el modelo de reconocimiento de voz (carpeta speaker-onnx junto a "
+                                           "Jarvis); sin él no puedo reconocer tu voz.")
+            return
+        if not self.speaker_verifier.registrada():
+            self._open_voice_enrollment(activar_al_terminar=True)
+            return
+        self._set_speaker_filter(True)
+        self._add_message("assistant", "«Solo mi voz» activado: solo obedezco órdenes dichas con tu voz.")
+
+    def _set_speaker_filter(self, activo: bool) -> None:
+        self._speaker_filter = activo
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_SOLO_MI_VOZ, "1" if activo else "0")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia de «Solo mi voz».")
+        logging.info("«Solo mi voz» %s.", "activado" if activo else "desactivado")
+        self._refresh_speaker_buttons()
+
+    def _cycle_speaker_strictness(self) -> None:
+        orden = list(jarvis_hablante.EXIGENCIAS)
+        siguiente = orden[(orden.index(self._speaker_strictness) + 1) % len(orden)]
+        self._speaker_strictness = siguiente
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_EXIGENCIA, siguiente)
+        except Exception:
+            logging.exception("No se pudo guardar la exigencia de «Solo mi voz».")
+        self._refresh_speaker_buttons()
+
+    def _open_voice_enrollment(self, activar_al_terminar: bool = False) -> None:
+        import jarvis_registro_voz
+
+        if not self.speaker_verifier.modelo_disponible():
+            self._add_message("assistant", "Falta el modelo de reconocimiento de voz (carpeta speaker-onnx junto a "
+                                           "Jarvis).")
+            return
+        actual = getattr(self, "_voice_enrollment", None)
+        if actual is not None and actual.ventana.winfo_exists():
+            actual.ventana.lift()
+            return
+
+        def al_abrir(abierta: bool) -> None:
+            self._enrolling = abierta
+
+        def al_terminar(huellas: list) -> None:
+            try:
+                coherencia = self.speaker_verifier.guardar_huella(huellas)
+            except Exception as error:
+                logging.exception("No se pudo guardar la huella de voz.")
+                self._add_message("assistant", f"No pude guardar tu voz: {error}")
+                return
+            logging.info("Voz registrada: %s frases, coherencia %.2f.", len(huellas), coherencia)
+            if activar_al_terminar or getattr(self, "_speaker_filter", False):
+                self._set_speaker_filter(True)
+            self._refresh_speaker_buttons()
+            aviso = (" Las frases salieron algo distintas entre sí; si te rechaza a menudo, baja la exigencia "
+                     "o regístrate de nuevo en un lugar más silencioso." if coherencia < 0.6 else "")
+            self._add_message("assistant", "Listo, ya reconozco tu voz. «Solo mi voz» está "
+                              + ("activado." if self._speaker_filter else "desactivado; actívalo en Ajustes.")
+                              + aviso)
+
+        self._voice_enrollment = jarvis_registro_voz.RegistroVoz(
+            self.root, self.speaker_verifier, al_terminar, al_abrir)
 
     _PREFERENCIA_INTERRUMPIR = "interrumpir"
 
@@ -366,7 +648,9 @@ class VozMixin:
         except Exception:
             logging.exception("No se pudo guardar la preferencia de la palabra de activación.")
         if enabled:
-            if self._start_wakeword():
+            if self._start_wakeword() and self._continuous_listening():
+                respuesta = "Escucha activada: con la escucha continua, todo lo que digas es una orden."
+            elif self.wakeword_detector is not None:
                 respuesta = "Palabra de activación activada. Di «Hey Jarvis» y luego tu orden."
             else:
                 respuesta = (
@@ -382,10 +666,7 @@ class VozMixin:
             logging.exception("No se pudo guardar el cambio de escucha en memoria.")
         self._add_message("assistant", respuesta)
         self._refresh_wakeword_indicator()
-        self._set_status(
-            "ESCUCHANDO «HEY JARVIS»" if enabled and self.wakeword_detector else "F9 PARA HABLAR",
-            CYAN,
-        )
+        self._set_status(self._listening_status(), CYAN)
 
     INTERRUPCION_ESPERA = 10.0
 
@@ -416,13 +697,16 @@ class VozMixin:
         else:
             self._set_status("TE ESCUCHO…", ERROR)
 
-    def _on_wakeword_command(self, audio_path: str) -> None:
-        """Procesa la orden dicha tras «Hey Jarvis» como una grabación de F9."""
+    def _on_wakeword_command(self, audio_path: str, verificar_voz: bool = True) -> None:
+        """Procesa la orden dicha tras «Hey Jarvis» como una grabación de F9.
+
+        ``verificar_voz``: pasa por «Solo mi voz»; el audio del celular no (otro micrófono, y el
+        celular ya está vinculado con su token)."""
         plan_approval = self._pending_plan_reply is not None
         if (self.busy and not plan_approval and not self._closing
                 and time.monotonic() < getattr(self, "_interrupt_deadline", 0.0)):
             # Se acaba de interrumpir una respuesta: esperar a que termine de cancelarse.
-            self.root.after(250, lambda: self._on_wakeword_command(audio_path))
+            self.root.after(250, lambda: self._on_wakeword_command(audio_path, verificar_voz))
             return
         if self._closing or self.recorder is not None or (self.busy and not plan_approval):
             audio_capture.limpiar_audio(audio_path)
@@ -435,7 +719,7 @@ class VozMixin:
         else:
             self._start_busy("TRANSCRIBIENDO AUDIO…")
         threading.Thread(
-            target=self._voice_worker,
+            target=self._wakeword_voice_worker if verificar_voz else self._voice_worker,
             args=(
                 audio_path,
                 time.perf_counter(),

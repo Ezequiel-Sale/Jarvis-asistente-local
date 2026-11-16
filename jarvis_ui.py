@@ -515,7 +515,7 @@ class JarvisUIMixin:
             self.monitor_canvas.bind("<Configure>", lambda _e: self._draw_monitor_map())
             self._monitor_views: list = []
 
-            def fila(titulo: str, descripcion: str, atributo: str, texto: str, comando) -> None:
+            def fila(titulo: str, descripcion: str, atributo: str, texto: str, comando) -> tk.Frame:
                 marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
                                  highlightthickness=1, highlightbackground=BORDER)
                 marco.pack(fill="x", pady=(0, 10))
@@ -528,6 +528,7 @@ class JarvisUIMixin:
                 boton.configure(width=30)
                 boton.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
                 setattr(self, atributo, boton)
+                return marco
 
             fila("Respuestas habladas",
                  "Jarvis lee en voz alta sus respuestas. También: «silencia tu voz» / «activa tu voz».",
@@ -535,6 +536,25 @@ class JarvisUIMixin:
             fila("Palabra de activación",
                  "Escucha «Hey Jarvis» en segundo plano. También: «deja de escucharme».",
                  "wakeword_button", "HEY JARVIS …", self._toggle_wakeword_button)
+            fila("Escucha continua",
+                 "Sin «Hey Jarvis»: con el micrófono abierto, todo lo que digas es una orden. "
+                 "Silencia el micrófono para hablar con otros. Mientras Jarvis habla, solo «para» "
+                 "o «Jarvis, …». También: «escúchame siempre» / «desactiva la escucha continua».",
+                 "continuous_button", "ESCUCHA CONTINUA …", self._toggle_continuous_button)
+            marco = fila("Solo mi voz",
+                         "Jarvis reconoce tu voz y no obedece a otras personas, a la tele ni a un vídeo. "
+                         "La primera vez lees 6 frases para registrarla (se guarda una huella de 256 números, "
+                         "nunca el audio). Si a veces no te reconoce, baja la exigencia. F9 no se filtra.",
+                         "speaker_button", "SOLO MI VOZ …", self._toggle_speaker_filter)
+            extras = tk.Frame(marco, bg=PANEL)
+            extras.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            self.speaker_enroll_button = self._ui_button(extras, "🎙  REGISTRAR MI VOZ",
+                                                         self._open_voice_enrollment, fg=CYAN)
+            self.speaker_enroll_button.pack(side="left")
+            self.speaker_strictness_button = self._ui_button(extras, "EXIGENCIA: MEDIA",
+                                                             self._cycle_speaker_strictness, fg=MUTED)
+            self.speaker_strictness_button.pack(side="left", padx=(8, 0))
+            self._refresh_speaker_buttons()
             fila("Iniciar con Windows",
                  "Al encender la PC, Jarvis arranca oculto en la bandeja. "
                  "También: «desactiva el inicio con Windows».",

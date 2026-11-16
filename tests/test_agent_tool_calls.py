@@ -1012,6 +1012,135 @@ class WebSearchFallbackTests(unittest.TestCase):
         self.assertEqual(len(mensajes), 4)  # el historial queda igual
         self.assertNotIn("web_search", mensajes[0]["content"])
 
+    @patch("jarvis_agent.requests.post")
+    def test_explicit_request_searches_without_asking_the_model(self, post: Mock) -> None:
+        """2026-11-16: «Busca en internet cuándo…» → «no puedo buscar en tiempo real»."""
+        post.return_value = _response({"role": "assistant", "content": "El próximo amistoso es el 20."})
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas(
+                "Busca en internet cuándo es el próximo amistoso de la selección", "c",
+                self.registry, Mock(return_value=True))
+        self.assertEqual(self.busquedas, ["cuándo es el próximo amistoso de la selección"])
+        self.assertEqual(post.call_count, 1)  # solo para redactar con los resultados
+        self.assertEqual(post.call_args.kwargs["json"]["messages"][-1]["role"], "tool")
+        self.assertTrue(answer.startswith("El próximo amistoso es el 20."))
+
+    @patch("jarvis_agent.requests.post")
+    def test_cannot_search_in_real_time_counts_as_not_knowing(self, post: Mock) -> None:
+        post.side_effect = [
+            _response({"role": "assistant", "content": "Lo siento, pero no puedo buscar en internet en tiempo "
+                                                       "real. Te recomiendo que consultes un sitio confiable."}),
+            _response({"role": "assistant", "content": "Juega el 20."}),
+        ]
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("¿Cuándo juega la selección?", "c", self.registry,
+                                               Mock(return_value=True))
+        self.assertEqual(self.busquedas, ["¿Cuándo juega la selección?"])
+        self.assertTrue(answer.startswith("Juega el 20."))
+
+    LLAMADA_ESCRITA = ('{\n  "name": "web_search",\n  "arguments": {\n    "query": "próximo amistoso"\n  }\n}'
+                       "\n\nFuentes:\n1. https://ejemplo.com/amistosos")
+
+    @patch("jarvis_agent.requests.post")
+    def test_after_a_search_the_model_must_write_not_call(self, post: Mock) -> None:
+        """2026-11-16: tras buscar, escribió otra llamada en JSON + «Fuentes:» y se mostró y leyó."""
+        post.side_effect = [
+            _response({"role": "assistant", "content": self.LLAMADA_ESCRITA}),
+            _response({"role": "assistant", "content": "Argentina juega el 20 contra Islandia.\n\nFuentes: x"}),
+        ]
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("googlea cuándo es el próximo amistoso", "c", self.registry,
+                                               Mock(return_value=True))
+        self.assertTrue(answer.startswith("Argentina juega el 20"))
+        self.assertNotIn('"name"', answer)
+        self.assertEqual(len(self.busquedas), 1)  # la llamada escrita no se ejecuta
+        for llamada in post.call_args_list:  # tras la búsqueda pedida, sin herramientas
+            self.assertNotIn("tools", llamada.kwargs["json"])
+        self.assertIn("sin JSON", post.call_args_list[1].kwargs["json"]["messages"][-1]["content"])
+
+    @patch("jarvis_agent.requests.post")
+    def test_written_call_is_never_shown(self, post: Mock) -> None:
+        post.return_value = _response({"role": "assistant", "content": self.LLAMADA_ESCRITA})
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("googlea cuándo es el próximo amistoso", "c", self.registry,
+                                               Mock(return_value=True))
+        self.assertNotIn("{", answer)
+        self.assertTrue(answer.startswith("Encontré resultados, pero no pude redactar la respuesta."))
+        self.assertIn("https://ejemplo.com/amistosos", answer)
+
+    @patch("jarvis_agent.requests.post")
+    def test_too_many_searches_answer_instead_of_failing(self, post: Mock) -> None:
+        """2026-11-16: tres búsquedas y «Ollama siguió solicitando herramientas…»."""
+        def buscar(q):
+            return {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "web_search", "arguments": {"query": q}}}]}
+        post.side_effect = [
+            _response(buscar("argentina costa rica hora")),
+            _response(buscar("argentina costa rica 17 noviembre")),
+            _response(buscar("otra más")),  # ya no hay herramientas: se le pide responder
+            _response({"role": "assistant", "content": "Juega a las 20 h en Córdoba."}),
+        ]
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("¿A qué hora juega Argentina contra Costa Rica?", "c",
+                                               self.registry, Mock(return_value=True))
+        self.assertEqual(len(self.busquedas), 2)
+        self.assertTrue(answer.startswith("Juega a las 20 h en Córdoba."))
+        self.assertNotIn("tools", post.call_args_list[2].kwargs["json"])
+
+    @patch("jarvis_agent.requests.post")
+    def test_keeps_asking_for_tools_gives_a_notice(self, post: Mock) -> None:
+        llamada = {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "web_search", "arguments": {"query": "x"}}}]}
+        post.return_value = _response(llamada)
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("¿A qué hora juega Argentina?", "c", self.registry,
+                                               Mock(return_value=True))
+        self.assertTrue(answer.startswith("Encontré resultados, pero no pude redactar la respuesta."))
+
+    @patch("jarvis_agent.requests.post")
+    def test_claimed_action_without_a_tool_is_not_believed(self, post: Mock) -> None:
+        """2026-11-16: «Puse Jarvis a la izquierda del monitor 2.» sin llamar a ninguna herramienta."""
+        from jarvis_agent import AVISO_SIN_ACCION
+
+        post.return_value = _response({"role": "assistant", "content": "Puse Jarvis a la izquierda del monitor 2."})
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("deja a Jarvis donde quieras", "c", self.registry,
+                                               Mock(return_value=True))
+        self.assertEqual(answer, AVISO_SIN_ACCION)
+        post.return_value = _response({"role": "assistant", "content": "Python es un lenguaje de programación."})
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("¿Qué es Python?", "c", self.registry, Mock(return_value=True))
+        self.assertEqual(answer, "Python es un lenguaje de programación.")
+
+    def test_written_call_detection(self) -> None:
+        from jarvis_agent import _llamada_escrita, _sin_llamadas_escritas
+
+        self.assertTrue(_llamada_escrita(self.LLAMADA_ESCRITA))
+        self.assertTrue(_llamada_escrita('```json\n{"name": "x", "arguments": {}}\n```'))
+        self.assertFalse(_llamada_escrita("Argentina juega el 20."))
+        self.assertFalse(_llamada_escrita("[1, 2]"))
+        self.assertEqual(_sin_llamadas_escritas(self.LLAMADA_ESCRITA), "Fuentes:\n1. https://ejemplo.com/amistosos")
+
+    def test_explicit_search_phrases(self) -> None:
+        from jarvis_agent import consulta_explicita
+
+        casos = {
+            "Busca en internet cuándo es el próximo amistoso de la selección argentina de fútbol":
+                "cuándo es el próximo amistoso de la selección argentina de fútbol",
+            "Jarvis, googlea precio del dólar": "precio del dólar",
+            "el resultado de River búscalo en internet": "el resultado de River",
+            "buscá en google qué es MCP": "qué es MCP",
+            "¿Podrías buscar en internet quién ganó?": "quién ganó",
+            "Busque en internet la hora del partido entre Argentina y Colombia":
+                "la hora del partido entre Argentina y Colombia",
+            "busca el archivo de fotos": None,
+            "abre YouTube y busca música": None,
+            "qué hora es": None,
+        }
+        for texto, esperado in casos.items():
+            with self.subTest(texto=texto):
+                self.assertEqual(consulta_explicita(texto), esperado)
+
 
 if __name__ == "__main__":
     unittest.main()

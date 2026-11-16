@@ -451,16 +451,26 @@ def ejecutar_en_pantalla(x: int, y: int, text: str = "") -> str:
 _MONITOR = r"(?:\s+(?:en|del|de)\s+(?:el\s+|la\s+)?(?:monitor|pantalla)\s+(?P<n>\d|uno|dos|tres|cuatro))?"
 _NUMEROS = {"uno": 1, "dos": 2, "tres": 3, "cuatro": 4}
 # «analiza el monitor 3 y haz clic…», «en el monitor 3 haz clic…», «en la pantalla 2, pulsa…»
+# Lo que se dice antes de la orden: «ahora», «por favor», «podrías», «quiero que»…
+# (2026-11-16: «Ahora haz clic…» y «Hacer clic…» iban a la IA, que inventaba «No encontré…»).
+_ANTES = (
+    r"(?:(?:ahora|bueno|ok|dale|ya|entonces|luego|despues)\s+(?:si\s+)?)?"
+    r"(?:(?:por\s+favor|porfa)\s+)?"
+    r"(?:(?:podrias|puedes|podes|quiero\s+que|necesito\s+que)\s+)?"
+)
 _PREFIJO = (
-    r"^(?:(?:(?:analiza|mira|revisa)\s+|en\s+)(?:el\s+|la\s+)?(?:monitor|pantalla)\s+"
-    r"(?P<n0>\d|uno|dos|tres|cuatro)\s+(?:y\s+)?)?"
+    r"^" + _ANTES + r"(?:(?:(?:analiza|mira|revisa|ve\s+a|anda\s+a|ir\s+a)\s+|en\s+)(?:el\s+|la\s+|al\s+)?"
+    r"(?:monitor|pantalla)\s+(?P<n0>\d|uno|dos|tres|cuatro)\s+"
+    r"(?:y\s+)?(?:(?:luego|despues|entonces)\s+)?)?" + _ANTES
 )
 _CLIC = re.compile(
     _PREFIJO
-    + r"(?:haz|hace|hacé|dale|da)\s+(?:un\s+)?(?:click|clic|clik|clickeo)\s+(?:(?:en|sobre|a)\s+|(?=donde\s))"
+    + r"(?:haz|hace|hacé|hacer|haga|hagas|dale|da|dar|darle|des)\s+(?:un\s+)?(?:doble\s+)?"
+    r"(?:click|clic|clik|clickeo|clic\s+izquierdo)\s+(?:(?:en|sobre|a)\s+|(?=donde\s))"
     r"(?P<obj>.+?)" + _MONITOR + r"$"
     r"|" + _PREFIJO.replace("n0", "n1")
-    + r"(?:pulsa|presiona|toca|aprieta|clickea|cliquea)\s+(?P<obj2>.+?)"
+    + r"(?:pulsa|pulsar|pulses|presiona|presionar|presiones|toca|tocar|toques|aprieta|apretar|aprietes|"
+    r"clickea|clickear|cliquea|cliquear|selecciona|seleccionar)\s+(?P<obj2>.+?)"
     + _MONITOR.replace("<n>", "<n2>") + r"$"
 )
 _ESCRIBIR = re.compile(

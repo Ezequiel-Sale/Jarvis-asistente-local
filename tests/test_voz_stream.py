@@ -200,7 +200,23 @@ class AgentStreamTests(unittest.TestCase):
         compuerta = agent._CompuertaTexto(recibido.append)
         for trozo in ("  ", "Hola", " mundo"):
             compuerta(trozo)
-        self.assertEqual(recibido, ["Hola", " mundo"])
+        self.assertEqual(recibido, [])  # espera unos caracteres antes de decidir
+        compuerta.terminar()
+        self.assertEqual(recibido, ["Hola mundo"])
+        recibido.clear()
+        compuerta = agent._CompuertaTexto(recibido.append)
+        for trozo in ("El próximo partido ", "es el martes", " a las 20 h."):
+            compuerta(trozo)
+        self.assertEqual("".join(recibido), "El próximo partido es el martes a las 20 h.")
+
+    def test_gate_hides_claimed_actions(self) -> None:
+        """2026-11-16: «Puse Jarvis a la izquierda del monitor 2.» sin hacer nada."""
+        recibido: list[str] = []
+        compuerta = agent._CompuertaTexto(recibido.append)
+        for trozo in ("Puse Jarvis ", "a la izquierda ", "del monitor 2."):
+            compuerta(trozo)
+        compuerta.terminar()
+        self.assertEqual(recibido, [])
 
     def test_stream_is_assembled(self) -> None:
         trozos: list[str] = []

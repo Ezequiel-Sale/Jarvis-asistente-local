@@ -4,9 +4,11 @@ Parte de ``JarvisApp`` (jarvis_app.py), que hereda de esta clase. Los métodos u
 los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``…).
 """
 
+import jarvis_clics_aprendidos
 import jarvis_core as core
 import jarvis_screen_actions
 import jarvis_vision
+import json
 import logging
 import os
 import queue
@@ -68,6 +70,18 @@ class PantallaMixin:
                         monitor, imagen = otro, jarvis_vision.capturar_monitor(otro)
                         break
             if objetivo is None:
+                # Antes de la visión (20–30 s): ¿dónde estaba la última vez en esa ventana?
+                hallado = self._find_learned_click(pedido, monitor)
+                if hallado is not None:
+                    aprendido, monitor_aprendido, entrada = hallado
+                    if monitor_aprendido.numero != monitor.numero:
+                        monitor, imagen = monitor_aprendido, jarvis_vision.capturar_monitor(monitor_aprendido)
+                    if self._request_screen_approval("click", imagen, monitor, aprendido, pedido):
+                        self.events.put(("screen_execute", aprendido, pedido.get("texto", ""), command,
+                                         conversation_id, pedido["consulta"]))
+                        return
+                    # No era ahí: se olvida y se ofrece buscarlo con la visión.
+                    self._forget_learned_click(pedido["consulta"], entrada["programa"])
                 if not self._request_screen_approval("vision", imagen, monitor, None, pedido):
                     terminar(f"No encontré «{pedido['consulta']}» en el monitor {monitor.numero}.")
                     return
@@ -80,10 +94,51 @@ class PantallaMixin:
             if not self._request_screen_approval("click", imagen, monitor, objetivo, pedido):
                 terminar("De acuerdo, no hice nada.")
                 return
-            self.events.put(("screen_execute", objetivo, pedido.get("texto", ""), command, conversation_id))
+            self.events.put(("screen_execute", objetivo, pedido.get("texto", ""), command, conversation_id,
+                             pedido["consulta"]))
         except Exception as error:
             logging.exception("Falló la acción en pantalla.")
             terminar(f"No pude completar la acción en pantalla: {error}")
+
+    # --- Clics aprendidos ------------------------------------------------------------
+
+    def _find_learned_click(self, pedido: dict, monitor):
+        """(Objetivo, monitor, entrada) si ya se hizo clic en eso y su ventana está a la vista."""
+        try:
+            entradas = jarvis_clics_aprendidos.cargar(core.obtener_preferencia)
+            if not jarvis_clics_aprendidos.candidatos(entradas, pedido["consulta"]):
+                return None
+            monitores = [monitor] if pedido.get("monitor") is not None else jarvis_vision.listar_monitores()
+            return jarvis_clics_aprendidos.buscar(entradas, pedido["consulta"], monitores, excluir_pid=os.getpid())
+        except Exception:
+            logging.exception("No se pudieron revisar los clics aprendidos.")
+            return None
+
+    def _forget_learned_click(self, consulta: str, programa: str) -> None:
+        try:
+            entradas = jarvis_clics_aprendidos.cargar(core.obtener_preferencia)
+            core.guardar_preferencia(jarvis_clics_aprendidos.PREFERENCIA, json.dumps(
+                jarvis_clics_aprendidos.olvidar(entradas, consulta, programa), ensure_ascii=False))
+            logging.info("Clic aprendido olvidado (rechazado por el usuario) en %s.", programa)
+        except Exception:
+            logging.exception("No se pudo olvidar el clic aprendido.")
+
+    def _remember_click(self, consulta: str, objetivo, ventana) -> None:
+        """Hilo del clic: anota dónde estaba, relativo a la ventana que había debajo."""
+        if not consulta or ventana is None:
+            return
+        try:
+            hwnd, rect = ventana
+            programa = jarvis_clics_aprendidos.programa_de(hwnd)
+            if not programa or programa == "jarvis":
+                return
+            entradas = jarvis_clics_aprendidos.cargar(core.obtener_preferencia)
+            entradas = jarvis_clics_aprendidos.recordar(entradas, consulta, programa, objetivo.x, objetivo.y,
+                                                        rect, objetivo.nombre)
+            core.guardar_preferencia(jarvis_clics_aprendidos.PREFERENCIA, json.dumps(entradas, ensure_ascii=False))
+            logging.info("Clic aprendido en %s (encontrado por %s).", programa, objetivo.origen)
+        except Exception:
+            logging.exception("No se pudo recordar el clic.")
 
     def _request_screen_approval(self, tipo, imagen, monitor, objetivo, pedido) -> bool:
         if self._closing:
@@ -155,7 +210,7 @@ class PantallaMixin:
         self._set_plan_voice_controls(recording=False)
         self._set_status(self._approval_hint("screen"), CYAN)
 
-    def _execute_screen_action(self, objetivo, texto, command, conversation_id) -> None:
+    def _execute_screen_action(self, objetivo, texto, command, conversation_id, consulta: str = "") -> None:
         """Oculta Jarvis (para que el clic no caiga sobre su ventana), actúa y vuelve."""
         ocultas = []
         candidatas = [self.root, self.chat_window]
@@ -176,9 +231,15 @@ class PantallaMixin:
             if texto:
                 argumentos["text"] = texto
             try:
+                ventana = jarvis_clics_aprendidos.ventana_en(objetivo.x, objetivo.y)
+            except Exception:
+                logging.debug("No se pudo leer la ventana bajo el clic.", exc_info=True)
+                ventana = None
+            try:
                 self.tool_registry.execute(
                     "screen_click", argumentos, confirmed=True, origin="pantalla"
                 )
+                self._remember_click(consulta, objetivo, ventana)
                 mensaje = (
                     f"Escribí «{texto}» en «{objetivo.nombre}»." if texto else f"Hice clic en «{objetivo.nombre}»."
                 )
