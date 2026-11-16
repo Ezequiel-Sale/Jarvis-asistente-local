@@ -148,7 +148,7 @@ class ListeningCommandTests(unittest.TestCase):
 def _host(**estado) -> Mock:
     host = Mock()
     host._enrolling = False
-    host._speaker_rejected = lambda _ruta: False  # «Solo mi voz» desactivado
+    host._speaker_rejected = lambda _ruta, **_k: False  # «Solo mi voz» desactivado
     host._closing = False
     host.recorder = None
     host.busy = False

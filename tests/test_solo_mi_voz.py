@@ -103,8 +103,13 @@ class VerifierTests(unittest.TestCase):
         self.assertTrue(propia.aceptada)
         self.assertFalse(ajena.aceptada)
         self.assertLess(ajena.similitud, propia.similitud)
-        corta = nuevo.verificar(_wav(self.carpeta, "eh.wav", _voz(0.2, 5000)), "alta")
-        self.assertTrue(corta.aceptada)  # muy poca voz: no hay con qué decidir
+        # Muy poca voz para decidir: se descarta (2026-11-16: ruidos de 0,4 s de un ventilador o un
+        # directo pasaban y Whisper los volvía órdenes), salvo en las confirmaciones («sí» seco).
+        corta = _wav(self.carpeta, "eh.wav", _voz(0.2, 5000))
+        self.assertEqual(nuevo.verificar(corta, "alta"), h.Resultado(False, None, 0.18))
+        self.assertTrue(nuevo.verificar(corta, "alta", corta_pasa=True).aceptada)
+        # 0,4 s ya alcanza para verificar: antes (mínimo 0,5) se dejaba pasar sin mirar.
+        self.assertFalse(nuevo.verificar(_wav(self.carpeta, "ruido.wav", _voz(0.4, 5000)), "media").aceptada)
         nuevo.borrar_huella()
         self.assertFalse(nuevo.registrada())
         self.assertFalse((self.carpeta / h.ARCHIVO_HUELLA).exists())
@@ -151,21 +156,42 @@ class AppFilterTests(unittest.TestCase):
         """Regresión: un ``return`` dentro del ``try`` se saltaba ``continuous_result`` y la
         escucha continua quedaba «transcribiendo» para siempre."""
         host = _host()
-        host._speaker_rejected = lambda _ruta: True
+        host._speaker_rejected = lambda _ruta, **_k: True
         JarvisApp._continuous_worker(host, "otro.wav", False)
         stt.assert_not_called()
         limpiar.assert_called_once_with("otro.wav")
         self.assertEqual(host.events.get_nowait(), ("continuous_result", None))
 
     @patch("audio_capture.limpiar_audio")
+    def test_no_hint_for_whisper_with_little_voice(self, _limpiar: Mock) -> None:
+        """2026-11-16: 0,4 s de ruido → «Maximiza agranda minimiza» (copiado de la pista)."""
+        host = _host()
+        host._speaker_rejected = lambda _ruta, **_k: False
+        for segundos, con_pista in ((0.4, False), (1.5, True)):
+            with self.subTest(segundos=segundos), \
+                    patch("jarvis_hablante.leer_wav", return_value=np.zeros(10)), \
+                    patch("jarvis_hablante.solo_voz", return_value=(np.zeros(10), segundos)), \
+                    patch("jarvis_core.procesar_stt", return_value="pausa") as stt:
+                JarvisApp._continuous_worker(host, "f.wav", False)
+                self.assertEqual(stt.call_args.kwargs, {"pista": con_pista})
+
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="Sí")
+    def test_confirmations_accept_short_sounds(self, _stt: Mock, _limpiar: Mock) -> None:
+        host = _host()
+        host._approval_decision = Mock(return_value=True)
+        JarvisApp._free_approval_worker(host, "si.wav", "plan", object())
+        host._speaker_rejected.assert_called_once_with("si.wav", corta_pasa=True)
+
+    @patch("audio_capture.limpiar_audio")
     def test_wakeword_command_from_other_voice(self, limpiar: Mock) -> None:
         host = _host()
-        host._speaker_rejected = lambda _ruta: True
+        host._speaker_rejected = lambda _ruta, **_k: True
         JarvisApp._wakeword_voice_worker(host, "o.wav", 0.0, "c", False, "plan", None)
         host._voice_worker.assert_not_called()
         limpiar.assert_called_once_with("o.wav")
         self.assertEqual(host.events.get_nowait(), ("speaker_rejected", False))
-        host._speaker_rejected = lambda _ruta: False
+        host._speaker_rejected = lambda _ruta, **_k: False
         JarvisApp._wakeword_voice_worker(host, "yo.wav", 0.0, "c", False, "plan", None)
         host._voice_worker.assert_called_once_with("yo.wav", 0.0, "c", False, "plan", None)
 
@@ -173,7 +199,7 @@ class AppFilterTests(unittest.TestCase):
     @patch("jarvis_core.procesar_stt")
     def test_other_voice_cannot_confirm(self, stt: Mock, _limpiar: Mock) -> None:
         host = _host()
-        host._speaker_rejected = lambda _ruta: True
+        host._speaker_rejected = lambda _ruta, **_k: True
         reply = object()
         JarvisApp._free_approval_worker(host, "si.wav", "power", reply)
         stt.assert_not_called()

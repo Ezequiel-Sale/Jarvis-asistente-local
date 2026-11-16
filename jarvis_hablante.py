@@ -41,7 +41,9 @@ EXIGENCIA_POR_DEFECTO = "media"
 NOMBRES_EXIGENCIA = {"baja": "BAJA", "media": "MEDIA", "alta": "ALTA"}
 VOZ_CORTA = 1.5  # s de voz: por debajo el umbral baja un poco
 DESCUENTO_CORTA = 0.06
-MINIMO_AUDIO = 0.5  # s: con menos no se puede decidir (se deja pasar)
+# s de voz: con menos no se puede decidir. Era 0,5 y dejaba pasar ruidos de 0,4 s (un ventilador,
+# un directo) que Whisper convertía en órdenes inventadas (2026-11-16); con 0,25 casi todo se verifica.
+MINIMO_AUDIO = 0.25
 
 # Frases para registrarse: variadas, en español, de 3–4 s cada una.
 FRASES_REGISTRO = (
@@ -229,13 +231,14 @@ class Verificador:
         self.ruta_huella.unlink(missing_ok=True)
         self._huella, self._huella_leida = None, True
 
-    def verificar(self, ruta_wav: str, exigencia: str) -> Resultado:
-        """¿Es tu voz? Sin huella o con muy poca voz, se deja pasar (no hay con qué decidir)."""
+    def verificar(self, ruta_wav: str, exigencia: str, *, corta_pasa: bool = False) -> Resultado:
+        """¿Es tu voz? Sin huella, se deja pasar. Con menos de ``MINIMO_AUDIO`` de voz no hay con
+        qué decidir: se descarta, salvo con ``corta_pasa`` (un «sí» seco a una confirmación)."""
         propia = self.huella()
         if propia is None:
             return Resultado(True, None, 0.0)
         huella, segundos = self.huella_de(leer_wav(ruta_wav))
         if huella is None:
-            return Resultado(True, None, segundos)
+            return Resultado(corta_pasa, None, segundos)
         valor = similitud(huella, propia)
         return Resultado(valor >= umbral_para(exigencia, segundos), valor, segundos)

@@ -24,6 +24,9 @@ from jarvis_theme import CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET
 
 
 
+PISTA_MINIMA_VOZ = 0.8  # s de voz para darle a Whisper la pista de palabras
+
+
 def palabra_suelta_desconocida(texto: str, orden_directa) -> bool:
     """¿Es una sola palabra que no es una orden conocida (sección, orden directa o frase de
     una rutina)? En la escucha continua eso es ruido mal transcripto: no va a la IA."""
@@ -452,14 +455,17 @@ class VozMixin:
         try:
             # «Solo mi voz»: si no es tu voz, ni se transcribe (decision queda en None).
             if not self._speaker_rejected(audio_path):
-                texto = limpiar_transcripcion_voz(ejecutar_con_limites(
-                    lambda: core.procesar_stt(audio_path), timeout=core.STT_TIMEOUT + 10,
-                    descripcion="transcripción de voz",
-                ))
                 try:  # cuánta voz hubo de verdad: con 0,4 s no caben 456 caracteres
                     segundos_voz = jarvis_hablante.solo_voz(jarvis_hablante.leer_wav(audio_path))[1]
                 except Exception:
                     segundos_voz = None
+                # Con muy poca voz, sin pista: Whisper la copiaba («Maximiza agranda minimiza»,
+                # «Rápido Brave YouTube…») a partir de un ruido (2026-11-16).
+                pista = segundos_voz is None or segundos_voz >= PISTA_MINIMA_VOZ
+                texto = limpiar_transcripcion_voz(ejecutar_con_limites(
+                    lambda: core.procesar_stt(audio_path, pista=pista), timeout=core.STT_TIMEOUT + 10,
+                    descripcion="transcripción de voz",
+                ))
                 decision = frase_continua(texto, hablando, segundos_voz)
                 logging.info("Escucha continua: %s (%s caracteres).",
                              decision[0] if decision else "ignorada", len(texto))
@@ -540,12 +546,14 @@ class VozMixin:
             else jarvis_hablante.EXIGENCIA_POR_DEFECTO
         self._speaker_filter = activo and self.speaker_verifier.registrada()
 
-    def _speaker_rejected(self, audio_path: str) -> bool:
-        """Hilos de voz: True si «Solo mi voz» está activo y no es tu voz. Ante un error, deja pasar."""
+    def _speaker_rejected(self, audio_path: str, corta_pasa: bool = False) -> bool:
+        """Hilos de voz: True si «Solo mi voz» está activo y no es tu voz. Ante un error, deja pasar.
+        ``corta_pasa``: un sonido demasiado corto para reconocerlo se acepta (respuestas «sí/no»)."""
         if not getattr(self, "_speaker_filter", False):
             return False
         try:
-            resultado = self.speaker_verifier.verificar(audio_path, self._speaker_strictness)
+            resultado = self.speaker_verifier.verificar(audio_path, self._speaker_strictness,
+                                                        corta_pasa=corta_pasa)
         except Exception:
             logging.exception("No se pudo comprobar de quién es la voz; se acepta la frase.")
             return False
@@ -553,6 +561,8 @@ class VozMixin:
             logging.info("Voz %s (parecido %.2f, %.1f s de voz, exigencia %s).",
                          "reconocida" if resultado.aceptada else "ajena: ignorada",
                          resultado.similitud, resultado.segundos_voz, self._speaker_strictness)
+        elif not resultado.aceptada:
+            logging.info("Sonido demasiado corto para reconocer la voz (%.2f s): ignorado.", resultado.segundos_voz)
         return not resultado.aceptada
 
     def _on_speaker_rejected(self, plan_approval: bool) -> None:

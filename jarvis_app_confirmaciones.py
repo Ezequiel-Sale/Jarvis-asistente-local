@@ -74,7 +74,7 @@ class ConfirmacionesMixin:
 
     def _free_approval_worker(self, audio_path: str, kind: str, reply) -> None:
         try:
-            if self._speaker_rejected(audio_path):  # «Solo mi voz»: otra persona no confirma
+            if self._speaker_rejected(audio_path, corta_pasa=True):  # «Solo mi voz»: otra persona no confirma
                 self.events.put(("free_approval_result", None, "", reply))
                 return
             transcript = limpiar_transcripcion_voz(core.procesar_stt(audio_path))
