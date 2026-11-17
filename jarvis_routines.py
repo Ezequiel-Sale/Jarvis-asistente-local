@@ -82,6 +82,7 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "manage_window",
         "window_control",
         "browser_history",
+        "browser_tab",
         "search_youtube",
         "media_control",
         "mute_browser_tab",

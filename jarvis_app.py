@@ -1202,6 +1202,8 @@ class JarvisApp(
                         self._on_speaker_rejected(event[1])
                     elif event[0] == "continuous_utterance":
                         self._on_continuous_utterance(event[1])
+                    elif event[0] == "speaker_unsure":
+                        self._set_status("NO RECONOCÍ TU VOZ: REPETILO O APRETÁ F9", ERROR)
                     elif event[0] == "continuous_result":
                         self._on_continuous_result(event[1])
                     elif event[0] == "wakeword_ready":

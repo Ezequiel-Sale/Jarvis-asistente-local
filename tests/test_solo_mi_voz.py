@@ -171,10 +171,48 @@ class AppFilterTests(unittest.TestCase):
         escucha continua quedaba «transcribiendo» para siempre."""
         host = _host()
         host._speaker_rejected = lambda _ruta, **_k: True
+        host._voice_unsure = lambda: False  # claramente otra voz (la tele)
         JarvisApp._continuous_worker(host, "otro.wav", False)
         stt.assert_not_called()
         limpiar.assert_called_once_with("otro.wav")
         self.assertEqual(host.events.get_nowait(), ("continuous_result", None))
+
+    def test_unsure_band(self) -> None:
+        """2026-11-17: tus frases rechazadas en silencio quedaban en 0,19–0,32; la tele, ≤ 0,17."""
+        host = _host()
+        for resultado, dudosa in ((h.Resultado(False, 0.28, 0.5), True), (h.Resultado(False, 0.19, 0.3), True),
+                                  (h.Resultado(False, 0.12, 0.6), False), (h.Resultado(True, 0.5, 1.0), False),
+                                  (h.Resultado(False, None, 0.1), False), (None, False)):
+            with self.subTest(resultado=resultado):
+                host._last_speaker_check = resultado
+                self.assertIs(JarvisApp._voice_unsure(host), dudosa)
+
+    @patch("jarvis_core.procesar_stt", return_value="¿Qué consume más memoria?")
+    def test_unsure_voice_with_a_known_order_is_accepted(self, _stt: Mock) -> None:
+        host = _host(_last_speaker_check=h.Resultado(False, 0.28, 0.5))
+        host._known_command = lambda texto: JarvisApp._known_command(host, texto)
+        host._is_known_order = lambda _t: False
+        decision = JarvisApp._unsure_voice_decision(host, "f.wav", False)
+        self.assertEqual(decision[0], "orden")
+        self.assertTrue(host.events.empty())  # sin aviso: se hace
+
+    @patch("jarvis_core.procesar_stt", return_value="contame algo de historia")
+    def test_unsure_voice_with_a_chat_is_dropped_with_a_warning(self, _stt: Mock) -> None:
+        host = _host(_last_speaker_check=h.Resultado(False, 0.22, 0.6))
+        host._known_command = lambda texto: JarvisApp._known_command(host, texto)
+        host._is_known_order = lambda _t: False
+        self.assertIsNone(JarvisApp._unsure_voice_decision(host, "f.wav", False))
+        self.assertEqual(host.events.get_nowait(), ("speaker_unsure",))
+
+    @patch("audio_capture.limpiar_audio")
+    def test_worker_gives_the_unsure_voice_a_second_chance(self, _limpiar: Mock) -> None:
+        host = _host()
+        host._speaker_rejected = lambda _ruta, **_k: True
+        host._voice_unsure = lambda: True
+        host._unsure_voice_decision = Mock(return_value=("orden", "qué consume más memoria"))
+        JarvisApp._continuous_worker(host, "f.wav", False)
+        host._unsure_voice_decision.assert_called_once_with("f.wav", False)
+        self.assertEqual(host.events.get_nowait(), ("continuous_result", ("orden", "qué consume más memoria")))
 
     @patch("audio_capture.limpiar_audio")
     def test_no_hint_for_whisper_with_little_voice(self, _limpiar: Mock) -> None:

@@ -8,6 +8,7 @@ los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``�
 import audio_capture
 import jarvis_actions
 import jarvis_apuntar
+import jarvis_pestanas
 import jarvis_aprendizaje
 import jarvis_buenos_dias
 import jarvis_buscar_archivos
@@ -236,6 +237,7 @@ class OrdenesMixin:
             or detectar_comando_gpu(text)
             or detectar_comando_energia(text)
             or detectar_comando_ventanas(text)
+            or jarvis_pestanas.detectar(text)
             or self.plugins.detectar_comando(text)
         )
         if system_query is not None:
@@ -404,6 +406,7 @@ class OrdenesMixin:
                 or detectar_comando_gpu(transcript)
                 or detectar_comando_energia(transcript)
                 or detectar_comando_ventanas(transcript)
+                or jarvis_pestanas.detectar(transcript)
             )
             plugins = getattr(self, "plugins", None)
             if system_query is None and isinstance(plugins, GestorPlugins):
@@ -716,6 +719,7 @@ class OrdenesMixin:
         "mute_browser_tab": "SILENCIANDO LA PESTAÑA…",
         "media_sequence": "CONTROLANDO LA REPRODUCCIÓN…",
         "set_app_volume": "AJUSTANDO VOLUMEN DE LA APLICACIÓN…",
+        "browser_tab": "CAMBIANDO DE PESTAÑA…",
     }
 
     def _execute_volume_action(self, porcentaje: int, command: str) -> None:

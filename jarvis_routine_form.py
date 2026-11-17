@@ -150,6 +150,7 @@ CATALOGO: dict[str, tuple[str, str, str]] = {
     "open_new_browser_tab": ("Navegador", "Abrir una pestaña en Brave", "Con una dirección web."),
     "navigate_browser": ("Navegador", "Controlar la ventana de Brave", "Minimizar o maximizar Brave."),
     "browser_history": ("Navegador", "Atrás, adelante o recargar", "En la pestaña activa de Brave."),
+    "browser_tab": ("Navegador", "Cambiar de pestaña", "Siguiente, anterior, por número o por su título."),
     "power_control": ("Equipo y energía", "Apagar, reiniciar o suspender",
                       "Con cuenta atrás; puedes indicar «dentro de» cuánto."),
     "cancel_power_action": ("Equipo y energía", "Cancelar apagado o reinicio", "Anula uno programado."),

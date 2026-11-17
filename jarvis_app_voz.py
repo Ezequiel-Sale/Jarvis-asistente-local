@@ -25,6 +25,11 @@ from jarvis_theme import CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT, VIOLET
 
 
 PISTA_MINIMA_VOZ = 0.8  # s de voz para darle a Whisper la pista de palabras
+# Voz dudosa [2026-11-17]: «¿qué consume más memoria?» se descartó dos veces en silencio (parecido 0,28 y
+# 0,19 con 0,3–0,5 s de voz medida; tus frases aceptadas ese día: 0,36–0,52, las voces ajenas de la
+# tele: −0,05 a 0,17). Entre este piso y el umbral se transcribe igual: si es una orden que Jarvis
+# conoce, se hace; si no, se avisa en vez de quedarse callado.
+PARECIDO_DUDOSO = 0.18
 
 
 def palabra_suelta_desconocida(texto: str, orden_directa) -> bool:
@@ -473,6 +478,8 @@ class VozMixin:
                 decision = frase_continua(texto, hablando, segundos_voz)
                 logging.info("Escucha continua: %s (%s caracteres).",
                              decision[0] if decision else "ignorada", len(texto))
+            elif self._voice_unsure():
+                decision = self._unsure_voice_decision(audio_path, hablando)
         except Exception:
             logging.exception("No se pudo transcribir una frase de la escucha continua.")
         finally:
@@ -480,6 +487,47 @@ class VozMixin:
             if recorte is not None and recorte != audio_path_original:
                 audio_capture.limpiar_audio(audio_path_original)
         self.events.put(("continuous_result", decision))
+
+    def _voice_unsure(self) -> bool:
+        """¿La última frase rechazada quedó en la franja dudosa (quizás eras vos con poca voz)?"""
+        resultado = getattr(self, "_last_speaker_check", None)
+        if resultado is None or resultado.aceptada or resultado.similitud is None:
+            return False
+        return resultado.similitud >= PARECIDO_DUDOSO
+
+    def _unsure_voice_decision(self, audio_path: str, hablando: bool) -> tuple[str, str] | None:
+        """Hilo de la escucha continua: transcribe la frase dudosa; si es una orden que Jarvis conoce
+        se acepta, si no se avisa (``speaker_unsure``) y se descarta."""
+        from jarvis_actions import ejecutar_con_limites
+        from jarvis_commands import frase_continua, limpiar_transcripcion_voz
+
+        resultado = self._last_speaker_check
+        texto = limpiar_transcripcion_voz(ejecutar_con_limites(
+            lambda: core.procesar_stt(audio_path, pista=False), timeout=core.STT_TIMEOUT + 10,
+            descripcion="transcripción de voz",
+        ))
+        if texto and self._known_command(texto):
+            logging.info("Voz dudosa (parecido %.2f) pero es una orden que Jarvis conoce: se acepta.",
+                         resultado.similitud)
+            return frase_continua(texto, hablando, resultado.segundos_voz)
+        logging.info("Voz dudosa (parecido %.2f) y no es una orden conocida: se descarta y se avisa.",
+                     resultado.similitud)
+        self.events.put(("speaker_unsure",))
+        return None
+
+    def _known_command(self, texto: str) -> bool:
+        """Una orden que Jarvis resuelve solo (no una charla para la IA): directas, consultas del
+        equipo, fecha y hora, batería, visión, abrir un programa, rutinas."""
+        from jarvis_commands import (detectar_comando_juego, detectar_consulta_bateria,
+                                     detectar_consulta_fecha_hora, detectar_consulta_sistema, detectar_vision)
+
+        try:
+            return bool(self._is_known_order(texto) or detectar_consulta_sistema(texto)
+                        or detectar_consulta_fecha_hora(texto) or detectar_consulta_bateria(texto)
+                        or detectar_vision(texto) or detectar_comando_juego(texto))
+        except Exception:
+            logging.debug("No se pudo revisar si la frase dudosa es una orden.", exc_info=True)
+            return False
 
     def _on_continuous_result(self, decision: tuple[str, str] | None) -> None:
         self._continuous_transcribing = False
@@ -563,6 +611,7 @@ class VozMixin:
         except Exception:
             logging.exception("No se pudo comprobar de quién es la voz; se acepta la frase.")
             return False
+        self._last_speaker_check = resultado
         if resultado.similitud is not None:
             logging.info("Voz %s (parecido %.2f, %.1f s de voz, exigencia %s).",
                          "reconocida" if resultado.aceptada else "ajena: ignorada",

@@ -9,6 +9,7 @@ from jarvis_windows import POSICIONES as POSICIONES_VENTANA
 import jarvis_health
 import jarvis_headset
 import jarvis_media
+import jarvis_pestanas
 import jarvis_power
 import jarvis_reminders
 import jarvis_screen_actions
@@ -214,6 +215,29 @@ def crear_registro_herramientas(
         label="Abrir pestaña en Brave",
         timeout_seconds=15,
         verifier=verificadores.get("open_new_browser_tab"),
+    )
+    registry.register(
+        "browser_tab",
+        (
+            "Pestañas de Brave: next (siguiente), previous (anterior), number (la pestaña number, desde 1), "
+            "last (la última), close (cierra la actual o, con title, la que tenga ese título), reopen (vuelve "
+            "a abrir la última cerrada), go (va a la pestaña cuyo título contiene title: «la de YouTube») y "
+            "list (dice qué pestañas hay). Para abrir una nueva, open_new_browser_tab."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": list(jarvis_pestanas.ACCIONES)},
+                "number": {"type": "integer", "minimum": 1, "maximum": 99},
+                "title": {"type": "string", "maxLength": 100},
+            },
+            "required": ["action"],
+            "additionalProperties": False,
+        },
+        jarvis_pestanas.pestana,
+        label="Pestañas de Brave",
+        timeout_seconds=15,
+        record_result=False,  # la lista lleva los títulos de las páginas
     )
     registry.register(
         "navigate_browser",
