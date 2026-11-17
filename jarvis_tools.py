@@ -402,14 +402,17 @@ def crear_registro_herramientas(
         (
             "Minimiza, maximiza, restaura o trae al frente las ventanas de cualquier programa. "
             "app es el programa (discord, spotify, explorador…), parte del título, «todo» para "
-            "todas las ventanas o «esta ventana» para la activa. Para Brave o Jarvis también sirve."
+            "todas las ventanas o «esto» para la que el usuario señala (o la activa). Para Brave o Jarvis "
+            "también sirve. window_close cierra solo «esto» (la ventana señalada); para cerrar un programa "
+            "por su nombre, close_program."
         ),
         {
             "type": "object",
             "properties": {
                 "app": {"type": "string"},
                 "action": {"type": "string",
-                           "enum": ["window_minimize", "window_maximize", "window_restore", "window_focus"]},
+                           "enum": ["window_minimize", "window_maximize", "window_restore", "window_focus",
+                                    "window_close"]},
             },
             "required": ["app", "action"],
             "additionalProperties": False,
@@ -638,7 +641,8 @@ def crear_registro_herramientas(
         "gesture_click",
         (
             "Botón del mouse en un punto (action: click, down para empezar a arrastrar, up para "
-            "soltar, right_click para el botón derecho). Solo la usan los pellizcos de los gestos con la mano."
+            "soltar, right_click para el botón derecho, double_click). Solo la usan los gestos con la mano y «hacé "
+            "clic acá» (donde señala el puntero)."
         ),
         {
             "type": "object",

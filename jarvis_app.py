@@ -866,6 +866,10 @@ class JarvisApp(
                             reply.put(False)
                         else:
                             self._show_display_keep_dialog(descripcion, reply)
+                    elif event[0] == "pointed":
+                        _, pedido, command = event
+                        self._set_idle()
+                        self._start_pointed(pedido, command)
                     elif event[0] == "vision_request":
                         _, numero, pregunta, command = event
                         self._set_idle()

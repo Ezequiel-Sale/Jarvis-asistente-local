@@ -7,6 +7,7 @@ los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``�
 
 import audio_capture
 import jarvis_actions
+import jarvis_apuntar
 import jarvis_aprendizaje
 import jarvis_buenos_dias
 import jarvis_buscar_archivos
@@ -166,6 +167,10 @@ class OrdenesMixin:
         orden_tele = jarvis_tv.detectar(text)  # antes que volumen/multimedia: «… de la tele»
         if orden_tele is not None:
             self._start_direct_tool_action(*orden_tele, text)
+            return
+        apuntado = jarvis_apuntar.detectar(text)  # «¿qué es esto?», «hacé clic acá», «cerrá esto»
+        if apuntado is not None:
+            self._start_pointed(apuntado, text)
             return
         pedido_pantalla = jarvis_screen_actions.detectar_comando(text)
         if pedido_pantalla is not None:
@@ -335,6 +340,10 @@ class OrdenesMixin:
             orden_tele = jarvis_tv.detectar(transcript)  # antes que volumen/multimedia
             if orden_tele is not None:
                 self.events.put(("system_query", *orden_tele, transcript))
+                return
+            apuntado = jarvis_apuntar.detectar(transcript)
+            if apuntado is not None:
+                self.events.put(("pointed", apuntado, transcript))
                 return
             pedido_pantalla = jarvis_screen_actions.detectar_comando(transcript)
             if pedido_pantalla is not None:

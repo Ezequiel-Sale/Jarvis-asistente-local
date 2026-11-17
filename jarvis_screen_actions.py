@@ -452,12 +452,12 @@ def mover_rapido(x: int, y: int, user32=None) -> bool:
     return bool(user32.SetCursorPos(int(x), int(y)))
 
 
-ACCIONES_BOTON = ("click", "down", "up", "right_click")
+ACCIONES_BOTON = ("click", "down", "up", "right_click", "double_click")
 
 
 def boton_raton(action: str, x: int, y: int, *, user32=None, pausa: float = 0.03) -> str:
     """Botón izquierdo en (x, y): ``click`` (apretar y soltar), ``down`` (empezar a arrastrar) o
-    ``up`` (soltar); ``right_click``: el botón derecho. Lo usa el pellizco de los gestos
+    ``up`` (soltar); ``right_click``: el botón derecho; ``double_click``: doble clic izquierdo. Lo usa el pellizco de los gestos
     (herramienta ``gesture_click``)."""
     if action not in ACCIONES_BOTON:
         raise ValueError(f"Acción de botón no válida: {action}.")
@@ -468,6 +468,13 @@ def boton_raton(action: str, x: int, y: int, *, user32=None, pausa: float = 0.03
         time.sleep(pausa)
         _enviar_raton(user32, _MOUSEEVENTF_RIGHTUP)
         return "Hice clic derecho."
+    if action == "double_click":  # «doble clic acá» (fase 7 de gestos)
+        for _ in range(2):
+            _enviar_raton(user32, _MOUSEEVENTF_LEFTDOWN)
+            time.sleep(pausa)
+            _enviar_raton(user32, _MOUSEEVENTF_LEFTUP)
+            time.sleep(pausa)
+        return "Hice doble clic."
     if action in ("click", "down"):
         _enviar_raton(user32, _MOUSEEVENTF_LEFTDOWN)
     if action == "click":

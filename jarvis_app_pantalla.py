@@ -4,6 +4,7 @@ Parte de ``JarvisApp`` (jarvis_app.py), que hereda de esta clase. Los métodos u
 los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``…).
 """
 
+import jarvis_apuntar
 import jarvis_clics_aprendidos
 import jarvis_core as core
 import jarvis_screen_actions
@@ -283,8 +284,56 @@ class PantallaMixin:
         }
         self._capture_hidden(monitor, self._on_first_capture)
 
-    def _capture_hidden(self, monitor: jarvis_vision.Monitor, on_done) -> None:
-        """Oculta las ventanas de Jarvis, captura el monitor y las vuelve a mostrar."""
+    # --- Fase 7 de gestos: «Jarvis, esto» --------------------------------------------------
+    def _start_pointed(self, pedido: dict, command: str) -> None:
+        """«cerrá esto», «hacé clic acá», «¿qué es esto?»: con lo que está bajo el puntero."""
+        tipo = pedido["tipo"]
+        if tipo == "cerrar":
+            self._start_direct_tool_action("window_control", {"app": "esto", "action": "window_close"}, command)
+            return
+        punto = jarvis_apuntar.cursor()
+        if punto is None:
+            self._add_message("assistant", "No pude leer dónde está el puntero.")
+            return
+        if tipo == "clic":
+            self._start_direct_tool_action(
+                "gesture_click", {"action": pedido["accion"], "x": punto[0], "y": punto[1]}, command)
+            return
+        self._start_pointed_look(punto, pedido["pregunta"], command)
+
+    def _start_pointed_look(self, punto: tuple[int, int], pregunta: str, command: str) -> None:
+        """Mira solo la zona alrededor del puntero, con un anillo donde apunta; pasa por la vista
+        previa como cualquier captura y la responde el modelo de lenguaje (ve imágenes)."""
+        if self.busy or self._pending_plan_reply is not None:
+            return
+        try:
+            monitores = jarvis_vision.listar_monitores()
+        except OSError as error:
+            self._add_message("assistant", str(error))
+            return
+        monitor = next((m for m in monitores if m.x <= punto[0] < m.x + m.ancho and m.y <= punto[1] < m.y + m.alto),
+                       None)
+        if monitor is None:
+            self._add_message("assistant", "El puntero no está sobre ningún monitor.")
+            return
+        x, y, ancho, alto = jarvis_apuntar.zona_alrededor(punto, monitor)
+        self._start_busy("MIRANDO LO QUE SEÑALAS…")
+        self._vision = {
+            "monitores": monitores, "monitor": monitor,
+            "pregunta": jarvis_apuntar.pregunta_para_el_modelo(pregunta),
+            "command": command, "imagen": None, "conversation_id": self.conversation_id,
+            "cancel_token": self.cancel_token,
+        }
+
+        def capturar():
+            imagen = jarvis_vision.capturar_rect(x, y, ancho, alto)
+            return jarvis_apuntar.marcar(imagen, (punto[0] - x, punto[1] - y))
+
+        self._capture_hidden(monitor, self._on_first_capture, capturar=capturar)
+
+    def _capture_hidden(self, monitor: jarvis_vision.Monitor, on_done, capturar=None) -> None:
+        """Oculta las ventanas de Jarvis, captura el monitor (o lo que haga ``capturar``) y las
+        vuelve a mostrar."""
         candidatas = [self.root, self.chat_window]
         if isinstance(self._plan_dialog, tk.Toplevel):
             candidatas.append(self._plan_dialog)
@@ -301,10 +350,10 @@ class PantallaMixin:
             except tk.TclError:
                 continue
 
-        def capturar() -> None:
+        def tomar() -> None:
             imagen, error = None, None
             try:
-                imagen = jarvis_vision.capturar_monitor(monitor)
+                imagen = capturar() if capturar is not None else jarvis_vision.capturar_monitor(monitor)
             except Exception as exc:  # se informa al usuario
                 logging.exception("No se pudo capturar el monitor %s.", monitor.numero)
                 error = exc
@@ -315,7 +364,7 @@ class PantallaMixin:
                     pass
             on_done(imagen, error)
 
-        self.root.after(400, capturar)
+        self.root.after(400, tomar)
 
     def _on_first_capture(self, imagen, error) -> None:
         if error is not None or imagen is None:

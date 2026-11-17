@@ -674,7 +674,24 @@ def _normalizar_consulta(texto: str) -> str:
     descompuesto = unicodedata.normalize("NFKD", texto.casefold())
     sin_tildes = "".join(c for c in descompuesto if not unicodedata.combining(c))
     limpio = re.sub(r"[^a-z0-9%]+", " ", sin_tildes).strip()
-    return re.sub(r"^(?:jarvis|oye jarvis|por favor)\s+", "", limpio)
+    limpio = re.sub(r"^(?:jarvis|oye jarvis|por favor)\s+", "", limpio)
+    return _VOSEO_ORDEN.sub(lambda m: m.group(1) + _VOSEO[m.group(2)], limpio)
+
+
+# Imperativos en voseo que, sin la tilde, no coinciden con la forma de «tú» de los patrones
+# (2026-11-17: «mové Discord al monitor 2», «poné Brave a la izquierda» y «cerrá esto» iban a la
+# IA). Los regulares ya coinciden («pasá» → «pasa»); estos cambian la raíz o la terminación.
+# Solo al empezar la orden o después de «y / luego / después / entonces».
+_VOSEO = {
+    "move": "mueve", "movelo": "muevelo", "movela": "muevela", "movelos": "muevelos", "movelas": "muevelas",
+    "pone": "pon", "ponelo": "ponlo", "ponela": "ponla", "ponele": "ponle", "poneme": "ponme",
+    "cerra": "cierra", "cerralo": "cierralo", "cerrala": "cierrala", "cerralos": "cierralos",
+    "encende": "enciende", "encendelo": "enciendelo", "encendela": "enciendela",
+    "volve": "vuelve", "mostra": "muestra", "mostrame": "muestrame", "decime": "dime",
+    "abri": "abre", "abrime": "abreme", "abrilo": "abrelo", "subi": "sube", "subime": "subeme",
+    "subilo": "subelo", "escribi": "escribe", "reproduci": "reproduce", "segui": "sigue",
+}
+_VOSEO_ORDEN = re.compile(r"(^|\b(?:y|luego|despues|entonces)\s+)(" + "|".join(_VOSEO) + r")\b")
 
 
 def detectar_consulta_sistema(texto: str) -> tuple[str, dict[str, object]] | None:

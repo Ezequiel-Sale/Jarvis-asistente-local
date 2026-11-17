@@ -215,6 +215,11 @@ def cursor_para_movil(numero: int) -> tuple[float, float] | None:
         return None
 
 
+def capturar_rect(x: int, y: int, ancho: int, alto: int):
+    """Imagen PIL de un rectángulo en px físicos (lo que señala el usuario, fase 7 de gestos)."""
+    return _captura_rapida(x, y, ancho, alto)
+
+
 def _captura_rapida(x: int, y: int, ancho: int, alto: int):
     """Captura con mss (sin CAPTUREBLT: ~35 ms frente a ~55 ms de ImageGrab en 2560×1440).
 

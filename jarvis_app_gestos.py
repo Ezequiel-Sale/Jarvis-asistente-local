@@ -13,6 +13,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+import jarvis_apuntar
 import jarvis_core as core
 import jarvis_gestos
 import jarvis_gestos_aprendidos
@@ -203,6 +204,7 @@ class GestosMixin:
             if redondo != mostrado:
                 try:
                     jarvis_screen_actions.mover_rapido(*redondo)
+                    jarvis_apuntar.marcar_apuntado()  # fase 7: «esto» es lo que está bajo el puntero
                 except Exception:
                     logging.debug("No se pudo mover el puntero.", exc_info=True)
                 mostrado = redondo

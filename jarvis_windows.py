@@ -28,7 +28,9 @@ ALIAS = {
     "bloc de notas": ("notepad",),
 }
 TODO = {"todo", "todas", "todas las ventanas", "todo lo abierto"}
-ACTIVA = {"esta ventana", "la ventana activa", "ventana activa", "esta", "esto"}
+# «esto / eso»: la ventana bajo el puntero si se apuntó con el dedo hace poco (fase 7 de gestos,
+# ``jarvis_apuntar``); si no, la activa.
+ACTIVA = {"esta ventana", "la ventana activa", "ventana activa", "esta", "esto", "eso", "esa ventana", "esa"}
 
 SW_MAXIMIZE, SW_RESTORE = 3, 9
 SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
@@ -278,14 +280,37 @@ def listar_ventanas() -> list[Ventana]:
 
 
 def ventana_activa(ventanas: list[Ventana], propio_pid: int) -> list[Ventana]:
-    """La ventana en primer plano; si es Jarvis, la siguiente (EnumWindows va en orden Z)."""
+    """La ventana bajo el dedo si se apuntó hace poco (también Jarvis, si se lo señala); si no, la
+    de primer plano y, si es Jarvis, la siguiente (EnumWindows va en orden Z)."""
+    import jarvis_apuntar
+
     user32 = _user32()
+    punto = jarvis_apuntar.apuntado()
+    if punto is not None:
+        raiz = _ventana_en_punto(user32, punto)
+        for v in ventanas:
+            if v.hwnd == raiz:
+                logging.info("«Esto» es la ventana bajo el puntero (%s).", v.programa or "sin programa")
+                return [v]
     activa = user32.GetForegroundWindow()
     for v in ventanas:
         if v.hwnd == activa and v.pid != propio_pid:
             return [v]
     ajenas = [v for v in ventanas if v.pid != propio_pid]
     return ajenas[:1]
+
+
+def _ventana_en_punto(user32, punto: tuple[int, int]) -> int | None:
+    user32.WindowFromPoint.restype = wintypes.HWND
+    user32.WindowFromPoint.argtypes = [wintypes.POINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    anterior = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    try:
+        hwnd = user32.WindowFromPoint(wintypes.POINT(*punto))
+        return int(user32.GetAncestor(hwnd, 2) or hwnd) if hwnd else None  # 2 = GA_ROOT
+    finally:
+        if anterior:
+            user32.SetThreadDpiAwarenessContext(anterior)
 
 
 def _area_trabajo(user32, hmonitor) -> tuple[int, int, int, int]:
@@ -405,7 +430,10 @@ ACCIONES_ESTADO = {
     "window_maximize": ("maximicé", SW_MAXIMIZE),
     "window_restore": ("restauré", SW_RESTORE),
     "window_focus": ("traje al frente", None),
+    # Como la X de la ventana (WM_CLOSE): el programa puede preguntar si guardar. Solo «cerrá esto».
+    "window_close": ("cerré", "cerrar"),
 }
+WM_CLOSE = 0x0010
 VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
 
 
@@ -443,12 +471,22 @@ def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = No
         raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
     if accion == "window_focus":
         elegidas = elegidas[:1]
+    if accion == "window_close":
+        if clave not in ACTIVA:
+            raise ErrorVentana("Por nombre cierro programas enteros («cerrá Discord»); una sola ventana, "
+                               "señalándola: «cerrá esto».")
+        if len(elegidas) > 1:
+            raise ErrorVentana("Cierro de a una ventana: señalala y decí «cerrá esto».")
+        if elegidas[0].pid == propio:
+            raise ErrorVentana("A mí no me cierro así: usá la X de mi ventana o el menú de la bandeja.")
     if mostrar is None:
         user32 = _user32()
 
         def mostrar(ventana: Ventana, comando: int | None) -> bool:
             if comando is None:
                 return enfocar(ventana.hwnd, user32)
+            if comando == "cerrar":
+                return bool(user32.PostMessageW(ventana.hwnd, WM_CLOSE, 0, 0))
             user32.ShowWindow(ventana.hwnd, comando)
             return True
 
