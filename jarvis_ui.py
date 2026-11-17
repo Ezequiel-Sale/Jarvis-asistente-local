@@ -573,7 +573,8 @@ class JarvisUIMixin:
             self.speaker_strictness_button.pack(side="left", padx=(8, 0))
             self._refresh_speaker_buttons()
             marco = fila("Gestos con la mano",
-                         "Índice: puntero; pellizco corto: clic; sostenido: arrastrar. Dos dedos arriba o abajo: "
+                         "Índice: puntero; pellizco corto: clic; sostenido: arrastrar; abrir el pulgar en L: clic "
+                         "derecho. Dos dedos arriba o abajo: "
                          "scroll. Mano abierta quieta: play/pausa; deslizarla a un costado: atrás/adelante. Pulgar "
                          "arriba/abajo: confirma o cancela lo que Jarvis pregunta (o sube/baja el volumen). Puño: "
                          "suelta todo. Las imágenes no se guardan; en modo juego la cámara se cierra. También: "

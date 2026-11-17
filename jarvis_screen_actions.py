@@ -319,6 +319,7 @@ def buscar_por_vision(imagen, monitor, consulta: str, *, escribir: bool = False)
 
 _INPUT_MOUSE, _INPUT_KEYBOARD = 0, 1
 _MOUSEEVENTF_MOVE, _MOUSEEVENTF_LEFTDOWN, _MOUSEEVENTF_LEFTUP = 0x0001, 0x0002, 0x0004
+_MOUSEEVENTF_RIGHTDOWN, _MOUSEEVENTF_RIGHTUP = 0x0008, 0x0010
 _MOUSEEVENTF_VIRTUALDESK, _MOUSEEVENTF_ABSOLUTE = 0x4000, 0x8000
 _SM_XVIRTUALSCREEN, _SM_YVIRTUALSCREEN, _SM_CXVIRTUALSCREEN, _SM_CYVIRTUALSCREEN = 76, 77, 78, 79
 _KEYEVENTF_UNICODE, _KEYEVENTF_KEYUP = 0x0004, 0x0002
@@ -451,16 +452,22 @@ def mover_rapido(x: int, y: int, user32=None) -> bool:
     return bool(user32.SetCursorPos(int(x), int(y)))
 
 
-ACCIONES_BOTON = ("click", "down", "up")
+ACCIONES_BOTON = ("click", "down", "up", "right_click")
 
 
 def boton_raton(action: str, x: int, y: int, *, user32=None, pausa: float = 0.03) -> str:
     """Botón izquierdo en (x, y): ``click`` (apretar y soltar), ``down`` (empezar a arrastrar) o
-    ``up`` (soltar). Lo usa el pellizco de los gestos (herramienta ``gesture_click``)."""
+    ``up`` (soltar); ``right_click``: el botón derecho. Lo usa el pellizco de los gestos
+    (herramienta ``gesture_click``)."""
     if action not in ACCIONES_BOTON:
         raise ValueError(f"Acción de botón no válida: {action}.")
     user32 = user32 or ctypes.WinDLL("user32", use_last_error=True)
     mover_rapido(x, y, user32)
+    if action == "right_click":
+        _enviar_raton(user32, _MOUSEEVENTF_RIGHTDOWN)
+        time.sleep(pausa)
+        _enviar_raton(user32, _MOUSEEVENTF_RIGHTUP)
+        return "Hice clic derecho."
     if action in ("click", "down"):
         _enviar_raton(user32, _MOUSEEVENTF_LEFTDOWN)
     if action == "click":

@@ -260,6 +260,42 @@ class PointerTests(unittest.TestCase):
         self.assertEqual([a[0] for a in acciones].count("click"), 1)
         self.assertTrue(any("Clic con gestos" in linea and "1.5 cm" in linea for linea in registro.output))
 
+    @staticmethod
+    def _ele(puntos):
+        """Apuntando con el índice y el pulgar abierto hacia el costado (L)."""
+        p = list(puntos)
+        base = p[2]
+        p[3], p[4] = (base[0] - 0.08, base[1] - 0.01), (base[0] - 0.18, base[1] - 0.02)
+        return p
+
+    def test_l_shape_is_its_own_gesture(self) -> None:
+        self.assertEqual(g.clasificar(self._ele(apuntando())), "ele")
+        self.assertEqual(g.clasificar(apuntando()), "indice")  # el pulgar al costado de siempre, no
+        self.assertEqual(g.clasificar(mano(("indice",))), "indice")
+
+    def test_l_is_right_click_once(self) -> None:
+        """2026-11-17: faltaba el clic derecho (tocar el medio con el pulgar salía como pellizco)."""
+        p = g.Puntero(MONITOR_1)
+        acciones = []
+        cuadros = ([("indice", apuntando())] * 6 + [("ele", self._ele(apuntando()))] * 10
+                   + [("indice", apuntando())] * 3 + [("ele", self._ele(apuntando()))] * 3)
+        for i, (estable, puntos) in enumerate(cuadros):
+            acciones += p.actualizar(estable, puntos, i * 0.04)
+        botones = [a for a in acciones if a[0] != "mover"]
+        self.assertEqual([a[0] for a in botones], ["right_click", "right_click"])  # una por cada L
+        self.assertTrue(p.armado)  # la L no suelta el puntero
+
+    def test_l_never_arms_the_pointer(self) -> None:
+        self.assertEqual(g.Puntero(MONITOR_1).actualizar("ele", self._ele(apuntando()), 0.0), [])
+
+    def test_right_click_button(self) -> None:
+        import jarvis_screen_actions as acciones
+
+        user32 = Mock()
+        with patch("jarvis_screen_actions.mover_rapido"), patch("jarvis_screen_actions._enviar_raton") as enviar:
+            self.assertEqual(acciones.boton_raton("right_click", 10, 20, user32=user32, pausa=0), "Hice clic derecho.")
+        self.assertEqual([c.args[1] for c in enviar.call_args_list], [0x0008, 0x0010])
+
     def test_too_short_or_moving_pinch_is_not_a_click(self) -> None:
         # Dos cuadros de ruido: se detecta y se suelta enseguida (menos de CLIC_MINIMO).
         cuadros = [("indice", apuntando())] * 6 + [("indice", apuntando(pellizco=True))] * 2 + \
@@ -868,9 +904,13 @@ class HandSideTests(unittest.TestCase):
         for nivel in range(1, 11):
             with self.subTest(nivel=nivel):
                 zona = g.zona_con_sensibilidad(nivel)
-                x, y = g.a_pantalla(cx, cy, MONITOR_1, zona)
-                self.assertLessEqual(abs(x - 960) + abs(y - 540), 2)  # la mano de frente: el centro
+                x, _y = g.a_pantalla(cx, cy, MONITOR_1, zona)
+                self.assertLessEqual(abs(x - 960), 2)  # la mano de frente: al medio a lo ancho
                 self.assertTrue(0.0 <= zona[0] < zona[2] <= 1.0 and 0.0 <= zona[1] < zona[3] <= 1.0)
+                # 2026-11-17: con sensibilidad 1 no se llegaba al tope del monitor (la zona empezaba en
+                # 0,14 y la palma no sube de ~0,30 sin que el dedo salga de la imagen).
+                self.assertGreaterEqual(zona[1], g.ALCANCE_PALMA[1])
+                self.assertEqual(g.a_pantalla(cx, g.ALCANCE_PALMA[1], MONITOR_1, zona)[1], 0)
 
     def test_right_hand_is_what_mediapipe_calls_left(self) -> None:
         """2026-11-16: con «derecha» → «Right» no seguía la mano derecha (el log: «se sigue Left»)."""

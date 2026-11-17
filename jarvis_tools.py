@@ -637,8 +637,8 @@ def crear_registro_herramientas(
     registry.register(
         "gesture_click",
         (
-            "Botón izquierdo del mouse en un punto (action: click, down para empezar a arrastrar, "
-            "up para soltar). Solo la usa el pellizco de los gestos con la mano."
+            "Botón del mouse en un punto (action: click, down para empezar a arrastrar, up para "
+            "soltar, right_click para el botón derecho). Solo la usan los pellizcos de los gestos con la mano."
         ),
         {
             "type": "object",

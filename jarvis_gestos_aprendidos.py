@@ -31,7 +31,7 @@ MINIMO_MUESTRAS = 15  # cuadros con la mano para aceptar una grabación (~0,6 s 
 SEGUNDOS_GRABACION = 2.5
 # Gestos que Jarvis ya usa para algo: si la forma grabada cae casi siempre en uno de estos, no se
 # acepta (y nunca se buscan aprendidos cuando el cuadro es uno de estos).
-NUCLEO = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "pulgar_arriba", "pulgar_abajo")
+NUCLEO = ("indice", "ele", "dos_dedos", "pellizco", "puno", "mano_abierta", "pulgar_arriba", "pulgar_abajo")
 # Distancia: raíz del promedio de los cuadrados de lo que se separa cada uno de los 20 puntos, en
 # «palmas» (muñeca → base del dedo medio). Un dedo entero distinto da ~0,27; el temblor de MediaPipe,
 # ~0,03–0,06. El umbral de cada gesto sale de su propia grabación (3× lo que varían sus muestras),

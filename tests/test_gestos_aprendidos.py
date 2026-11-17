@@ -108,6 +108,17 @@ class ThumbDownTests(unittest.TestCase):
         self.assertEqual(g.clasificar(llamame()), "llamame")  # el 🤙 de verdad sigue andando
 
 
+class RealLTests(unittest.TestCase):
+    def test_measured_values(self) -> None:
+        """2026-11-17: la L del usuario (~0,66–0,79) no pasaba con 0,75; apuntando normal, hasta 0,56."""
+        with patch("jarvis_gestos.medidas_ele", return_value=(0.66, 72.0)):
+            self.assertTrue(g.pulgar_en_ele(None, 1.0))
+        with patch("jarvis_gestos.medidas_ele", return_value=(0.56, 80.0)):
+            self.assertFalse(g.pulgar_en_ele(None, 1.0))
+        with patch("jarvis_gestos.medidas_ele", return_value=(0.9, 20.0)):  # pulgar abierto pero pegado al índice
+            self.assertFalse(g.pulgar_en_ele(None, 1.0))
+
+
 class FingerprintTests(unittest.TestCase):
     def test_same_shape_anywhere_is_close(self) -> None:
         """Ni la posición, ni la distancia a la cámara, ni el giro cambian la huella."""

@@ -32,7 +32,7 @@ MODELO = "hand_landmarker.task"
 TAMANO_MODELO = 7_819_105  # bytes (verificado al descargarlo)
 
 GESTOS = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "pulgar_arriba", "pulgar_abajo",
-          "cuernos", "llamame", "ok", "cuatro_dedos", "vulcano", "otro")
+          "cuernos", "llamame", "ok", "cuatro_dedos", "vulcano", "ele", "otro")
 # Fase 5: gestos que el usuario asigna a una rutina, una frase o un atajo de teclado. «paz» no es una
 # clase de ``clasificar``: es «dos dedos» separados en V y con la mano quieta (lo detecta ``Atajos``),
 # para no romper el scroll con dos dedos.
@@ -42,13 +42,14 @@ NOMBRES = {
     "indice": "índice", "dos_dedos": "dos dedos · scroll", "pellizco": "pellizco", "puno": "puño",
     "mano_abierta": "mano abierta", "pulgar_arriba": "pulgar arriba", "pulgar_abajo": "pulgar abajo",
     "cuernos": "cuernos", "llamame": "llamame", "ok": "OK", "paz": "paz", "otro": "otro",
-    "cuatro_dedos": "cuatro dedos", "vulcano": "saludo vulcano",
+    "cuatro_dedos": "cuatro dedos", "vulcano": "saludo vulcano", "ele": "L · clic derecho",
 }
 
 # Índices de MediaPipe: 0 muñeca; pulgar 1–4; índice 5–8; medio 9–12; anular 13–16; meñique 17–20.
 MUNECA = 0
 PUNTA_PULGAR = 4
 BASE_INDICE, MEDIO_INDICE, PUNTA_INDICE = 5, 6, 8
+PUNTA_MEDIO = 12
 DEDOS = {"indice": (6, 8), "medio": (10, 12), "anular": (14, 16), "menique": (18, 20)}  # (articulación, punta)
 
 ESTIRADO = 1.15  # la punta, más lejos de la muñeca que la articulación media por este factor
@@ -129,6 +130,31 @@ def es_vulcano(puntos: Sequence[Punto], tamano: float) -> bool:
     return hueco >= VULCANO_HUECO and hueco >= VULCANO_FACTOR * max(m["indice_medio"], m["anular_menique"])
 
 
+ELE_ANGULO = (55.0, 135.0)  # grados entre el pulgar y el índice para la L
+# Punta del pulgar–nudillo del índice / tamaño de la mano para la L. 2026-11-17: con 0,75 (el del 👍)
+# la L del usuario no pasaba (en su captura ~0,79 con la mano de frente, menos girándola); apuntando
+# normal el log midió 0,10–0,56.
+ELE_PULGAR = 0.62
+
+
+def medidas_ele(puntos: Sequence[Punto], tamano: float) -> tuple[float, float]:
+    """(apertura del pulgar / tamaño de la mano, ángulo pulgar–índice en grados)."""
+    apertura = _distancia(puntos[PUNTA_PULGAR], puntos[BASE_INDICE]) / tamano
+    pulgar = (puntos[PUNTA_PULGAR][0] - puntos[2][0], puntos[PUNTA_PULGAR][1] - puntos[2][1])
+    indice = (puntos[PUNTA_INDICE][0] - puntos[BASE_INDICE][0], puntos[PUNTA_INDICE][1] - puntos[BASE_INDICE][1])
+    largo = math.hypot(*pulgar) * math.hypot(*indice)
+    if largo < 1e-9:
+        return apertura, 0.0
+    coseno = max(-1.0, min(1.0, (pulgar[0] * indice[0] + pulgar[1] * indice[1]) / largo))
+    return apertura, math.degrees(math.acos(coseno))
+
+
+def pulgar_en_ele(puntos: Sequence[Punto], tamano: float) -> bool:
+    """El pulgar bien abierto y en ángulo con el índice (la L del clic derecho)."""
+    apertura, angulo = medidas_ele(puntos, tamano)
+    return apertura >= ELE_PULGAR and ELE_ANGULO[0] <= angulo <= ELE_ANGULO[1]
+
+
 MENIQUE_LARGO = 0.55  # punta del meñique–su nudillo / tamaño de la mano: menos, está doblado o pegado
 
 
@@ -160,7 +186,7 @@ def clasificar(puntos: Sequence[Punto]) -> str:
         pulgar = sentido_pulgar(puntos, tamano)
         return pulgar or "puno"
     if estirados == {"indice"}:
-        return "indice"
+        return "ele" if pulgar_en_ele(puntos, tamano) else "indice"
     if estirados == {"indice", "medio"}:
         return "dos_dedos"
     if len(estirados) == 4:
@@ -341,15 +367,23 @@ def nivel_sensibilidad(valor) -> int:
 
 
 def zona_con_sensibilidad(nivel, zona=ZONA_PUNTERO) -> tuple[float, float, float, float]:
-    """``zona`` agrandada (o igual) alrededor de su centro, sin salirse de la imagen."""
+    """``zona`` agrandada (o igual) alrededor de su centro, sin salirse de lo que la palma alcanza."""
     escala = 1.0 + (SENSIBILIDAD_MAXIMA - nivel_sensibilidad(nivel)) * PASO_SENSIBILIDAD
     if escala == 1.0:
         return tuple(zona)
     izquierda, arriba, derecha, abajo = zona
     cx, cy = (izquierda + derecha) / 2, (arriba + abajo) / 2
     medio_ancho, medio_alto = (derecha - izquierda) / 2 * escala, (abajo - arriba) / 2 * escala
-    return (max(0.0, cx - medio_ancho), max(0.0, cy - medio_alto),
-            min(1.0, cx + medio_ancho), min(1.0, cy + medio_alto))
+    tope_izquierda, tope_arriba, tope_derecha, tope_abajo = ALCANCE_PALMA
+    return (max(tope_izquierda, cx - medio_ancho), max(min(arriba, tope_arriba), cy - medio_alto),
+            min(tope_derecha, cx + medio_ancho), min(tope_abajo, cy + medio_alto))
+
+
+# Hasta dónde puede llegar el centro de la palma apuntando con el índice [2026-11-17]: con la palma
+# más arriba de ~0,30 la punta del dedo ya sale de la imagen (captura del usuario: palma en 0,31 y la
+# punta tocando el borde). Con sensibilidad 1 la zona empezaba en 0,14 y no se llegaba al tope del
+# monitor: la zona agrandada se recorta a esto (por arriba, sobre todo).
+ALCANCE_PALMA = (0.10, 0.30, 0.90, 0.85)
 
 
 # Centro de la palma: muñeca y los cuatro nudillos. Un solo punto (el nudillo del índice) temblaba
@@ -412,6 +446,8 @@ class Puntero:
     # salir lo sigue (apenas BANDA px detrás).
     BANDA = 10.0
     HISTORIAL = 5  # cuadros (~200 ms): el clic va donde estaba el puntero antes de acercar el pulgar
+    # Clic derecho [2026-11-17]: apuntando con el índice, abrir el pulgar en L (gesto «ele»). Primero
+    # se probó tocar la punta del medio con el pulgar, pero salía como el pellizco del índice.
 
     def __init__(self, monitor, zona=ZONA_PUNTERO) -> None:
         self.monitor = monitor
@@ -438,6 +474,7 @@ class Puntero:
         self._crudo_desde: tuple[int, int] | None = None  # dónde estaba la mano al empezar el pellizco
         self._minima = math.inf  # distancia mínima pulgar–índice durante el pellizco (log)
         self.descartados = 0  # pellizcos que no fueron clic (muy cortos o con la mano en movimiento)
+        self._ele_hecho = False  # ya se hizo el clic derecho de esta L (otro: volver a apuntar)
 
     def _medir(self, crudo: tuple[int, int], filtrado: tuple[int, int]) -> None:
         if self._crudo is not None and self._filtrado is not None:
@@ -461,6 +498,7 @@ class Puntero:
         self._pos = self._crudo = self._filtrado = self._ancla = None
         self._historial, self._saltos_crudos, self._saltos_filtrados = [], [], []
         self._congelados = self._sin_mano = 0
+        self._ele_hecho = False
         return acciones
 
     def soltar(self) -> list[tuple]:
@@ -469,7 +507,7 @@ class Puntero:
 
     # Con el puntero ya armado, estos gestos estables lo mantienen («otro»: el dedo medio un poco
     # abierto, un cuadro raro). Solo lo sueltan puño, mano abierta, dos dedos o perder la mano.
-    SIGUE_ARMADO = ("indice", "pellizco", "ok", "otro")  # «ok»: pellizco con los otros dedos abiertos
+    SIGUE_ARMADO = ("indice", "pellizco", "ok", "otro", "ele")  # «ok»: pellizco con los otros dedos abiertos
 
     def _con_banda(self, fx: float, fy: float) -> tuple[int, int]:
         """El ancla solo se mueve cuando el punto filtrado sale del radio ``BANDA``: el temblor de la
@@ -484,15 +522,30 @@ class Puntero:
                 self._ancla = (self._ancla[0] + dx * k, self._ancla[1] + dy * k)
         return round(self._ancla[0]), round(self._ancla[1])
 
-    def _distancia_pellizco(self, puntos: Sequence[Punto], mundo) -> tuple[float, float, float, float, str]:
-        """(distancia, acerca, cierra, abre, unidad): en metros con los puntos 3D; si no, relación."""
+    def _distancia_pellizco(self, puntos: Sequence[Punto], mundo,
+                            dedo: int = PUNTA_INDICE) -> tuple[float, float, float, float, str]:
+        """(distancia, acerca, cierra, abre, unidad) del pulgar a la punta de ``dedo``: en metros
+        con los puntos 3D; si no, relación con el tamaño de la mano."""
         if mundo is not None and len(mundo) >= 21:
-            a, b = mundo[PUNTA_PULGAR], mundo[PUNTA_INDICE]
+            a, b = mundo[PUNTA_PULGAR], mundo[dedo]
             d = math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
             return d, self.ACERCA_M, self.CIERRA_M, self.ABRE_M, "m"
         tamano = _distancia(puntos[MUNECA], puntos[9]) or 1e-6
-        return (_distancia(puntos[PUNTA_PULGAR], puntos[PUNTA_INDICE]) / tamano,
+        return (_distancia(puntos[PUNTA_PULGAR], puntos[dedo]) / tamano,
                 self.ACERCA, self.CIERRA, self.ABRE, "relación")
+
+    def _clic_derecho(self, estable: str | None, x: int, y: int) -> list[tuple]:
+        """Apuntando, abrir el pulgar en L: ``("right_click", x, y)`` una vez, donde apuntabas.
+        Para otro, volver a apuntar con el pulgar recogido."""
+        if estable != "ele":
+            self._ele_hecho = False
+            return []
+        if self._ele_hecho or self._pellizco or self.arrastrando:
+            return []
+        self._ele_hecho = True
+        donde = self._historial[0] if self._historial else (self._pos or (x, y))
+        logging.info("Clic derecho con gestos (L con el pulgar).")
+        return [("right_click", *donde)]
 
     def actualizar(self, estable: str | None, puntos: Sequence[Punto] | None, ahora: float,
                    mundo=None) -> list[tuple]:
@@ -517,6 +570,13 @@ class Puntero:
         if self._pellizco:
             self._minima = min(self._minima, razon)
         quiere = razon < cierra if not self._pellizco else razon < abre
+        # 2026-11-17: al tocar la punta del medio (clic derecho) el pulgar también quedaba a menos de
+        # 3 cm de la punta del índice y salía un clic izquierdo. Si el pulgar está más cerca del medio
+        # que del índice, no es el pellizco del índice (salvo que ya estuviera pellizcando).
+        if quiere and not self._pellizco:
+            medio = self._distancia_pellizco(puntos, mundo, PUNTA_MEDIO)[0]
+            if medio < razon:
+                quiere = False
         self._cuenta = self._cuenta + 1 if quiere != self._pellizco else 0
         if self._cuenta >= self.CUADROS:
             self._pellizco, self._cuenta = quiere, 0
@@ -543,12 +603,14 @@ class Puntero:
                                      duracion * 1000, minima, movimiento)
                 self._desde, self._donde, self._crudo_desde = None, None, None
 
+        acciones += self._clic_derecho(estable, x, y)
         if self._pellizco and not self.arrastrando and self._desde is not None \
                 and ahora - self._desde >= self.CLIC_MAXIMO:
             acciones.append(("down", *self._donde))
             self.arrastrando = True
         # Quieto mientras el pulgar se acerca o pellizca (salvo arrastrando).
-        congelado = not self.arrastrando and (self._pellizco or razon < acerca)
+        # También con la L del clic derecho (abrir el pulgar no debe mover el puntero).
+        congelado = not self.arrastrando and (self._pellizco or razon < acerca or estable == "ele")
         if congelado:
             self._congelados += 1
         if not congelado and (self._pos is None or abs(x - self._pos[0]) + abs(y - self._pos[1])
@@ -833,6 +895,7 @@ class DetectorGestos(threading.Thread):
         # Fase 6: gestos enseñados (la app los reemplaza al enseñar o borrar uno).
         self.aprendidos = aprendidos.Aprendidos()
         self._grabacion: dict | None = None  # {"hasta", "muestras", "clases"} mientras se graba uno
+        self._pulgar_max: tuple[float, float] | None = None  # apuntando: el pulgar más abierto (log)
 
     def grabar(self, segundos: float = aprendidos.SEGUNDOS_GRABACION) -> None:
         """Empieza a juntar huellas de la mano; al terminar publica ``("gesture_recorded", muestras,
@@ -967,6 +1030,13 @@ class DetectorGestos(threading.Thread):
                 cambio = estabilizador.agregar(gesto)
                 if cambio is not False:
                     self._publicar_gesto(cambio)
+                    if self._pulgar_max is not None and cambio != "indice":
+                        # Al dejar de apuntar: cuánto llegó a abrirse el pulgar (para afinar la L).
+                        apertura, angulo = self._pulgar_max
+                        logging.info("Gestos: apuntando, el pulgar se abrió hasta %.2f del tamaño a %.0f° del "
+                                     "índice (la L pide %.2f y %.0f–%.0f°); ahora %s.", apertura, angulo,
+                                     ELE_PULGAR, *ELE_ANGULO, cambio)
+                        self._pulgar_max = None
                     if puntos and cambio in ("llamame", "pulgar_arriba", "pulgar_abajo", "puno"):
                         tamano = _distancia(puntos[MUNECA], puntos[9]) or 1e-6
                         logging.info("Gestos: %s (meñique %.2f del tamaño; hace falta %.2f para 🤙).", cambio,
@@ -976,6 +1046,10 @@ class DetectorGestos(threading.Thread):
                         tamano = _distancia(puntos[MUNECA], puntos[9]) or 1e-6
                         logging.info("Gestos: %s con cuatro dedos (%s).", cambio, ", ".join(
                             f"{k} {v:.2f}" for k, v in medidas_cuatro_dedos(puntos, tamano).items()))
+                if estabilizador.actual == "indice" and puntos:
+                    medida = medidas_ele(puntos, _distancia(puntos[MUNECA], puntos[9]) or 1e-6)
+                    if self._pulgar_max is None or medida[0] > self._pulgar_max[0]:
+                        self._pulgar_max = medida
                 self._desplazar(estabilizador.actual, gesto, puntos)
                 self._apuntar(estabilizador.actual, puntos, mundo)
                 self._atajos(estabilizador.actual, puntos, gesto)
