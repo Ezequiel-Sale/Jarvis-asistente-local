@@ -625,6 +625,14 @@ class JarvisUIMixin:
                 self.custom_gesture_labels[gesto] = etiqueta
                 self._ui_button(renglon, "ASIGNAR", lambda g=gesto: self._assign_custom_gesture(g),
                                 fg=CYAN).pack(side="right")
+            # Fase 6: gestos enseñados por el usuario (filas que se rehacen al enseñar o borrar uno).
+            tk.Label(propios, text="Tus gestos enseñados:", bg=PANEL, fg=MUTED,
+                     font=("Consolas", 8, "bold")).pack(anchor="w", pady=(10, 2))
+            self.learned_gestures_frame = tk.Frame(propios, bg=PANEL)
+            self.learned_gestures_frame.pack(fill="x")
+            self._ui_button(propios, "✋  ENSEÑAR UN GESTO", self._teach_gesture, fg=CYAN).pack(anchor="w",
+                                                                                              pady=(6, 0))
+            self._refresh_learned_gestures()
             tk.Label(propios, text="Últimos gestos:", bg=PANEL, fg=MUTED,
                      font=("Consolas", 8, "bold")).pack(anchor="w", pady=(10, 2))
             self.gesture_history_label = tk.Label(propios, text="", bg=PANEL, fg=MUTED, justify="left",

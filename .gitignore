@@ -37,6 +37,7 @@ whisper-onnx/
 speaker-onnx/
 gestos-modelo/
 huella_voz.json
+gestos_aprendidos.json
 piper-voices/
 ollama-data/
 *.onnx

@@ -25,12 +25,14 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import jarvis_gestos_aprendidos as aprendidos
+
 CARPETA_MODELO = "gestos-modelo"
 MODELO = "hand_landmarker.task"
 TAMANO_MODELO = 7_819_105  # bytes (verificado al descargarlo)
 
 GESTOS = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "pulgar_arriba", "pulgar_abajo",
-          "cuernos", "llamame", "ok", "otro")
+          "cuernos", "llamame", "ok", "cuatro_dedos", "vulcano", "otro")
 # Fase 5: gestos que el usuario asigna a una rutina, una frase o un atajo de teclado. «paz» no es una
 # clase de ``clasificar``: es «dos dedos» separados en V y con la mano quieta (lo detecta ``Atajos``),
 # para no romper el scroll con dos dedos.
@@ -40,6 +42,7 @@ NOMBRES = {
     "indice": "índice", "dos_dedos": "dos dedos · scroll", "pellizco": "pellizco", "puno": "puño",
     "mano_abierta": "mano abierta", "pulgar_arriba": "pulgar arriba", "pulgar_abajo": "pulgar abajo",
     "cuernos": "cuernos", "llamame": "llamame", "ok": "OK", "paz": "paz", "otro": "otro",
+    "cuatro_dedos": "cuatro dedos", "vulcano": "saludo vulcano",
 }
 
 # Índices de MediaPipe: 0 muñeca; pulgar 1–4; índice 5–8; medio 9–12; anular 13–16; meñique 17–20.
@@ -93,6 +96,47 @@ def sentido_pulgar(puntos: Sequence[Punto], tamano: float) -> str | None:
     return None
 
 
+PULGAR_EN_PALMA = 0.55  # punta del pulgar–base del medio o del anular / tamaño: menos, está en la palma
+PULGAR_PEGADO = 0.30  # punta del pulgar–nudillo del índice / tamaño: menos, pegado al costado
+VULCANO_HUECO = 0.30  # separación medio–anular / tamaño: al menos esto…
+VULCANO_FACTOR = 1.35  # …y este factor más que las otras dos (2026-11-17: con 1,8 el 🖖 real no pasaba)
+
+
+def medidas_cuatro_dedos(puntos: Sequence[Punto], tamano: float) -> dict[str, float]:
+    """Para el log y para afinar: dónde está el pulgar y cómo se separan las puntas."""
+    punta = puntos[PUNTA_PULGAR]
+    return {
+        "pulgar_medio": _distancia(punta, puntos[9]) / tamano,
+        "pulgar_anular": _distancia(punta, puntos[13]) / tamano,
+        "pulgar_indice": _distancia(punta, puntos[BASE_INDICE]) / tamano,
+        "indice_medio": _distancia(puntos[PUNTA_INDICE], puntos[12]) / tamano,
+        "medio_anular": _distancia(puntos[12], puntos[16]) / tamano,
+        "anular_menique": _distancia(puntos[16], puntos[20]) / tamano,
+    }
+
+
+def pulgar_escondido(puntos: Sequence[Punto], tamano: float) -> bool:
+    """El pulgar recogido sobre la palma (o pegado al índice), no abierto al costado."""
+    m = medidas_cuatro_dedos(puntos, tamano)
+    return (min(m["pulgar_medio"], m["pulgar_anular"]) < PULGAR_EN_PALMA
+            or m["pulgar_indice"] < PULGAR_PEGADO)
+
+
+def es_vulcano(puntos: Sequence[Punto], tamano: float) -> bool:
+    """🖖: índice y medio juntos, anular y meñique juntos, y un hueco entre el medio y el anular."""
+    m = medidas_cuatro_dedos(puntos, tamano)
+    hueco = m["medio_anular"]
+    return hueco >= VULCANO_HUECO and hueco >= VULCANO_FACTOR * max(m["indice_medio"], m["anular_menique"])
+
+
+MENIQUE_LARGO = 0.55  # punta del meñique–su nudillo / tamaño de la mano: menos, está doblado o pegado
+
+
+def menique_bien_estirado(puntos: Sequence[Punto], tamano: float) -> bool:
+    """El meñique afuera de verdad (🤙), no apenas despegado de la mano cerrada."""
+    return _distancia(puntos[20], puntos[17]) / tamano >= MENIQUE_LARGO
+
+
 def clasificar(puntos: Sequence[Punto]) -> str:
     """Gesto de una mano a partir de sus 21 puntos (x, y normalizados)."""
     if len(puntos) < 21:
@@ -100,7 +144,11 @@ def clasificar(puntos: Sequence[Punto]) -> str:
     muneca = puntos[MUNECA]
     tamano = _distancia(muneca, puntos[9]) or 1e-6  # muñeca → base del dedo medio
     estirados = dedos_estirados(puntos)
-    juntos = _distancia(puntos[PUNTA_PULGAR], puntos[PUNTA_INDICE]) / tamano < PELLIZCO
+    if estirados == {"menique"} and not menique_bien_estirado(puntos, tamano):
+        # 2026-11-17: sosteniendo 👎 (meñique pegado) el meñique pasaba apenas la regla y salía
+        # «llamame»; si no está estirado de verdad, la mano cuenta como cerrada (pulgares o puño).
+        estirados = set()
+    juntos =_distancia(puntos[PUNTA_PULGAR], puntos[PUNTA_INDICE]) / tamano < PELLIZCO
     # En el puño el pulgar también queda cerca del índice: es pellizco solo si el índice no está
     # enroscado del todo (su punta, más lejos de la muñeca que su nudillo).
     indice_abierto = _distancia(muneca, puntos[PUNTA_INDICE]) > _distancia(muneca, puntos[BASE_INDICE]) * 1.1
@@ -116,6 +164,12 @@ def clasificar(puntos: Sequence[Punto]) -> str:
     if estirados == {"indice", "medio"}:
         return "dos_dedos"
     if len(estirados) == 4:
+        # 2026-11-17: con los cuatro dedos estirados todo era «mano abierta» (play/pausa), así que
+        # 🖖 o cuatro dedos con el pulgar escondido no se podían enseñar (fase 6).
+        if es_vulcano(puntos, tamano):
+            return "vulcano"
+        if pulgar_escondido(puntos, tamano):
+            return "cuatro_dedos"
         return "mano_abierta"
     if estirados == {"indice", "menique"}:
         return "cuernos"
@@ -581,7 +635,7 @@ class Atajos:
 
     def _propio_actual(self, estable: str | None, puntos, ahora: float) -> str | None:
         """Qué gesto propio se está haciendo (✌ = dos dedos en V y quietos)."""
-        if estable in ("cuernos", "llamame", "ok"):
+        if estable in ("cuernos", "llamame", "ok") or (estable or "").startswith("aprendido:"):
             self._paz = []
             return estable
         if estable == "dos_dedos" and puntos is not None and en_v(puntos):
@@ -776,6 +830,49 @@ class DetectorGestos(threading.Thread):
         self.mano = mano  # «Right», «Left» o None (cualquiera); la app la puede cambiar en marcha
         self._mano_vista: str | None = None  # para el log: qué mano se vio por última vez
         self.atajos = Atajos()
+        # Fase 6: gestos enseñados (la app los reemplaza al enseñar o borrar uno).
+        self.aprendidos = aprendidos.Aprendidos()
+        self._grabacion: dict | None = None  # {"hasta", "muestras", "clases"} mientras se graba uno
+
+    def grabar(self, segundos: float = aprendidos.SEGUNDOS_GRABACION) -> None:
+        """Empieza a juntar huellas de la mano; al terminar publica ``("gesture_recorded", muestras,
+        clases)``. Mientras dura no se hace ninguna acción con la mano (ni puntero ni atajos)."""
+        self._grabacion = {"hasta": time.monotonic() + segundos, "muestras": [], "clases": []}
+
+    def _reconocer(self, gesto: str | None, puntos, mundo) -> str | None:
+        """Un gesto enseñado, si el cuadro no es uno de los que Jarvis ya usa."""
+        if gesto is None or gesto in aprendidos.NUCLEO or not self.aprendidos:
+            return gesto
+        if self.puntero is not None and self.puntero.armado:
+            return gesto  # apuntando, un cuadro «otro» no debe soltar el puntero por parecerse a uno
+        encontrado = self.aprendidos.reconocer(aprendidos.huella_mano(puntos, mundo))
+        return f"aprendido:{encontrado}" if encontrado else gesto
+
+    def _seguir_grabando(self, gesto: str | None, puntos, mundo) -> bool:
+        """True mientras se graba un gesto (el cuadro no se usa para nada más)."""
+        grabacion = self._grabacion
+        if grabacion is None:
+            return False
+        if puntos:
+            huella = aprendidos.huella_mano(puntos, mundo)
+            if huella is not None:
+                grabacion["muestras"].append(huella)
+                grabacion["clases"].append(gesto or "otro")
+                if len(dedos_estirados(puntos)) == 4:
+                    tamano = _distancia(puntos[MUNECA], puntos[9]) or 1e-6
+                    grabacion.setdefault("medidas", []).append(medidas_cuatro_dedos(puntos, tamano))
+        if time.monotonic() >= grabacion["hasta"]:
+            self._grabacion = None
+            from collections import Counter
+
+            clases = ", ".join(f"{c} {n}" for c, n in Counter(grabacion["clases"]).most_common())
+            logging.info("Gesto grabado: %d cuadros con la mano (%s).", len(grabacion["muestras"]), clases or "—")
+            medidas = grabacion.get("medidas")
+            if medidas:  # para afinar mano abierta / cuatro dedos / 🖖 con la mano real
+                logging.info("Gesto grabado, cuatro dedos estirados (medianas / tamaño de la mano): %s.",
+                             ", ".join(f"{k} {_mediana([m[k] for m in medidas]):.2f}" for k in medidas[0]))
+            self.events.put(("gesture_recorded", grabacion["muestras"], grabacion["clases"]))
+        return True
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -861,9 +958,24 @@ class DetectorGestos(threading.Thread):
                     if mundos and len(mundos) > indice:
                         mundo = [(p.x, p.y, p.z) for p in mundos[indice]]  # metros
                 gesto = clasificar(puntos) if puntos else None
+                if self._seguir_grabando(gesto, puntos, mundo):
+                    self._soltar_puntero()
+                    if self.vista:
+                        self.ultima_imagen = dibujar(rgb, puntos, cv2)
+                    continue
+                gesto = self._reconocer(gesto, puntos, mundo)
                 cambio = estabilizador.agregar(gesto)
                 if cambio is not False:
                     self._publicar_gesto(cambio)
+                    if puntos and cambio in ("llamame", "pulgar_arriba", "pulgar_abajo", "puno"):
+                        tamano = _distancia(puntos[MUNECA], puntos[9]) or 1e-6
+                        logging.info("Gestos: %s (meñique %.2f del tamaño; hace falta %.2f para 🤙).", cambio,
+                                     _distancia(puntos[20], puntos[17]) / tamano, MENIQUE_LARGO)
+                    if puntos and len(dedos_estirados(puntos)) == 4:
+                        # Para afinar mano abierta / cuatro dedos / 🖖 con la mano real (solo al cambiar).
+                        tamano = _distancia(puntos[MUNECA], puntos[9]) or 1e-6
+                        logging.info("Gestos: %s con cuatro dedos (%s).", cambio, ", ".join(
+                            f"{k} {v:.2f}" for k, v in medidas_cuatro_dedos(puntos, tamano).items()))
                 self._desplazar(estabilizador.actual, gesto, puntos)
                 self._apuntar(estabilizador.actual, puntos, mundo)
                 self._atajos(estabilizador.actual, puntos, gesto)

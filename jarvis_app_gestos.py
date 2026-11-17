@@ -15,6 +15,7 @@ from tkinter import ttk
 
 import jarvis_core as core
 import jarvis_gestos
+import jarvis_gestos_aprendidos
 import jarvis_screen_actions
 import jarvis_vision
 from jarvis_theme import BG, BORDER, CYAN, ERROR, MUTED, PANEL, TEXT
@@ -61,6 +62,7 @@ class GestosMixin:
             al_atajo=lambda accion, repetida: self.events.put(("gesture_shortcut", accion, repetida)),
             mano=jarvis_gestos.MANOS[self._gesture_hand()],
             zona=jarvis_gestos.zona_con_sensibilidad(self._gesture_sensitivity()))
+        self.gesture_detector.aprendidos = jarvis_gestos_aprendidos.Aprendidos(self._learned_gestures())
         self.gesture_detector.start()
         return None
 
@@ -149,9 +151,13 @@ class GestosMixin:
                         import jarvis_audio_devices
 
                         actual = jarvis_audio_devices.obtener_volumen_sistema()
+                        nuevo = max(0, min(100, actual + accion[1]))
+                        # ``execute`` devuelve lo que da la herramienta y lanza si falla: llegar a la
+                        # línea siguiente ya es éxito (2026-11-17: se esperaba un ``exitosa`` y la barra
+                        # no salía nunca).
                         self.tool_registry.execute(
-                            "set_system_volume", {"percentage": max(0, min(100, actual + accion[1]))},
-                            confirmed=True, origin="gestos")
+                            "set_system_volume", {"percentage": nuevo}, confirmed=True, origin="gestos")
+                        self.events.put(("volume_bar", nuevo))  # la barra, en el hilo de Tk
                     else:  # click / down / up
                         self._set_pointer_target(accion[1], accion[2], saltar=True)
                         self.tool_registry.execute("gesture_click", {"action": accion[0], "x": accion[1],
@@ -360,6 +366,12 @@ class GestosMixin:
         """Hilo de Tk. Pulgares: con una confirmación abierta la aprueban o cancelan (la primera
         vez, no al repetirse); si no, cambian el volumen. Mano abierta quieta: play/pausa.
         Deslizar: atrás/adelante en el navegador. ``propio:…``: lo que el usuario asignó (fase 5)."""
+        ensenando = getattr(self, "_teach_window", None)
+        if ensenando is not None and ensenando.winfo_exists():
+            # 2026-11-17: preparando el 🖖, el gesto «cuatro dedos» ya enseñado disparó su rutina (y
+            # cambió los monitores en medio de la grabación). Con la ventana abierta, ningún atajo.
+            logging.info("Atajo con gestos ignorado (enseñando un gesto): %s.", accion)
+            return
         if accion.startswith("propio:"):
             self._run_custom_gesture(accion.split(":", 1)[1])
             return
@@ -388,6 +400,70 @@ class GestosMixin:
             self._set_status("✋ ATRÁS" if accion == "atras" else "✋ ADELANTE", CYAN)
         logging.info("Atajo con gestos: %s%s.", accion, " (repetido)" if repetida else "")
 
+    # --- Barra de volumen [2026-11-17] --------------------------------------------------------
+    # La barra de Windows (abajo al centro) solo aparece con las teclas de volumen; cambiándolo por
+    # la API de audio, como hace Jarvis, no (y apretar las teclas tampoco la mostró). Esta la imita.
+    BARRA_VOLUMEN_MS = 1600
+    _TRANSPARENTE = "#010203"
+
+    def _show_volume_bar(self, volumen: int) -> None:
+        """Hilo de Tk: barra flotante abajo al centro del monitor principal; se va sola."""
+        volumen = max(0, min(100, int(volumen)))
+        barra = getattr(self, "_volume_bar", None)
+        if barra is None or not barra.winfo_exists():
+            escala = self.root.winfo_fpixels("1i") / 96.0
+            ancho, alto = round(300 * escala), round(52 * escala)
+            barra = tk.Toplevel(self.root)
+            barra.overrideredirect(True)
+            barra.attributes("-topmost", True)
+            barra.configure(bg=self._TRANSPARENTE)
+            try:
+                barra.attributes("-transparentcolor", self._TRANSPARENTE)
+            except tk.TclError:
+                pass
+            lienzo = tk.Canvas(barra, width=ancho, height=alto, bg=self._TRANSPARENTE, highlightthickness=0, bd=0)
+            lienzo.pack()
+            radio = alto // 2
+            caja = (1, 1, ancho - 1, alto - 1)
+            self._rounded_rect(lienzo, caja, radio, fill=PANEL, outline=BORDER)
+            margen = round(18 * escala)
+            self._volume_bar_icon = lienzo.create_text(margen + round(10 * escala), alto // 2, text="🔊",
+                                                       fill=TEXT, font=("Segoe UI Emoji", 13))
+            izquierda = margen + round(34 * escala)
+            derecha = ancho - margen - round(40 * escala)
+            grosor = max(4, round(4 * escala))
+            self._volume_bar_track = (izquierda, alto // 2, derecha, grosor)
+            lienzo.create_line(izquierda, alto // 2, derecha, alto // 2, fill=BORDER, width=grosor,
+                               capstyle="round")
+            self._volume_bar_fill = lienzo.create_line(izquierda, alto // 2, izquierda, alto // 2, fill=CYAN,
+                                                       width=grosor, capstyle="round")
+            self._volume_bar_text = lienzo.create_text(ancho - margen, alto // 2, text="", fill=TEXT, anchor="e",
+                                                       font=("Segoe UI", 11, "bold"))
+            barra.update_idletasks()
+            x = (barra.winfo_screenwidth() - ancho) // 2
+            y = barra.winfo_screenheight() - alto - round(72 * escala)  # arriba de la barra de tareas
+            barra.geometry(f"{ancho}x{alto}+{max(0, x)}+{max(0, y)}")
+            self._volume_bar, self._volume_bar_canvas = barra, lienzo
+        lienzo = self._volume_bar_canvas
+        izquierda, medio, derecha, _grosor = self._volume_bar_track
+        lienzo.coords(self._volume_bar_fill, izquierda, medio, izquierda + (derecha - izquierda) * volumen / 100, medio)
+        lienzo.itemconfigure(self._volume_bar_fill, state="normal" if volumen else "hidden")
+        lienzo.itemconfigure(self._volume_bar_text, text=str(volumen))
+        lienzo.itemconfigure(self._volume_bar_icon, text="🔇" if volumen == 0 else "🔉" if volumen < 50 else "🔊")
+        barra.deiconify()
+        barra.lift()
+        anterior = getattr(self, "_volume_bar_hide", None)
+        if anterior is not None:
+            self.root.after_cancel(anterior)
+        self._volume_bar_hide = self.root.after(self.BARRA_VOLUMEN_MS, barra.withdraw)
+
+    @staticmethod
+    def _rounded_rect(lienzo, caja, radio, **opciones):
+        x1, y1, x2, y2 = caja
+        puntos = [x1 + radio, y1, x2 - radio, y1, x2, y1, x2, y1 + radio, x2, y2 - radio, x2, y2,
+                  x2 - radio, y2, x1 + radio, y2, x1, y2, x1, y2 - radio, x1, y1 + radio, x1, y1]
+        return lienzo.create_polygon(puntos, smooth=True, **opciones)
+
     # --- Fase 5: gestos propios -------------------------------------------------------------
     _PREFERENCIA_PROPIOS = "gestos_propios"
     TIPOS_PROPIOS = {"rutina": "Rutina", "frase": "Frase (como si se la dijeras)", "teclas": "Atajo de teclado"}
@@ -402,8 +478,20 @@ class GestosMixin:
         except Exception:
             logging.exception("No se pudieron leer los gestos propios.")
             return {}
-        return {g: d for g, d in datos.items() if g in jarvis_gestos.PROPIOS and isinstance(d, dict)
+        validos = set(jarvis_gestos.PROPIOS) | {f"aprendido:{g['id']}" for g in self._learned_gestures()}
+        return {g: d for g, d in datos.items() if g in validos and isinstance(d, dict)
                 and d.get("tipo") in self.TIPOS_PROPIOS and d.get("valor") not in (None, "")}
+
+    def _gesture_label(self, gesto: str | None) -> tuple[str, str]:
+        """(emoji, nombre) de cualquier gesto, también de los enseñados («aprendido:g1»)."""
+        if gesto and gesto.startswith("aprendido:"):
+            identificador = gesto.split(":", 1)[1]
+            ensenado = next((g for g in self._learned_gestures() if g["id"] == identificador), None)
+            if ensenado is not None:
+                return ensenado.get("emoji") or "✋", ensenado["nombre"]
+            return "✋", "gesto enseñado"
+        return (jarvis_gestos.EMOJIS.get(gesto or "", "✋"),
+                jarvis_gestos.NOMBRES.get(gesto or "", gesto or "sin mano"))
 
     def _save_custom_gesture(self, gesto: str, tipo: str | None, valor) -> None:
         datos = self._custom_gestures()
@@ -429,14 +517,14 @@ class GestosMixin:
 
     def _gesture_history_add(self, gesto: str, texto: str) -> None:
         historial = getattr(self, "_gesture_history", [])
-        historial.insert(0, f"{time.strftime('%H:%M:%S')}  {jarvis_gestos.EMOJIS.get(gesto, '✋')}  {texto}")
+        historial.insert(0, f"{time.strftime('%H:%M:%S')}  {self._gesture_label(gesto)[0]}  {texto}")
         self._gesture_history = historial[:self.HISTORIAL_GESTOS]
         self._refresh_custom_gestures()
 
     def _run_custom_gesture(self, gesto: str) -> None:
         """Hilo de Tk: hace lo que el usuario asignó a ese gesto propio."""
         asignacion = self._custom_gestures().get(gesto)
-        nombre = f"{jarvis_gestos.EMOJIS.get(gesto, '')} {jarvis_gestos.NOMBRES.get(gesto, gesto)}".strip()
+        nombre = " ".join(self._gesture_label(gesto)).strip()
         if asignacion is None:
             self._set_status(f"✋ {nombre.upper()}: SIN ASIGNAR (AJUSTES → GESTOS PROPIOS)", MUTED)
             self._gesture_history_add(gesto, "sin asignar")
@@ -455,6 +543,169 @@ class GestosMixin:
         else:  # frase: como si la escribieras en el chat
             self._send_text_as_typed(str(valor))
         self._gesture_history_add(gesto, self._describe_custom_gesture(asignacion))
+
+    # --- Fase 6: «enseñá tu gesto» -------------------------------------------------------
+    def _learned_gestures(self) -> list[dict]:
+        cache = getattr(self, "_learned_cache", None)
+        if cache is None:
+            try:
+                cache = jarvis_gestos_aprendidos.cargar(core.APP_DIR)
+            except Exception:
+                logging.exception("No se pudieron leer los gestos enseñados.")
+                cache = []
+            self._learned_cache = cache
+        return cache
+
+    def _save_learned_gestures(self, gestos: list[dict]) -> None:
+        jarvis_gestos_aprendidos.guardar(core.APP_DIR, gestos)
+        self._learned_cache = list(gestos)
+        detector = getattr(self, "gesture_detector", None)
+        if detector is not None:
+            detector.aprendidos = jarvis_gestos_aprendidos.Aprendidos(gestos)
+        self._refresh_learned_gestures()
+
+    def _delete_learned_gesture(self, identificador: str) -> None:
+        from tkinter import messagebox
+
+        gesto = next((g for g in self._learned_gestures() if g["id"] == identificador), None)
+        if gesto is None or not messagebox.askyesno(
+                "Borrar gesto", f"¿Borrar el gesto «{gesto['nombre']}»? Hay que volver a enseñarlo para usarlo.",
+                parent=self.root):
+            return
+        try:
+            self._save_learned_gestures([g for g in self._learned_gestures() if g["id"] != identificador])
+            self._save_custom_gesture(f"aprendido:{identificador}", None, None)
+        except Exception:
+            logging.exception("No se pudo borrar el gesto enseñado.")
+            return
+        logging.info("Gesto enseñado borrado: %s.", identificador)
+
+    CUENTA_GRABACION = 3  # s de cuenta regresiva antes de grabar
+
+    def _teach_gesture(self) -> None:
+        """Ventana: nombre (y emoji), cuenta regresiva y 2,5 s sosteniendo la forma."""
+        ventana = getattr(self, "_teach_window", None)
+        if ventana is not None and ventana.winfo_exists():
+            ventana.lift()
+            return
+        if len(self._learned_gestures()) >= jarvis_gestos_aprendidos.MAXIMO_GESTOS:
+            self._set_status(f"YA HAY {jarvis_gestos_aprendidos.MAXIMO_GESTOS} GESTOS ENSEÑADOS: BORRÁ ALGUNO", ERROR)
+            return
+        ventana = tk.Toplevel(self.root)
+        self._teach_window = ventana
+        ventana.title("Enseñá tu gesto")
+        ventana.configure(bg=BG)
+        ventana.transient(self.root)
+        ventana.attributes("-topmost", True)
+        ventana.geometry("500x360")
+        marco = tk.Frame(ventana, bg=PANEL, padx=20, pady=16, highlightthickness=1, highlightbackground=BORDER)
+        marco.pack(fill="both", expand=True, padx=14, pady=14)
+        tk.Label(marco, text="✋  Enseñá tu gesto", bg=PANEL, fg=CYAN, font=("Segoe UI", 16, "bold")).pack(anchor="w")
+        tk.Label(marco, text="Hacé una forma con la mano derecha que Jarvis no use (no el índice solo, dos dedos, "
+                 "pellizco, puño, mano abierta ni pulgares). Al grabar, sostenela de frente a la cámara y movela "
+                 "o girala apenas, para que la reconozca en distintas posiciones.", bg=PANEL, fg=MUTED,
+                 wraplength=440, justify="left", font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 10))
+        nombre = tk.StringVar()
+        emoji = tk.StringVar()
+        renglon = tk.Frame(marco, bg=PANEL)
+        renglon.pack(fill="x")
+        tk.Label(renglon, text="Nombre", bg=PANEL, fg=TEXT, font=("Segoe UI", 10)).pack(side="left")
+        entrada = tk.Entry(renglon, textvariable=nombre, bg=BG, fg=TEXT, insertbackground=TEXT, relief="flat",
+                           font=("Segoe UI", 10), width=22)
+        entrada.pack(side="left", padx=(8, 14), ipady=4)
+        tk.Label(renglon, text="Emoji (opcional)", bg=PANEL, fg=TEXT, font=("Segoe UI", 10)).pack(side="left")
+        tk.Entry(renglon, textvariable=emoji, bg=BG, fg=TEXT, insertbackground=TEXT, relief="flat",
+                 font=("Segoe UI Emoji", 10), width=4).pack(side="left", padx=(8, 0), ipady=4)
+        estado = tk.Label(marco, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 12, "bold"), wraplength=440,
+                          justify="left")
+        estado.pack(anchor="w", pady=(16, 0))
+        entrada.focus_set()
+        self._teach_state = {"ventana": ventana, "estado": estado, "nombre": nombre, "emoji": emoji, "grabando": False}
+
+        def grabar() -> None:
+            if self._teach_state.get("grabando"):
+                return
+            if not nombre.get().strip():
+                estado.configure(text="Ponele un nombre al gesto.", fg=ERROR)
+                return
+            if not self._gestures_active():
+                self._execute_gestures_toggle(True, "Enseñar un gesto")
+                if not self._gestures_active():
+                    estado.configure(text="No pude prender la cámara de gestos.", fg=ERROR)
+                    return
+            self._teach_state["grabando"] = True
+            cuenta(self.CUENTA_GRABACION)
+
+        def cuenta(falta: int) -> None:
+            if not ventana.winfo_exists():
+                return
+            if falta > 0:
+                estado.configure(text=f"Preparate… {falta}", fg=CYAN)
+                ventana.after(1000, cuenta, falta - 1)
+                return
+            detector = self.gesture_detector
+            if detector is None:
+                estado.configure(text="Los gestos se apagaron.", fg=ERROR)
+                self._teach_state["grabando"] = False
+                return
+            estado.configure(text="● Grabando: sostené el gesto…", fg=ERROR)
+            detector.grabar()
+
+        botones = tk.Frame(marco, bg=PANEL)
+        botones.pack(side="bottom", fill="x", pady=(10, 0))
+        self._ui_button(botones, "● GRABAR", grabar, fg=CYAN).pack(side="left")
+        self._ui_button(botones, "CERRAR", ventana.destroy, fg=MUTED).pack(side="right")
+
+    def _on_gesture_recorded(self, muestras: list, clases: list) -> None:
+        """Hilo de Tk: terminó la grabación de «Enseñá tu gesto»."""
+        estado = getattr(self, "_teach_state", None)
+        if not estado or not estado["ventana"].winfo_exists():
+            return
+        estado["grabando"] = False
+        try:
+            nuevo = jarvis_gestos_aprendidos.aprender(estado["nombre"].get(), estado["emoji"].get(), muestras,
+                                                      clases, self._learned_gestures())
+        except ValueError as problema:
+            logging.info("Gesto no enseñado: %s", problema)
+            estado["estado"].configure(text=str(problema), fg=ERROR)
+            return
+        try:
+            self._save_learned_gestures(self._learned_gestures() + [nuevo])
+        except OSError as error:
+            logging.exception("No se pudo guardar el gesto enseñado.")
+            estado["estado"].configure(text=f"No pude guardarlo: {error}", fg=ERROR)
+            return
+        logging.info("Gesto enseñado «%s» (%s): %d muestras, umbral %.3f.", nuevo["nombre"], nuevo["id"],
+                     len(nuevo["muestras"]), nuevo["umbral"])
+        estado["ventana"].destroy()
+        self._assign_custom_gesture(f"aprendido:{nuevo['id']}")
+
+    def _refresh_learned_gestures(self) -> None:
+        """Ajustes: una fila por gesto enseñado (con ASIGNAR y BORRAR)."""
+        marco = getattr(self, "learned_gestures_frame", None)
+        if marco is None:
+            return
+        for hijo in marco.winfo_children():
+            hijo.destroy()
+        etiquetas = getattr(self, "custom_gesture_labels", None)
+        if etiquetas is None:
+            etiquetas = self.custom_gesture_labels = {}
+        for clave in [c for c in etiquetas if c.startswith("aprendido:")]:
+            etiquetas.pop(clave)
+        for gesto in self._learned_gestures():
+            clave = f"aprendido:{gesto['id']}"
+            renglon = tk.Frame(marco, bg=PANEL)
+            renglon.pack(fill="x", pady=2)
+            tk.Label(renglon, text=f"{gesto.get('emoji') or '✋'}  {gesto['nombre']}"[:20], bg=PANEL, fg=TEXT,
+                     width=14, anchor="w", font=("Segoe UI Emoji", 10)).pack(side="left")
+            etiqueta = tk.Label(renglon, text="", bg=PANEL, fg=MUTED, anchor="w", font=("Segoe UI", 9))
+            etiqueta.pack(side="left", fill="x", expand=True)
+            etiquetas[clave] = etiqueta
+            self._ui_button(renglon, "BORRAR", lambda i=gesto["id"]: self._delete_learned_gesture(i),
+                            fg=MUTED).pack(side="right", padx=(6, 0))
+            self._ui_button(renglon, "ASIGNAR", lambda c=clave: self._assign_custom_gesture(c),
+                            fg=CYAN).pack(side="right")
+        self._refresh_custom_gestures()
 
     def _on_gesture_progress(self, cuarto) -> None:
         """Anillo de progreso al sostener un gesto propio (en el indicador de la barra lateral)."""
@@ -479,8 +730,9 @@ class GestosMixin:
         import jarvis_screen_actions as acciones
 
         ventana = tk.Toplevel(self.root)
-        nombre = f"{jarvis_gestos.EMOJIS[gesto]}  {jarvis_gestos.NOMBRES[gesto].capitalize()}"
-        ventana.title(f"Gesto {jarvis_gestos.NOMBRES[gesto]}")
+        emoji, nombre_gesto = self._gesture_label(gesto)
+        nombre = f"{emoji}  {nombre_gesto[:1].upper()}{nombre_gesto[1:]}"
+        ventana.title(f"Gesto {nombre_gesto}")
         ventana.configure(bg=BG)
         ventana.transient(self.root)
         ventana.geometry("520x380")
@@ -563,8 +815,8 @@ class GestosMixin:
                     texto, color = "✋ GESTOS EN PAUSA (JUEGO)", MUTED
                 elif progreso is not None:  # sosteniendo un gesto propio: anillo de 4 cuartos
                     gesto, cuartos = progreso
-                    texto = (f"{jarvis_gestos.EMOJIS.get(gesto, '✋')} {jarvis_gestos.NOMBRES[gesto].upper()}  "
-                             + "▰" * cuartos + "▱" * (4 - cuartos))
+                    emoji, nombre = self._gesture_label(gesto)
+                    texto = f"{emoji} {nombre.upper()}  " + "▰" * cuartos + "▱" * (4 - cuartos)
                     color = CYAN
                 elif puntero == "arrastrando":
                     texto, color = "✋ ARRASTRANDO", CYAN
@@ -573,7 +825,7 @@ class GestosMixin:
                 elif self._gesture is None:
                     texto, color = "✋ GESTOS · SIN MANO", MUTED
                 else:
-                    texto, color = f"✋ GESTOS · {jarvis_gestos.NOMBRES[self._gesture].upper()}", CYAN
+                    texto, color = f"✋ GESTOS · {self._gesture_label(self._gesture)[1].upper()}", CYAN
                 etiqueta.configure(text=texto, fg=color)
                 if not etiqueta.winfo_ismapped():
                     etiqueta.pack(fill="x", padx=16, pady=(0, 10), after=self.orb_status)
@@ -642,7 +894,7 @@ class GestosMixin:
                     foto = ImageTk.PhotoImage(Image.fromarray(rgb))
                     imagen.configure(image=foto)
                     imagen.image = foto
-                gesto = jarvis_gestos.NOMBRES.get(self._gesture or "", "sin mano")
+                gesto = self._gesture_label(self._gesture)[1]
                 aviso = "  ·  poca luz: la aclaro" if self._gesture_brightness < jarvis_gestos.BRILLO_OSCURO else ""
                 datos.configure(text=f"Gesto: {gesto}   ·   {self._gesture_fps:.0f} cuadros/s{aviso}")
             ventana.after(self.VISTA_MS, repintar)

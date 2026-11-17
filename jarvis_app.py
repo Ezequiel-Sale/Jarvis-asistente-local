@@ -1167,6 +1167,10 @@ class JarvisApp(
                     elif event[0] == "multi_orders":
                         self._set_idle()  # la voz dejó a Jarvis «ocupado» transcribiendo
                         self._run_orders(event[1])
+                    elif event[0] == "volume_bar":
+                        self._show_volume_bar(event[1])
+                    elif event[0] == "gesture_recorded":
+                        self._on_gesture_recorded(event[1], event[2])
                     elif event[0] == "gesture_progress":
                         self._on_gesture_progress(event[1])
                     elif event[0] == "gesture_shortcut":

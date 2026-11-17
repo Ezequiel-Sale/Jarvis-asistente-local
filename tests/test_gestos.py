@@ -556,20 +556,57 @@ class ShortcutAppTests(unittest.TestCase):
             llamadas.append((nombre, argumentos, kwargs["origin"]))
             if len(llamadas) == 3:
                 hecho.set()
+            return "Volumen al 50 %."  # lo que devuelve la herramienta (no un ResultadoAccion)
 
         host.tool_registry.execute.side_effect = ejecutar
         cola = queue.Queue()
         for item in (("volumen", 5), ("volumen", 5), ("media", "toggle"), ("browser", "back")):
             cola.put(item)
+        host.events = queue.Queue()
         with patch("jarvis_audio_devices.obtener_volumen_sistema", return_value=40):
             hilo = threading.Thread(target=JarvisApp._gesture_action_worker, args=(host, cola))
             hilo.start()
             self.assertTrue(hecho.wait(3))
             host._closing = True
             hilo.join(3)
+        self.assertEqual(host.events.get_nowait(), ("volume_bar", 50))  # la barra con el volumen nuevo
         self.assertEqual(llamadas, [("set_system_volume", {"percentage": 50}, "gestos"),  # 5 + 5 juntos
                                     ("media_control", {"action": "toggle"}, "gestos"),
                                     ("browser_history", {"action": "back"}, "gestos")])
+
+
+class VolumeBarTests(unittest.TestCase):
+    """2026-11-17: con el pulgar se cambiaba el volumen pero no se veía ninguna barra."""
+
+    def test_bar_shows_the_value_and_hides(self) -> None:
+        import tkinter as tk
+
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            self.skipTest("sin pantalla")
+        root.withdraw()
+        try:
+            host = Mock()
+            host.root = root
+            host.BARRA_VOLUMEN_MS = 50
+            host._TRANSPARENTE = JarvisApp._TRANSPARENTE
+            host._volume_bar = None
+            host._volume_bar_hide = None
+            host._rounded_rect = JarvisApp._rounded_rect
+            JarvisApp._show_volume_bar(host, 35)
+            barra, lienzo = host._volume_bar, host._volume_bar_canvas
+            self.assertEqual(lienzo.itemcget(host._volume_bar_text, "text"), "35")
+            self.assertEqual(lienzo.itemcget(host._volume_bar_icon, "text"), "🔉")
+            JarvisApp._show_volume_bar(host, 120)  # la misma ventana, recortado a 100
+            self.assertIs(host._volume_bar, barra)
+            self.assertEqual(lienzo.itemcget(host._volume_bar_text, "text"), "100")
+            self.assertEqual(barra.state(), "normal")
+            root.after(150, root.quit)
+            root.mainloop()
+            self.assertEqual(barra.state(), "withdrawn")  # se fue sola
+        finally:
+            root.destroy()
 
 
 def llamame():
@@ -940,6 +977,9 @@ def _host(**estado) -> Mock:
     host._gesture_queue = lambda: JarvisApp._gesture_queue(host)
     host._gesture_hand = lambda: "derecha"
     host._gesture_sensitivity = lambda: 5
+    host._learned_gestures = lambda: []  # fase 6: ninguno enseñado (no lee archivos)
+    host._teach_window = None  # la ventana de «Enseñá tu gesto» cerrada
+    host._gesture_label = lambda gesto: JarvisApp._gesture_label(host, gesto)
     host._gesture_progress = None
     host._merge_gesture_actions = JarvisApp._merge_gesture_actions
     for clave, valor in estado.items():
