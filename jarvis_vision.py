@@ -3,7 +3,7 @@
 - Solo se captura cuando el usuario lo pide, y siempre se muestra una vista
   previa que debe confirmar antes de enviar nada al modelo.
 - La captura vive solo en memoria: nunca se escribe en disco.
-- El análisis lo hace un modelo local de Ollama (``core.MODEL_VISION``).
+- El análisis lo hace un modelo local de Ollama (``core.MODEL_DESCRIBIR``, el mismo de la charla).
 """
 
 import base64
@@ -275,7 +275,7 @@ def preparar_imagen(imagen, max_lado: int = MAX_LADO) -> bytes:
 def _pedir_analisis(jpeg: bytes, pregunta: str) -> str:
     endpoint = core.LLM_URL.rsplit("/", 1)[0] + "/chat"
     payload = {
-        "model": core.MODEL_VISION,
+        "model": core.MODEL_DESCRIBIR,
         "messages": [
             {
                 "role": "system",
@@ -297,9 +297,10 @@ def _pedir_analisis(jpeg: bytes, pregunta: str) -> str:
         ],
         "stream": False,
         "think": False,
-        # Se libera antes que el modelo principal para que vuelva pronto a la GPU.
-        "keep_alive": "5m",
-        "options": {"num_ctx": 8192, "num_predict": 400, "temperature": 0.2},
+        # Es el modelo de lenguaje (bonsai ve imágenes): el mismo num_ctx y keep_alive que la charla,
+        # o Ollama lo recargaría entero.
+        "keep_alive": core.LLM_KEEP_ALIVE,
+        "options": {"num_ctx": core.LLM_NUM_CTX, "num_predict": 400, "temperature": 0.2},
     }
     try:
         respuesta = requests.post(endpoint, json=payload, timeout=TIMEOUT_ANALISIS)
@@ -316,7 +317,7 @@ def _pedir_analisis(jpeg: bytes, pregunta: str) -> str:
             pass
         if "not found" in detalle:
             raise RuntimeError(
-                f"El modelo de visión {core.MODEL_VISION} no está instalado en Ollama."
+                f"El modelo {core.MODEL_DESCRIBIR} (el que describe las capturas) no está instalado en Ollama."
             ) from error
         raise RuntimeError(f"Ollama rechazó el análisis: {detalle or error}") from error
     contenido = (respuesta.json().get("message") or {}).get("content", "").strip()

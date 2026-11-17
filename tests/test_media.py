@@ -20,6 +20,10 @@ class PhraseTests(unittest.TestCase):
             "siguiente canción": "next",
             "pasa": "next",
             "otra canción": "next",
+            # 2026-11-17: bonsai lo tomó como «deshacer» (y antes como el tema visual).
+            "Pasá este tema, no me gusta": "next",
+            "Este tema no me gusta, pasalo": "next",
+            "saltá esta canción": "next",
             "la anterior": "previous",
             "canción anterior": "previous",
         }

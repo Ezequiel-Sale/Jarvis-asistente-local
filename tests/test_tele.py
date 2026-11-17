@@ -140,6 +140,36 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(tv.ErrorTV):
             self.control.tecla("autodestruccion")
 
+    def test_app_right_after_turning_on_is_asked_again_if_ignored(self) -> None:
+        """2026-11-17: «prendé la tele y poné Netflix» abrió Netflix al instante y quedó la pantalla
+        gris. Recién encendida, se espera y, si la tele no cambia de app, se pide otra vez."""
+        self._vincular()
+        remoto = self.remotos[-1]
+        self.control.estado.app = "com.google.android.apps.mediashell"
+        with patch.object(tv, "ESPERA_ANTES_DE_APP", 0), patch.object(tv, "VERIFICAR_APP", 0.2):
+            self.control._encendida_en = time.monotonic()
+            self.control.abrir_app("netflix")
+            _esperar_bucle(self.control)
+            self.assertEqual(remoto.apps, ["https://www.netflix.com/title"] * 2)
+
+            # Si la tele avisa que cambió de app, alcanza con un pedido.
+            remoto.apps.clear()
+            self.control.estado.app = "com.google.android.apps.mediashell"
+            remoto.send_launch_app_command = lambda enlace: (remoto.apps.append(enlace),
+                                                             remoto.callbacks["app"]("com.netflix.ninja"))
+            self.control.abrir_app("netflix")
+            _esperar_bucle(self.control)
+            self.assertEqual(remoto.apps, ["https://www.netflix.com/title"])
+
+            # Sin haberla encendido hace poco, no se espera ni se repite.
+            remoto.apps.clear()
+            self.control._encendida_en = time.monotonic() - tv.RECIEN_ENCENDIDA - 1
+            self.control.estado.app = "com.netflix.ninja"
+            remoto.send_launch_app_command = remoto.apps.append
+            self.control.abrir_app("netflix")
+            _esperar_bucle(self.control)
+            self.assertEqual(remoto.apps, ["https://www.netflix.com/title"])
+
     def test_learns_apps_opened_on_the_tv(self) -> None:
         """La tele no dice qué apps tiene: Jarvis aprende las que se abren (no las del sistema ni las
         de la lista fija), las guarda y las abre por nombre."""

@@ -32,6 +32,12 @@ TIEMPO_MAXIMO = 10.0
 TIEMPO_DESPERTAR = 15.0  # a que la tele vuelva a la red tras el Wake-on-LAN
 TIEMPO_ENCENDER = 20.0   # a que encienda la pantalla tras el pedido de Chromecast (medido: 2,5 s y más)
 ESPERA_APP_CAST = 4.0    # a que termine de abrir la app de Cast antes de cerrarla (si no, queda encima)
+# Abrir una app recién encendida la tele: el 2026-11-17 «prendé la tele y poné Netflix» abrió Netflix
+# en el mismo instante y quedó la pantalla gris (el pedido se perdió). Se espera un poco, y si la tele
+# no cambió de app, se pide otra vez.
+RECIEN_ENCENDIDA = 30.0  # segundos tras encenderla en que se toman esos cuidados
+ESPERA_ANTES_DE_APP = 2.0
+VERIFICAR_APP = 6.0      # a que la tele avise que cambió de app
 # La herramienta tv_control tiene 75 s en total.
 
 # Teclas por nombre corto (las mismas que usan los comandos de voz, la página y el celular).
@@ -379,6 +385,7 @@ class ControlTV:
         # enlace web y lista las instaladas.
         self._adb = adb
         self._adb_revisado = 0.0
+        self._encendida_en: float | None = None  # cuándo la encendió Jarvis (monotonic)
         # Cuánto aguanta la «Red en Espera»: cuándo se apagó la pantalla y si sigue en la red.
         self._apagada_desde: float | None = None
         self._en_red: bool | None = None
@@ -839,15 +846,33 @@ class ControlTV:
         """Enlace web por el protocolo del control; un paquete, por ADB (la TCL rechaza abrir
         paquetes por el control). Sin ADB se intenta igual por el control."""
         nombre, enlace = self._resolver_app(app)
+        recien = self._encendida_en is not None and time.monotonic() - self._encendida_en < RECIEN_ENCENDIDA
+        if recien:
+            time.sleep(ESPERA_ANTES_DE_APP)
+        anterior = self.estado.app
+        self._lanzar_app(enlace)
+        if recien and not self._esperar_cambio_de_app(anterior):
+            logging.info("La tele no cambió de app tras encenderla; vuelvo a pedir %s.", nombre)
+            self._lanzar_app(enlace)
+        return nombre
+
+    def _esperar_cambio_de_app(self, anterior: str) -> bool:
+        limite = time.monotonic() + VERIFICAR_APP
+        while time.monotonic() < limite:
+            if self.estado.app != anterior:
+                return True
+            time.sleep(0.5)
+        return self.estado.app != anterior
+
+    def _lanzar_app(self, enlace: str) -> None:
         if "://" not in enlace and self._adb is not None and self.estado.host:
             try:
                 if self._adb.abrir(self.estado.host, enlace):
-                    return nombre
+                    return
             except Exception as error:
                 logging.info("ADB no pudo abrir %s (%s); pruebo por el control.", enlace, error)
         remoto = self._listo()
         self._loop.call_soon_threadsafe(remoto.send_launch_app_command, enlace)
-        return nombre
 
     def encender(self) -> str:
         """1) Wake-on-LAN para despertar su red; 2) conexión del control; 3) pedido de Chromecast,
@@ -883,6 +908,7 @@ class ControlTV:
             sesion = None
         if self._esperar_encendida(TIEMPO_ENCENDER):
             self._volver_al_inicio(sesion)
+            self._encendida_en = time.monotonic()
             return "Encendí la tele."
         if self.estado.conectada:
             self.tecla("wakeup")  # por si en otro modo de reposo sí la obedece

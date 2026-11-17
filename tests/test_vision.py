@@ -68,7 +68,11 @@ class AnalysisTests(unittest.TestCase):
         post.return_value = self._response({"message": {"content": "Un error de Steam."}})
         self.assertEqual(vision.analizar_imagen(b"jpeg", "¿qué error sale?"), "Un error de Steam.")
         payload = post.call_args.kwargs["json"]
-        self.assertEqual(payload["model"], vision.core.MODEL_VISION)
+        # Describe el modelo de lenguaje (ve imágenes): sin cambiar de modelo en la GPU, con su mismo
+        # contexto y permanencia (si no, Ollama lo recargaría).
+        self.assertEqual(payload["model"], vision.core.MODEL_DESCRIBIR)
+        self.assertEqual((payload["options"]["num_ctx"], payload["keep_alive"]),
+                         (vision.core.LLM_NUM_CTX, vision.core.LLM_KEEP_ALIVE))
         self.assertFalse(payload["think"])
         self.assertEqual(payload["messages"][1]["content"], "¿qué error sale?")
         self.assertEqual(len(payload["messages"][1]["images"]), 1)

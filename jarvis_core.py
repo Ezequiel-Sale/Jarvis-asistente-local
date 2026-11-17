@@ -56,13 +56,30 @@ def _voz_wyoming(voz: str | None = None, hablante: str | None = None) -> dict:
     if elegido:
         datos["speaker"] = elegido
     return datos
-MODEL_LLM = "qwen2.5-coder:14b"  # Modelo instalado en Ollama
-# Modelo con visión para analizar capturas y ubicar dónde hacer clic. Qwen3-VL 8B
-# (~10 GB) cabe entero en la GPU de 16 GB. Comparado el 2026-11-07 en los monitores
-# del usuario contra qwen3.6:27b (18 GB, no cabía): ubicó 7/9 textos frente a 6/9,
-# ~0,7 s por búsqueda frente a ~11 s, y describió en ~4 s frente a ~23 s (y sin
-# inventar). Sigue desplazando a MODEL_LLM mientras está cargado (no caben juntos).
-MODEL_VISION = "qwen3-vl:8b-instruct-q8_0"
+# Modelo de lenguaje. bonsai-2:27b (8,3 GB, ternario) se eligió el 2026-11-17 con el examen
+# (examen/): 94 % contra 81 % de qwen2.5-coder:14b, casi nunca actúa sin que se lo pidan y
+# responde en ~1,5 s. Razona antes de responder: se le pide sin razonar (LLM_PIENSA).
+MODEL_LLM = "bonsai-2:27b"
+# Ollama acepta "think": false también en modelos que no razonan; así se mide en el examen.
+LLM_PIENSA = False
+# Contexto del modelo, igual en todas las peticiones (con otro num_ctx Ollama recarga el modelo
+# entero). bonsai cuenta más tokens que qwen2.5: las 56 herramientas, las de archivos (MCP) y
+# el historial llegaban a ~8.150 de 8.192 y no quedaba lugar para responder (2026-11-17,
+# «Ollama devolvió una respuesta vacía»). 16.384 suma ~0,5 GB de VRAM (9,1 GB en total).
+LLM_NUM_CTX = 16384
+# Cuánto queda cargado en la GPU el modelo de lenguaje (y el de visión, que convive con él).
+LLM_KEEP_ALIVE = "2h"
+# Visión [2026-11-17, 40 botones reales de los monitores del usuario, con la caja de la
+# accesibilidad como respuesta correcta y bonsai cargado]: qwen3-vl:8b (el anterior, 9,9 GB)
+# ubicó 12/40 pero no cabía junto a bonsai: cada análisis lo sacaba de la GPU (~20–30 s);
+# qwen3-vl:4b-instruct ubicó 10/40 (dentro del margen de error) en 0,65 s y convive con él
+# (4,3 GB); el 4b-q8 (14/40) llenaba la GPU (15,9 de 16 GB) y andaba lento.
+# - Describir capturas: el propio modelo de lenguaje (bonsai ve imágenes): sin cambiar de modelo,
+#   las descripciones más completas de la prueba y en 6–20 s en vez de ~25.
+# - Ubicar dónde hacer clic (si la accesibilidad no lo encuentra): MODEL_VISION.
+MODEL_DESCRIBIR = MODEL_LLM
+MODEL_VISION = "qwen3-vl:4b-instruct"
+VISION_NUM_CTX = 8192
 MAX_CONTEXT_MESSAGES = 12
 STT_TIMEOUT = 90  # segundos de espera de la transcripción
 TTS_TIMEOUT = 60  # segundos de espera de la síntesis de voz
@@ -609,6 +626,7 @@ def procesar_llm(
             f"pida detalles.{contexto_conversacional}\nUsuario: {texto}\nAsistente:"
         ),
         "stream": False,
+        "think": LLM_PIENSA,
         "keep_alive": "30m",
         "options": {
             "num_ctx": 2048,

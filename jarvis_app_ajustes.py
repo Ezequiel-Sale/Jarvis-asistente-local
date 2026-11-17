@@ -142,7 +142,7 @@ class AjustesMixin:
             admin = "desconocido"
         etiqueta.configure(text=(
             f"MODELO DE IA     {core.MODEL_LLM}\n"
-            f"VISIÓN           {core.MODEL_VISION}\n"
+            f"VISIÓN (CLICS)   {core.MODEL_VISION}\n"
             f"VOZ A TEXTO      {core.STT_MODEL}\n"
             f"VOZ              {core.VOZ_PIPER}{' (' + core.VOZ_HABLANTE + ')' if core.VOZ_HABLANTE else ''}\n"
             f"ADMINISTRADOR    {admin}"

@@ -150,6 +150,29 @@ def _sin_llamadas_escritas(texto: str) -> str:
         limpio = limpio[fin:].strip()
 
 
+# Frases que cuentan algo en vez de pedirlo. 2026-11-17, bonsai: «Me gusta tener el volumen bajo
+# a la noche» → bajó el volumen; «Ayer apagué la tele temprano» → consultó la tele. Ante un
+# comentario, una acción que cambia algo se pregunta antes (consultar, como el estado, no).
+_COMENTARIO = re.compile(
+    r"^\s*(?:jarvis[\s,]+)?(?:a\s+mi\s+)?(?:me\s+(?:gusta|gustan|encanta|encantan|molesta|molestan|aburre|"
+    r"compr[eé]|cans[eé]|olvid[eé])|no\s+me\s+(?:gusta|gustan|molesta)|prefiero|odio|ayer|anoche|"
+    r"el\s+otro\s+d[ií]a|la\s+semana\s+pasada|siempre|nunca|suelo|sol[ií]a|dicen\s+que)\b",
+    re.IGNORECASE,
+)
+_PEDIDO_EN_COMENTARIO = re.compile(
+    r"[?¿]|\b(?:pod[eé]s|puedes|pon\w*|baj[aá]\w*|sub[ií]\w*|sube\w*|cambi[aá]\w*|abr[ií]\w*|abre\w*|"
+    r"apag[aá]\w*|prend[eé]\w*|encend[eé]\w*|dej[aá]\w*|pas[aá]l[oa]|quiero\s+que|haceme|hazme)\b",
+    re.IGNORECASE)
+
+
+def _es_comentario(texto: str) -> bool:
+    return bool(_COMENTARIO.match(texto)) and not _PEDIDO_EN_COMENTARIO.search(texto)
+
+
+def _solo_consulta(nombre: str) -> bool:
+    return nombre.startswith(("get_", "list_")) or nombre in {"tv_status", "web_search", "get_weather"}
+
+
 def _requested_action_count(text: str) -> int:
     if _ROUTINE_CREATION.search(text):
         return 1
@@ -274,9 +297,9 @@ AVISO_CORTADA = "…\n\n(La respuesta era muy larga y se cortó; dime «cuéntam
 # Cuánto queda cargado el modelo en la GPU tras usarlo. Cargarlo desde cero tarda ~11 s
 # (medido 2026-11-13 con la RX 9070 XT) y con el modelo cargado responde en ~0,2 s; al
 # abrir un juego se descarga igual (``descargar_modelo``), así que puede quedar más tiempo.
-KEEP_ALIVE = "2h"
+KEEP_ALIVE = core.LLM_KEEP_ALIVE
 # Igual en todas las peticiones: con otro num_ctx Ollama recarga el modelo entero.
-NUM_CTX = 8192
+NUM_CTX = core.LLM_NUM_CTX
 
 
 def _url_ollama(ruta: str) -> str:
@@ -297,21 +320,28 @@ def modelo_cargado(modelo: str | None = None) -> bool:
 
 def precargar_modelo(timeout: float = 90) -> bool:
     """Carga el modelo de chat en la GPU sin generar nada (con el mismo num_ctx que el chat),
-    para que la primera pregunta no espere los ~11 s de carga."""
-    if modelo_cargado():
-        return True
+    para que la primera pregunta no espere los ~11 s de carga; después, el de visión para clics,
+    que convive con él (2026-11-17: sin precargar, el primer clic por visión esperaba ~16 s).
+    Devuelve si quedó cargado el de lenguaje; un fallo del de visión solo se registra."""
+    listo = modelo_cargado() or _precargar(core.MODEL_LLM, NUM_CTX, "de lenguaje", timeout)
+    if listo and not modelo_cargado(core.MODEL_VISION):
+        _precargar(core.MODEL_VISION, core.VISION_NUM_CTX, "de visión", timeout)
+    return listo
+
+
+def _precargar(modelo: str, num_ctx: int, que: str, timeout: float) -> bool:
     inicio = time.perf_counter()
     try:
         respuesta = requests.post(
             _url_ollama("/api/generate"),
-            json={"model": core.MODEL_LLM, "keep_alive": KEEP_ALIVE, "options": {"num_ctx": NUM_CTX}},
+            json={"model": modelo, "keep_alive": KEEP_ALIVE, "options": {"num_ctx": num_ctx}},
             timeout=(3, timeout),
         )
         respuesta.raise_for_status()
     except requests.RequestException as error:
-        logging.warning("No pude precargar el modelo de lenguaje: %s", error)
+        logging.warning("No pude precargar el modelo %s: %s", que, error)
         return False
-    logging.info("Modelo de lenguaje precargado en %.2fs.", time.perf_counter() - inicio)
+    logging.info("Modelo %s precargado en %.2fs.", que, time.perf_counter() - inicio)
     return True
 
 
@@ -345,6 +375,7 @@ def _request_chat(
         "model": core.MODEL_LLM,
         "messages": messages,
         "stream": on_text is not None,
+        "think": core.LLM_PIENSA,
         "keep_alive": KEEP_ALIVE,
         "options": {
             # Las ~19 herramientas ocupan ~1.700 tokens; con instrucciones, historial
@@ -651,6 +682,7 @@ def _procesar_con_herramientas(
     )
     messages.append({"role": "user", "content": texto})
     requested_action_count = _requested_action_count(texto)
+    comentario = _es_comentario(texto)
 
     tool_schemas = registry.ollama_tools()
     puede_buscar = any(t.get("function", {}).get("name") == HERRAMIENTA_BUSQUEDA for t in tool_schemas)
@@ -790,6 +822,20 @@ def _procesar_con_herramientas(
                 )
             if not answer:
                 raise ValueError("Ollama devolvió una respuesta vacía.")
+            if (calls_made == 0 and _ACCION_INVENTADA.match(answer) and not plan_retry_used
+                    and tool_rounds < max_tool_rounds):
+                # 2026-11-17, bonsai-2:27b: «Traé a Jarvis al frente y movelo al monitor 2…» → texto
+                # diciendo que lo hizo, sin llamadas; pedido otra vez, sí las devuelve. La compuerta
+                # de la voz no lee ese texto, así que el reintento no se oye.
+                logging.warning("El modelo afirmó una acción sin llamar a ninguna herramienta; se le "
+                                "pide el plan una vez más.")
+                messages.append(assistant_message)
+                messages.append({"role": "user", "content": (
+                    "No llamaste a ninguna herramienta, así que no se hizo nada. Si pedí una acción, "
+                    "devuelve ahora todas las llamadas necesarias, en orden y sin texto. Si no pedí "
+                    "ninguna, contesta sin decir que hiciste algo.")})
+                plan_retry_used = True
+                continue
             if calls_made == 0 and _ACCION_INVENTADA.match(answer):
                 logging.warning("El modelo afirmó una acción sin llamar a ninguna herramienta; se avisa.")
                 answer = AVISO_SIN_ACCION
@@ -917,6 +963,14 @@ def _procesar_con_herramientas(
         avisos_plan = alcance.__enter__() if alcance is not None else None
         try:
             for index, (name, definition, arguments) in enumerate(validated_steps):
+                if comentario and not plan_approved and not _solo_consulta(name) and not confirm(definition, arguments):
+                    logging.info("Acción %s propuesta ante un comentario; el usuario no la quiso.", name)
+                    for omitido, _, _ in validated_steps[index:]:
+                        messages.append(_tool_message(
+                            omitido, False, cancelled=True,
+                            error="El usuario solo comentaba algo; no pidió esta acción y no la quiso."))
+                    plan_stopped = True
+                    break
                 try:
                     try:
                         result = registry.execute(

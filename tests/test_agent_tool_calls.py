@@ -87,7 +87,8 @@ class AgentToolCallTests(unittest.TestCase):
         self.assertEqual(self.executed, [])
         self.assertEqual(post.call_count, 1)
         payload = post.call_args.kwargs["json"]
-        self.assertEqual(payload["model"], "qwen2.5-coder:14b")
+        self.assertEqual(payload["model"], "bonsai-2:27b")
+        self.assertIs(payload["think"], False)  # razona: sin esto tarda y gasta los tokens pensando
         self.assertEqual(payload["messages"][1]["content"], "Earlier question")
         self.assertEqual(len(payload["tools"]), 3)
         # «¿Qué más me puedes contar?» sigue el tema anterior en vez de preguntar cuál.
@@ -1111,6 +1112,56 @@ class WebSearchFallbackTests(unittest.TestCase):
         with patch("jarvis_agent.core.obtener_historial", return_value=[]):
             answer = procesar_con_herramientas("¿Qué es Python?", "c", self.registry, Mock(return_value=True))
         self.assertEqual(answer, "Python es un lenguaje de programación.")
+
+    @patch("jarvis_agent.requests.post")
+    def test_claimed_action_is_asked_again_once(self, post: Mock) -> None:
+        """2026-11-17, bonsai: dijo que movió a Jarvis sin llamar a nada; pedido otra vez, lo hace."""
+        hechas: list[str] = []
+        self.registry.register(
+            "focus_window", "Trae una ventana al frente.",
+            {"type": "object", "properties": {"app": {"type": "string"}}, "required": ["app"],
+             "additionalProperties": False},
+            lambda app: hechas.append(app) or "Listo.", label="Controlar ventanas")
+        post.side_effect = [
+            _response({"role": "assistant", "content": "Traje Jarvis al frente y lo moví al monitor 2."}),
+            _response({"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "focus_window", "arguments": {"app": "jarvis"}}}]}),
+            _response({"role": "assistant", "content": "Jarvis está al frente."}),
+        ]
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("trae a Jarvis al frente", "c", self.registry,
+                                               Mock(return_value=True))
+        self.assertEqual(hechas, ["jarvis"])
+        self.assertEqual(answer, "Jarvis está al frente.")
+        mensajes = post.call_args_list[1].kwargs["json"]["messages"]
+        self.assertTrue(any("No llamaste a ninguna herramienta" in str(m.get("content")) for m in mensajes))
+
+    @patch("jarvis_agent.requests.post")
+    def test_an_action_after_a_mere_comment_is_asked_first(self, post: Mock) -> None:
+        """2026-11-17, bonsai: «Me gusta tener el volumen bajo a la noche» → bajó el volumen."""
+        hechas: list[int] = []
+        self.registry.register(
+            "set_system_volume", "Cambia el volumen.",
+            {"type": "object", "properties": {"percentage": {"type": "integer"}}, "required": ["percentage"],
+             "additionalProperties": False},
+            lambda percentage: hechas.append(percentage) or "Listo.", label="Volumen")
+        llamada = {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "set_system_volume", "arguments": {"percentage": 20}}}]}
+        post.side_effect = [_response(llamada), _response({"role": "assistant", "content": "Anotado."})]
+        confirmar = Mock(return_value=False)
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("Me gusta tener el volumen bajo a la noche", "c", self.registry,
+                                               confirmar)
+        confirmar.assert_called_once()
+        self.assertEqual((hechas, answer), ([], "Anotado."))
+
+        # Si de verdad lo pide, no se pregunta de más.
+        post.side_effect = [_response(llamada), _response({"role": "assistant", "content": "Listo."})]
+        confirmar.reset_mock()
+        with patch("jarvis_agent.core.obtener_historial", return_value=[]):
+            procesar_con_herramientas("Bajá el volumen al 20", "c", self.registry, confirmar)
+        confirmar.assert_not_called()
+        self.assertEqual(hechas, [20])
 
     @patch("jarvis_agent.requests.post")
     def test_actions_done_but_no_final_text_is_summarized(self, post: Mock) -> None:

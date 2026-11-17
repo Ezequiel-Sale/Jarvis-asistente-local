@@ -291,7 +291,7 @@ def buscar_por_vision(imagen, monitor, consulta: str, *, escribir: bool = False)
             }],
             "stream": False,
             "think": False,
-            "keep_alive": "5m",
+            "keep_alive": core.LLM_KEEP_ALIVE,  # convive con el modelo de lenguaje en la GPU
             # Esquema JSON: obliga a devolver números (sin él a veces daba listas).
             "format": {
                 "type": "object",
@@ -303,7 +303,7 @@ def buscar_por_vision(imagen, monitor, consulta: str, *, escribir: bool = False)
                 },
                 "required": ["encontrado", "x", "y"],
             },
-            "options": {"num_ctx": 8192, "num_predict": 250, "temperature": 0},
+            "options": {"num_ctx": core.VISION_NUM_CTX, "num_predict": 250, "temperature": 0},
         },
         timeout=300,
     )

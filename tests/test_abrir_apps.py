@@ -52,6 +52,17 @@ class PhraseTests(unittest.TestCase):
             with self.subTest(frase=frase):
                 self.assertEqual(detectar_comando_juego(frase), "WhatsApp")
 
+    def test_a_second_order_is_not_part_of_the_name(self) -> None:
+        """2026-11-17: «Abre Discord y pon el volumen al 30» abría Discord y se perdía el volumen."""
+        for frase in ("Abre Discord y pon el volumen al 30", "abre Spotify, después baja el volumen",
+                      "Abre Steam y luego mové Brave al monitor 2"):
+            with self.subTest(frase=frase):
+                self.assertIsNone(detectar_comando_juego(frase))
+        for frase, nombre in (("abre Ratchet y Clank", "Ratchet y Clank"),
+                              ("abre Plantas contra Zombies", "Plantas contra Zombies")):
+            with self.subTest(frase=frase):
+                self.assertEqual(detectar_comando_juego(frase), nombre)
+
     def test_games_first_then_apps(self) -> None:
         from jarvis_app import JarvisApp
 

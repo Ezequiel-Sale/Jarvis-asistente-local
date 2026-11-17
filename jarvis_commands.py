@@ -487,7 +487,20 @@ def detectar_comando_juego(texto: str) -> str | None:
     if coincidencia is None:
         return None
     nombre = coincidencia.group(1).strip(" \t,;:")
+    if _OTRA_ORDEN_DESPUES.search(nombre):
+        return None  # «abre Discord y pon el volumen al 30»: son dos órdenes, no el nombre de una app
     return nombre or None
+
+
+# 2026-11-17: «Abre Discord y pon el volumen al 30» abría Discord (el buscador lo encontraba igual)
+# y se perdía el volumen. Un verbo de orden después de «y / luego / después / ,» corta el nombre.
+_OTRA_ORDEN_DESPUES = re.compile(
+    r"(?:\s+(?:y|e|luego|despu[eé]s|entonces)|\s*,)\s+(?:(?:luego|despu[eé]s|a\s+continuaci[oó]n)\s+)?"
+    r"(?:pon|sub|baj|mov|muev|cerr|cierr|maximiz|minimiz|abr|inici|lanz|paus|reanud|activ|desactiv"
+    r"|silenci|mand|llev|coloc|dej|cambi|busc|entr|and[aá]\b|ve\b|tra[eé]|apag|prend|encend|escrib"
+    r"|reproduc)",
+    re.IGNORECASE,
+)
 
 def detectar_comando_volumen(texto: str) -> int | None:
     texto = limpiar_transcripcion_voz(texto)

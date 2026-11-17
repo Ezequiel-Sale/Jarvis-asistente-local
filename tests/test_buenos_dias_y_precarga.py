@@ -110,10 +110,15 @@ class PreloadTests(unittest.TestCase):
     @patch("jarvis_agent.modelo_cargado", return_value=False)
     def test_loads_with_the_same_context_as_the_chat(self, _cargado, post) -> None:
         self.assertTrue(agent.precargar_modelo())
-        cuerpo = post.call_args.kwargs["json"]
+        cuerpo = post.call_args_list[0].kwargs["json"]
+        self.assertEqual(cuerpo["model"], agent.core.MODEL_LLM)
         self.assertEqual(cuerpo["options"]["num_ctx"], agent.NUM_CTX)
         self.assertEqual(cuerpo["keep_alive"], agent.KEEP_ALIVE)
         self.assertNotIn("prompt", cuerpo)  # solo carga, no genera
+        # Después, el de visión para clics, que convive con él (con el mismo keep_alive).
+        vision = post.call_args_list[1].kwargs["json"]
+        self.assertEqual((vision["model"], vision["options"]["num_ctx"], vision["keep_alive"]),
+                         (agent.core.MODEL_VISION, agent.core.VISION_NUM_CTX, agent.KEEP_ALIVE))
 
     @patch("jarvis_agent.requests.post")
     @patch("jarvis_agent.modelo_cargado", return_value=True)
@@ -186,6 +191,21 @@ class PreloadTests(unittest.TestCase):
                 pass
         cuerpo = post.call_args.args[1]
         self.assertEqual((cuerpo["keep_alive"], cuerpo["options"]["num_ctx"]), (agent.KEEP_ALIVE, agent.NUM_CTX))
+        self.assertIs(cuerpo["think"], False)
+
+    def test_memory_extraction_uses_the_same_context(self) -> None:
+        """Otro num_ctx recargaría el modelo entero en la GPU entre la charla y los recuerdos."""
+        import jarvis_aprendizaje
+
+        with patch.object(jarvis_aprendizaje.requests, "post") as post:
+            post.return_value.json.return_value = {"message": {"content": "{}"}}
+            jarvis_aprendizaje._chat_json("sistema", "usuario", {"type": "object"}, 64)
+        cuerpo = post.call_args.kwargs["json"]
+        self.assertEqual((cuerpo["options"]["num_ctx"], cuerpo["think"]), (agent.NUM_CTX, False))
+
+    def test_context_leaves_room_for_tools_and_history(self) -> None:
+        # Con bonsai-2:27b la consulta real ya ocupaba ~8.150 tokens (2026-11-17).
+        self.assertGreaterEqual(agent.NUM_CTX, 16384)
 
 
 if __name__ == "__main__":

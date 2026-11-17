@@ -1080,10 +1080,14 @@ _REANUDA = re.compile(
     rf"|despausa|despausalo|despausala|vuelve\s+a\s+(?:reproducir|poner)|resume"
     rf"|reproduzca|reproduzcan|reanude|continue|siga|despause|vuelva\s+a\s+reproducir){_COSA}$"
 )
+# «Pasá este tema, no me gusta» (2026-11-17): bonsai lo tomó como deshacer y antes como el tema visual.
+_NO_ME_GUSTA = r"(?:\s+(?:que\s+)?(?:no\s+me\s+gusta|me\s+aburre|me\s+aburrio|me\s+cansa|me\s+harta))?"
 _SIGUIENTE = re.compile(
-    r"^(?:siguiente|la\s+siguiente|pasa|salta|saltea|cambia|otra|proxima)"
-    r"(?:\s+(?:de\s+)?(?:la\s+|el\s+)?(?:cancion|tema|pista|video))?(?:\s+siguiente)?$"
-    r"|^(?:siguiente|proxima|otra)\s+(?:cancion|tema|pista|video)$"
+    r"^(?:siguiente|la\s+siguiente|pasa|pasala|pasalo|salta|saltala|saltea|cambia|cambiala|otra|proxima)"
+    r"(?:\s+(?:de\s+)?(?:la\s+|el\s+|este\s+|esta\s+|ese\s+|esa\s+)?(?:cancion|tema|pista|video))?(?:\s+siguiente)?"
+    + _NO_ME_GUSTA + r"$"
+    r"|^(?:siguiente|proxima|otra)\s+(?:cancion|tema|pista|video)" + _NO_ME_GUSTA + r"$"
+    r"|^(?:este|esta|ese|esa)\s+(?:cancion|tema)\s+no\s+me\s+gusta(?:\s+(?:pasala|pasalo|cambiala|cambialo|saltala))?$"
 )
 _ANTERIOR = re.compile(
     r"^(?:anterior|la\s+anterior|vuelve\s+a\s+la\s+anterior|pon\s+la\s+anterior"
@@ -1405,7 +1409,10 @@ def registrar_herramientas(registry, verificadores=None) -> None:
         "set_app_volume",
         (
             "Cambia el volumen (percentage 0-100) o silencia (mute) una aplicación concreta "
-            "que esté sonando: spotify, brave (navegador/YouTube), discord, steam…"
+            "que esté sonando: spotify, brave (navegador/YouTube), discord, steam… Solo si el "
+            "usuario nombra la app en el pedido de volumen («el volumen de Spotify», «silenciá "
+            "Discord»). «Abrí Discord y poné el volumen al 30» es el volumen general: "
+            "set_system_volume (una app recién abierta todavía no suena)."
         ),
         {
             "type": "object",

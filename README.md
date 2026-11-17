@@ -83,10 +83,10 @@ flowchart LR
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (servicios de voz a texto y texto a voz)
 - [Ollama](https://ollama.com) abierto, con los modelos:
   ```bash
-  ollama pull qwen2.5-coder:14b
+  ollama pull bonsai-2:27b
   ```
   ```bash
-  ollama pull qwen3-vl:8b-instruct-q8_0
+  ollama pull qwen3-vl:4b-instruct
   ```
   ```bash
   ollama pull embeddinggemma

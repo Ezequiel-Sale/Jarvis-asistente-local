@@ -354,7 +354,7 @@ class PantallaMixin:
             info.configure(
                 text=(
                     f"{datos['monitor'].descripcion} · Se enviará solo al modelo local "
-                    f"{core.MODEL_VISION}; la imagen no se guarda en disco."
+                    f"{core.MODEL_DESCRIBIR}; la imagen no se guarda en disco."
                 )
             )
 
