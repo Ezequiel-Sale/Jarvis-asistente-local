@@ -452,9 +452,13 @@ class VozMixin:
         from jarvis_commands import frase_continua, limpiar_transcripcion_voz
 
         decision = None
+        recorte = None
         try:
-            # «Solo mi voz»: si no es tu voz, ni se transcribe (decision queda en None).
-            if not self._speaker_rejected(audio_path):
+            # «Solo mi voz»: si no es tu voz, ni se transcribe (decision queda en None). En un trozo
+            # largo con la tele de fondo se busca el tramo con tu voz y se transcribe solo ese.
+            recorte = self._speaker_clip(audio_path)
+            if recorte is not None:
+                audio_path_original, audio_path = audio_path, recorte
                 try:  # cuánta voz hubo de verdad: con 0,4 s no caben 456 caracteres
                     segundos_voz = jarvis_hablante.solo_voz(jarvis_hablante.leer_wav(audio_path))[1]
                 except Exception:
@@ -473,6 +477,8 @@ class VozMixin:
             logging.exception("No se pudo transcribir una frase de la escucha continua.")
         finally:
             audio_capture.limpiar_audio(audio_path)
+            if recorte is not None and recorte != audio_path_original:
+                audio_capture.limpiar_audio(audio_path_original)
         self.events.put(("continuous_result", decision))
 
     def _on_continuous_result(self, decision: tuple[str, str] | None) -> None:
@@ -564,6 +570,35 @@ class VozMixin:
         elif not resultado.aceptada:
             logging.info("Sonido demasiado corto para reconocer la voz (%.2f s): ignorado.", resultado.segundos_voz)
         return not resultado.aceptada
+
+    TRAMO_DESDE = 2.5  # s de voz: con menos, el trozo no es «largo con ruido de fondo»
+
+    def _speaker_clip(self, audio_path: str) -> str | None:
+        """Escucha continua: la ruta a transcribir si es tu voz (la misma, o un recorte con solo tu
+        tramo cuando el trozo largo mezcla la tele o un directo); None si no es tu voz."""
+        if not getattr(self, "_speaker_filter", False):
+            return audio_path
+        if not self._speaker_rejected(audio_path):
+            return audio_path
+        try:
+            muestras = jarvis_hablante.leer_wav(audio_path)
+            if jarvis_hablante.solo_voz(muestras)[1] < self.TRAMO_DESDE:
+                return None
+            tramo = self.speaker_verifier.buscar_tramo(muestras, self._speaker_strictness)
+        except Exception:
+            logging.exception("No se pudo buscar tu voz dentro del trozo.")
+            return None
+        if tramo is None:
+            return None
+        inicio, fin, parecido = tramo
+        import tempfile
+
+        descriptor, ruta = tempfile.mkstemp(suffix=".wav", prefix="jarvis_tramo_")
+        os.close(descriptor)
+        jarvis_hablante.guardar_wav(muestras[inicio:fin], ruta)
+        logging.info("Tu voz dentro de un trozo con sonido de fondo: tramo de %.1f s a %.1f s (parecido %.2f).",
+                     inicio / jarvis_hablante.FRECUENCIA, fin / jarvis_hablante.FRECUENCIA, parecido)
+        return ruta
 
     def _on_speaker_rejected(self, plan_approval: bool) -> None:
         if plan_approval:

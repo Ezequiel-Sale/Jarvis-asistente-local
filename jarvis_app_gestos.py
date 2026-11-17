@@ -5,11 +5,13 @@ se reconocen los gestos (se ven en la barra lateral y en la vista de cámara); l
 (scroll, puntero, clic) llegan en las fases siguientes y pasarán por ``tool_registry``.
 """
 
+import json
 import logging
 import queue
 import threading
 import time
 import tkinter as tk
+from tkinter import ttk
 
 import jarvis_core as core
 import jarvis_gestos
@@ -56,7 +58,8 @@ class GestosMixin:
             self.events, self._can_use_camera, core.APP_DIR,
             al_desplazar=self._queue_gesture_scroll, invertir_scroll=self._gesture_scroll_inverted(),
             al_apuntar=self._queue_gesture_pointer, monitor=self._gesture_monitor(),
-            al_atajo=lambda accion, repetida: self.events.put(("gesture_shortcut", accion, repetida)))
+            al_atajo=lambda accion, repetida: self.events.put(("gesture_shortcut", accion, repetida)),
+            mano=jarvis_gestos.MANOS[self._gesture_hand()])
         self.gesture_detector.start()
         return None
 
@@ -138,6 +141,9 @@ class GestosMixin:
                     elif accion[0] == "browser":
                         self.tool_registry.execute("browser_history", {"action": accion[1]},
                                                    confirmed=True, origin="gestos")
+                    elif accion[0] == "teclas":
+                        self.tool_registry.execute("gesture_keys", {"keys": accion[1]},
+                                                   confirmed=True, origin="gestos")
                     elif accion[0] == "volumen":
                         import jarvis_audio_devices
 
@@ -194,6 +200,29 @@ class GestosMixin:
                     logging.debug("No se pudo mover el puntero.", exc_info=True)
                 mostrado = redondo
             time.sleep(jarvis_gestos.PASO_DESLIZAR)
+
+    # --- Qué mano se sigue -----------------------------------------------------------------
+    _PREFERENCIA_MANO = "gestos_mano"
+
+    def _gesture_hand(self) -> str:
+        try:
+            valor = core.obtener_preferencia(self._PREFERENCIA_MANO)
+        except Exception:
+            valor = None
+        return valor if valor in jarvis_gestos.MANOS else jarvis_gestos.MANO_POR_DEFECTO
+
+    def _cycle_gesture_hand(self) -> None:
+        orden = list(jarvis_gestos.MANOS)
+        siguiente = orden[(orden.index(self._gesture_hand()) + 1) % len(orden)]
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_MANO, siguiente)
+        except Exception:
+            logging.exception("No se pudo guardar qué mano siguen los gestos.")
+        detector = getattr(self, "gesture_detector", None)
+        if detector is not None:
+            detector.mano = jarvis_gestos.MANOS[siguiente]
+        logging.info("Gestos: mano %s.", siguiente)
+        self._refresh_gesture_indicator()
 
     # --- Monitor del puntero (fase 3) ---------------------------------------------------
     _PREFERENCIA_MONITOR = "gestos_monitor"
@@ -303,7 +332,10 @@ class GestosMixin:
     def _on_gesture_shortcut(self, accion: str, repetida: bool) -> None:
         """Hilo de Tk. Pulgares: con una confirmación abierta la aprueban o cancelan (la primera
         vez, no al repetirse); si no, cambian el volumen. Mano abierta quieta: play/pausa.
-        Deslizar: atrás/adelante en el navegador."""
+        Deslizar: atrás/adelante en el navegador. ``propio:…``: lo que el usuario asignó (fase 5)."""
+        if accion.startswith("propio:"):
+            self._run_custom_gesture(accion.split(":", 1)[1])
+            return
         if accion in ("pulgar_arriba", "pulgar_abajo"):
             aprobar = accion == "pulgar_arriba"
             if self._pending_plan_reply is not None:
@@ -329,6 +361,157 @@ class GestosMixin:
             self._set_status("✋ ATRÁS" if accion == "atras" else "✋ ADELANTE", CYAN)
         logging.info("Atajo con gestos: %s%s.", accion, " (repetido)" if repetida else "")
 
+    # --- Fase 5: gestos propios -------------------------------------------------------------
+    _PREFERENCIA_PROPIOS = "gestos_propios"
+    TIPOS_PROPIOS = {"rutina": "Rutina", "frase": "Frase (como si se la dijeras)", "teclas": "Atajo de teclado"}
+    HISTORIAL_GESTOS = 20
+
+    def _custom_gestures(self) -> dict:
+        """{gesto: {"tipo": "rutina"|"frase"|"teclas", "valor": …}} (lo que el usuario asignó)."""
+        try:
+            datos = json.loads(core.obtener_preferencia(self._PREFERENCIA_PROPIOS) or "{}")
+        except (ValueError, TypeError):
+            return {}
+        except Exception:
+            logging.exception("No se pudieron leer los gestos propios.")
+            return {}
+        return {g: d for g, d in datos.items() if g in jarvis_gestos.PROPIOS and isinstance(d, dict)
+                and d.get("tipo") in self.TIPOS_PROPIOS and d.get("valor") not in (None, "")}
+
+    def _save_custom_gesture(self, gesto: str, tipo: str | None, valor) -> None:
+        datos = self._custom_gestures()
+        if tipo is None:
+            datos.pop(gesto, None)
+        else:
+            datos[gesto] = {"tipo": tipo, "valor": valor}
+        core.guardar_preferencia(self._PREFERENCIA_PROPIOS, json.dumps(datos, ensure_ascii=False))
+        self._refresh_custom_gestures()
+
+    def _describe_custom_gesture(self, asignacion: dict | None) -> str:
+        if not asignacion:
+            return "sin asignar"
+        tipo, valor = asignacion["tipo"], asignacion["valor"]
+        if tipo == "rutina":
+            import jarvis_routines
+
+            rutina = next((r for r in jarvis_routines.listar_automatizaciones() if r.identifier == valor), None)
+            return f"rutina «{rutina.name}»" if rutina else "rutina (ya no existe)"
+        if tipo == "frase":
+            return f"decir «{valor}»"
+        return f"teclas {valor}"
+
+    def _gesture_history_add(self, gesto: str, texto: str) -> None:
+        historial = getattr(self, "_gesture_history", [])
+        historial.insert(0, f"{time.strftime('%H:%M:%S')}  {jarvis_gestos.EMOJIS.get(gesto, '✋')}  {texto}")
+        self._gesture_history = historial[:self.HISTORIAL_GESTOS]
+        self._refresh_custom_gestures()
+
+    def _run_custom_gesture(self, gesto: str) -> None:
+        """Hilo de Tk: hace lo que el usuario asignó a ese gesto propio."""
+        asignacion = self._custom_gestures().get(gesto)
+        nombre = f"{jarvis_gestos.EMOJIS.get(gesto, '')} {jarvis_gestos.NOMBRES.get(gesto, gesto)}".strip()
+        if asignacion is None:
+            self._set_status(f"✋ {nombre.upper()}: SIN ASIGNAR (AJUSTES → GESTOS PROPIOS)", MUTED)
+            self._gesture_history_add(gesto, "sin asignar")
+            return
+        tipo, valor = asignacion["tipo"], asignacion["valor"]
+        logging.info("Gesto propio %s: %s.", gesto, tipo)
+        if tipo == "teclas":
+            self._gesture_queue().put(("teclas", valor))
+            self._set_status(f"✋ {nombre.upper()} → {str(valor).upper()}", CYAN)
+        elif self.busy or self.recorder is not None or self._pending_plan_reply is not None:
+            self._set_status("✋ JARVIS ESTÁ OCUPADO; PRUEBA EN UN MOMENTO", ERROR)
+            self._gesture_history_add(gesto, "ocupado: no se hizo")
+            return
+        elif tipo == "rutina":
+            self._run_routine_from_mobile(int(valor), desde="con un gesto")
+        else:  # frase: como si la escribieras en el chat
+            self._send_text_as_typed(str(valor))
+        self._gesture_history_add(gesto, self._describe_custom_gesture(asignacion))
+
+    def _on_gesture_progress(self, cuarto) -> None:
+        """Anillo de progreso al sostener un gesto propio (en el indicador de la barra lateral)."""
+        self._gesture_progress = cuarto
+        self._refresh_gesture_indicator()
+
+    def _refresh_custom_gestures(self) -> None:
+        etiquetas = getattr(self, "custom_gesture_labels", None)
+        if etiquetas:
+            asignados = self._custom_gestures()
+            for gesto, etiqueta in etiquetas.items():
+                etiqueta.configure(text=self._describe_custom_gesture(asignados.get(gesto)),
+                                   fg=TEXT if gesto in asignados else MUTED)
+        historial = getattr(self, "gesture_history_label", None)
+        if historial is not None:
+            lineas = getattr(self, "_gesture_history", [])
+            historial.configure(text="\n".join(lineas[:8]) if lineas else "Todavía no usaste ningún gesto propio.")
+
+    def _assign_custom_gesture(self, gesto: str) -> None:
+        """Ventana para elegir qué hace un gesto propio: una rutina, una frase o un atajo de teclado."""
+        import jarvis_routines
+        import jarvis_screen_actions as acciones
+
+        ventana = tk.Toplevel(self.root)
+        nombre = f"{jarvis_gestos.EMOJIS[gesto]}  {jarvis_gestos.NOMBRES[gesto].capitalize()}"
+        ventana.title(f"Gesto {jarvis_gestos.NOMBRES[gesto]}")
+        ventana.configure(bg=BG)
+        ventana.transient(self.root)
+        ventana.geometry("520x380")
+        marco = tk.Frame(ventana, bg=PANEL, padx=20, pady=16, highlightthickness=1, highlightbackground=BORDER)
+        marco.pack(fill="both", expand=True, padx=14, pady=14)
+        tk.Label(marco, text=nombre, bg=PANEL, fg=CYAN, font=("Segoe UI", 16, "bold")).pack(anchor="w")
+        tk.Label(marco, text="Sostenelo 0,6 s frente a la cámara. ¿Qué hace?", bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 10))
+        actual = self._custom_gestures().get(gesto) or {}
+        tipo = tk.StringVar(value=actual.get("tipo", "nada"))
+        rutinas = [r for r in jarvis_routines.listar_automatizaciones()]
+        nombres_rutinas = [r.name for r in rutinas]
+        valor_rutina = tk.StringVar(value=next((r.name for r in rutinas if r.identifier == actual.get("valor")), ""))
+        valor_texto = tk.StringVar(value=str(actual.get("valor", "")) if actual.get("tipo") in ("frase", "teclas") else "")
+        error = tk.Label(marco, text="", bg=PANEL, fg=ERROR, font=("Segoe UI", 9), wraplength=460, justify="left")
+
+        def opcion(clave: str, texto: str) -> None:
+            tk.Radiobutton(marco, text=texto, value=clave, variable=tipo, bg=PANEL, fg=TEXT, selectcolor=BG,
+                           activebackground=PANEL, activeforeground=CYAN, font=("Segoe UI", 10),
+                           anchor="w").pack(fill="x")
+
+        opcion("nada", "Nada (sin asignar)")
+        opcion("rutina", "Rutina")
+        ttk.Combobox(marco, textvariable=valor_rutina, values=nombres_rutinas, state="readonly").pack(
+            fill="x", padx=(24, 0), pady=(0, 6))
+        opcion("frase", "Frase (como si se la dijeras: «pausa», «abre Steam», «modo gaming 4K»…)")
+        opcion("teclas", "Atajo de teclado (ctrl+w, alt+tab, win+d, f5…)")
+        tk.Entry(marco, textvariable=valor_texto, bg=BG, fg=TEXT, insertbackground=TEXT, relief="flat",
+                 font=("Segoe UI", 10)).pack(fill="x", padx=(24, 0), ipady=4)
+        error.pack(anchor="w", pady=(8, 0))
+
+        def guardar() -> None:
+            elegido = tipo.get()
+            try:
+                if elegido == "nada":
+                    self._save_custom_gesture(gesto, None, None)
+                elif elegido == "rutina":
+                    rutina = next((r for r in rutinas if r.name == valor_rutina.get()), None)
+                    if rutina is None:
+                        raise ValueError("Elegí una rutina de la lista.")
+                    self._save_custom_gesture(gesto, "rutina", rutina.identifier)
+                else:
+                    texto = valor_texto.get().strip()
+                    if not texto:
+                        raise ValueError("Escribí la frase o el atajo.")
+                    if elegido == "teclas":
+                        acciones.parsear_atajo(texto)  # valida antes de guardar
+                    self._save_custom_gesture(gesto, elegido, texto[:200])
+            except ValueError as problema:
+                error.configure(text=str(problema))
+                return
+            ventana.destroy()
+
+        botones = tk.Frame(marco, bg=PANEL)
+        botones.pack(side="bottom", fill="x", pady=(10, 0))
+        self._ui_button(botones, "GUARDAR", guardar, fg=CYAN).pack(side="left")
+        self._ui_button(botones, "CANCELAR", ventana.destroy, fg=MUTED).pack(side="right")
+
     def _on_gesture_stats(self, cuadros_por_s: float, brillo: int) -> None:
         self._gesture_fps, self._gesture_brightness = cuadros_por_s, brillo
 
@@ -348,8 +531,14 @@ class GestosMixin:
                 etiqueta.pack_forget()
             else:
                 puntero = getattr(self, "_gesture_pointer", None)
+                progreso = getattr(self, "_gesture_progress", None)
                 if getattr(self, "_gestures_paused_for_game", False):
                     texto, color = "✋ GESTOS EN PAUSA (JUEGO)", MUTED
+                elif progreso is not None:  # sosteniendo un gesto propio: anillo de 4 cuartos
+                    gesto, cuartos = progreso
+                    texto = (f"{jarvis_gestos.EMOJIS.get(gesto, '✋')} {jarvis_gestos.NOMBRES[gesto].upper()}  "
+                             + "▰" * cuartos + "▱" * (4 - cuartos))
+                    color = CYAN
                 elif puntero == "arrastrando":
                     texto, color = "✋ ARRASTRANDO", CYAN
                 elif puntero == "puntero":
@@ -364,6 +553,9 @@ class GestosMixin:
         boton = getattr(self, "gestures_button", None)
         if boton is not None:
             boton.configure(text="GESTOS ON" if activo else "GESTOS OFF", fg=CYAN if activo else MUTED)
+        boton = getattr(self, "gesture_hand_button", None)
+        if boton is not None:
+            boton.configure(text=f"✋  MANO: {self._gesture_hand().upper()}")
         boton = getattr(self, "gesture_monitor_button", None)
         if boton is not None:
             boton.configure(text=f"🖱  PUNTERO: MONITOR {self._gesture_monitor_number()}")

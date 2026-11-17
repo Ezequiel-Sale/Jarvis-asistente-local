@@ -41,6 +41,10 @@ class PhraseTests(unittest.TestCase):
             "maximiza Jarvis": ("jarvis", "window_maximize"),  # antes iba a la IA (2026-11-14)
             "trae Jarvis al frente": ("jarvis", "window_focus"),
             "Trae a Jarvis al frente.": ("jarvis", "window_focus"),
+            # 2026-11-16: «Pon Brave al frente» iba a la IA (Brave estaba excluido) y hacía tres pasos.
+            "Pon Brave al frente": ("brave", "window_focus"),
+            "trae el navegador al frente": ("brave", "window_focus"),
+            "pon Discord en primer plano": ("discord", "window_focus"),
             "minimiza a Discord": ("discord", "window_minimize"),
             # Whisper a veces oye «minimiza» por «maximiza»: sinónimos que suenan distinto.
             "agranda Jarvis": ("jarvis", "window_maximize"),

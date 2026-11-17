@@ -537,6 +537,7 @@ _CORRECCIONES_VOZ = (
     (r"\byou\s+tube\b", "YouTube"),
     (r"\ben\s+la\s+tel(?:ena|eta|el)\b", "en la tele"),  # «Abre triplay en la telena» (2026-11-13)
     (r"\bpanta(?:ja|ya|lia|la|da)\b", "pantalla"),  # «Pantaja completa» (2026-11-16)
+    (r"\bcloud\s*code\b", "Claude Code"),  # «Abre CloudCode» iba a «Abrir juego» (2026-11-17)
     # «Busca la obra del partido entre Argentina y Costa Rica» (2026-11-16)
     (r"\b(la|a\s+qu[eé])\s+obra\s+(del?\s+(?:partido|juego|evento|show|concierto|recital|vuelo|"
      r"pel[ií]cula|estreno|clase|reuni[oó]n|turno|cita|carrera|pelea|final))\b", r"\1 hora \2"),
@@ -567,6 +568,28 @@ _SEPARADOR_ORDENES = re.compile(
     r"\s*[,.;]?\s*\b(?:y\s+)?(?:luego|despues|después|entonces|a\s+continuacion|a\s+continuación)\b\s*[,]?\s*",
     re.IGNORECASE,
 )
+
+
+_CORTESIA = {"gracias", "muchas gracias", "gracias jarvis", "mil gracias", "por favor", "porfa", "ok", "okay",
+             "listo", "perfecto", "genial", "bueno", "dale", "bien", "buenisimo", "de nada", "joya", "barbaro"}
+
+
+def dividir_oraciones(texto: str) -> list[str]:
+    """«Desactiva los gestos. Gracias. ¿Qué clima hace?» → ["Desactiva los gestos", "¿Qué clima hace?"].
+
+    Parte por fin de oración (. ! ?) y antes de «¿»/«¡», y quita las de pura cortesía («gracias»,
+    «por favor», «ok»). Quien llama decide si conviene hacerlas por separado.
+    """
+    partes = re.split(r"(?<=[.!?])\s+|\s+(?=[¿¡])", (texto or "").strip())
+    utiles = []
+    for parte in partes:
+        limpia = parte.strip(" ,;")
+        if not limpia:
+            continue
+        if _normalizar_consulta(limpia) in _CORTESIA:
+            continue
+        utiles.append(limpia.rstrip("."))
+    return utiles
 
 
 def dividir_por_y(texto: str) -> list[str]:
@@ -806,9 +829,10 @@ def _numero_monitor(valor: str) -> int:
 
 
 _FIX_ESCALADO = re.compile(
-    r"^(?:arregla|arreglar|arreglame|corrige|corregir|repara|reparar|reajusta|reajustar|"
+    r"^(?:arregla|arreglar|arreglame|arregle|corrige|corregir|corrija|repara|reparar|repare|reajusta|reajustar|"
     r"resetea|resetear|reinicia|reiniciar|soluciona|solucionar|acomoda|acomodar)\s+"
-    r"(?:el\s+|la\s+)?(?:escalado|escala|barra(?:\s+de\s+tareas)?)"
+    # «escalador»: así lo transcribe Whisper a veces (2026-11-16: fue a la IA, que inventó haberlo hecho).
+    r"(?:el\s+|la\s+)?(?:escalado|escalador|escala|barra(?:\s+de\s+tareas)?)"
     r"(?:\s+(?:del|de\s+la|en\s+el|en\s+la)\s+(?:monitor|pantalla)\s+(?:numero\s+)?"
     + _NUM_MONITOR + r")?$"
 )
@@ -939,8 +963,11 @@ _CAMBIA_A_VENTANA = re.compile(
 )
 _AL_FRENTE = re.compile(
     r"^(?:trae|traeme|pon|ponme)\s+(?:(?:la|el)\s+)?(?:ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?"
-    r"(?P<app>.+?)\s+(?:al\s+frente|adelante|encima)$"
+    r"(?P<app>.+?)\s+(?:al\s+frente|adelante|encima|en\s+primer\s+plano)$"
 )
+# Traer al frente sí vale para el navegador (no tiene frase propia para eso): «pon Brave al frente»
+# iba a la IA, que hizo tres pasos (2026-11-16).
+_NAVEGADOR = {"brave", "navegador", "el navegador"}
 # Brave ya tiene sus frases («minimiza Brave») y «minimiza la ventana» es la de Jarvis. «Jarvis» sí
 # pasa (desde 2026-11-14): «maximiza Jarvis» iba a la IA, que no sabía qué hacer.
 _VENTANA_EXCLUIDAS = {"letra", "la letra", "las letras", "el texto", "la fuente", "el zoom", "la imagen",
@@ -972,6 +999,8 @@ def detectar_comando_ventanas(texto: str) -> tuple[str, dict[str, object]] | Non
         return "window_control", {"app": "todo", "action": "window_minimize"}
     if (match := _AL_FRENTE.fullmatch(consulta) or _CAMBIA_A_VENTANA.fullmatch(consulta)) is not None:
         app = re.sub(r"^a\s+", "", match.group("app").strip())  # «trae a Jarvis…»
+        if app in _NAVEGADOR:
+            return "window_control", {"app": "brave", "action": "window_focus"}
         if app and app not in _VENTANA_EXCLUIDAS:
             return "window_control", {"app": app, "action": "window_focus"}
         return None

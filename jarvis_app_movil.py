@@ -277,8 +277,8 @@ class MovilMixin:
         self.events.put(("mobile_run_routine", rutina.identifier))
         return f"Ejecuto «{rutina.name}»."
 
-    def _run_routine_from_mobile(self, identificador: int) -> None:
-        """Hilo de Tk: la rutina elegida en el celular, como un comando por frase."""
+    def _run_routine_from_mobile(self, identificador: int, desde: str = "desde el celular") -> None:
+        """Hilo de Tk: la rutina elegida en el celular (o con un gesto), como un comando por frase."""
         import jarvis_routines
 
         info = next((r for r in jarvis_routines.listar_automatizaciones() if r.identifier == identificador), None)
@@ -286,7 +286,7 @@ class MovilMixin:
             return
         rutina = jarvis_routines.Routine(info.identifier, info.name, info.time, info.days, info.steps,
                                          info.trigger, info.permission, info.phrases)
-        self._add_message("user", f"{info.name} (desde el celular)")
+        self._add_message("user", f"{info.name} ({desde})")
         self._start_phrase_routine(rutina, info.name)
 
     def _commands_for_mobile(self) -> dict:

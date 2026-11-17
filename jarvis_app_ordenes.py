@@ -73,11 +73,82 @@ from jarvis_app_confirmaciones import ConfirmacionesMixin
 
 
 class OrdenesMixin:
+    # --- Varias oraciones en una frase [2026-11-17] ---------------------------------------
+    # «Desactiva los gestos. Gracias. ¿Qué clima hace?» iba entera a la IA, que (por el verbo «desactiva»)
+    # forzó un plan y lo armó con cosas del historial (HDMI 2, escalado). Si alguna oración es una orden
+    # que Jarvis conoce, se hacen de a una y en orden; las de cortesía («gracias») se descartan.
+    ESPERA_SIGUIENTE_ORDEN_MS = 400
+
+    def _is_known_order(self, texto: str) -> bool:
+        """¿Jarvis la hace sin la IA? (orden directa, rutina, sección, gestos, escucha, tele, pantalla)."""
+        from jarvis_commands import (detectar_comando_escucha, detectar_comando_gestos, detectar_modo_continuo,
+                                     detectar_navegacion)
+
+        try:
+            return bool(detectar_comando_gestos(texto) or detectar_navegacion(texto)
+                        or detectar_modo_continuo(texto) is not None or detectar_comando_escucha(texto) is not None
+                        or jarvis_tv.detectar(texto) or jarvis_screen_actions.detectar_comando(texto)
+                        or self._direct_tool_for(texto) or jarvis_routines.buscar_rutina_por_frase(texto))
+        except Exception:
+            logging.debug("No se pudo revisar si «…» es una orden conocida.", exc_info=True)
+            return False
+
+    def _split_orders(self, texto: str) -> list[str] | None:
+        """Las oraciones a hacer por separado, o None si la frase va entera como siempre."""
+        from jarvis_commands import dividir_oraciones
+
+        partes = dividir_oraciones(texto)
+        if not partes:
+            return None
+        if len(partes) == 1:
+            # Solo se quitó cortesía («Pausa. Gracias.» → «Pausa»): esa sola; si no cambió nada, None.
+            return partes if partes[0].rstrip(".") != texto.strip().rstrip(".") else None
+        if not any(self._is_known_order(p) for p in partes):
+            return None  # «Tengo un problema. ¿Cómo lo arreglo?»: va entera a la IA, con su contexto
+        return partes
+
+    def _run_orders(self, partes: list[str]) -> None:
+        """Hilo de Tk: la primera ya, las demás cuando Jarvis quede libre (de a una)."""
+        logging.info("Frase con %d órdenes: se hacen de a una.", len(partes))
+        self._pending_orders = list(partes[1:])
+        self._send_text_as_typed(partes[0])
+        if self._pending_orders:
+            self.root.after(self.ESPERA_SIGUIENTE_ORDEN_MS, self._drain_pending_orders)
+
+    def _drain_pending_orders(self) -> None:
+        pendientes = getattr(self, "_pending_orders", [])
+        if not pendientes or self._closing:
+            return
+        if self.busy or self.recorder is not None or self._pending_plan_reply is not None:
+            self.root.after(self.ESPERA_SIGUIENTE_ORDEN_MS, self._drain_pending_orders)
+            return
+        siguiente = pendientes.pop(0)
+        self._send_text_as_typed(siguiente)
+        if pendientes:
+            self.root.after(self.ESPERA_SIGUIENTE_ORDEN_MS, self._drain_pending_orders)
+
+    def _send_text_as_typed(self, texto: str) -> None:
+        """Una orden como si la escribieras en el chat (gestos propios, órdenes de a una)."""
+        borrador = self.input.get("1.0", "end-1c")
+        self.input.delete("1.0", "end")
+        self.input.insert("1.0", texto)
+        self._send_text()
+        if borrador.strip():  # lo que estabas escribiendo no se pierde
+            estado = str(self.input.cget("state"))
+            self.input.configure(state="normal")
+            self.input.insert("1.0", borrador)
+            self.input.configure(state=estado)
+
     def _send_text(self) -> None:
         if self.busy or self.recorder is not None:
             return
         text = self.input.get("1.0", "end-1c").strip()
         if not text:
+            return
+        partes = self._split_orders(text)
+        if partes is not None:
+            self.input.delete("1.0", "end")
+            self._run_orders(partes)
             return
         self.input.delete("1.0", "end")
         self._add_message("user", text)
@@ -244,6 +315,10 @@ class OrdenesMixin:
                 return
             if not transcript:
                 self.events.put(("empty_transcript",))
+                return
+            partes = self._split_orders(transcript)
+            if partes is not None:  # varias oraciones con alguna orden conocida: de a una
+                self.events.put(("multi_orders", partes))
                 return
             self.events.put(("transcript", transcript))
             if detectar_borrado_historial(transcript):

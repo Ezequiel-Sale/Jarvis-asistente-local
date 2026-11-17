@@ -105,6 +105,7 @@ class RecordingTests(unittest.TestCase):
 
 def _host(**estado) -> Mock:
     host = Mock()
+    host._speaker_clip = lambda ruta: JarvisApp._speaker_clip(host, ruta)
     host._speaker_rejected = lambda _ruta, **_k: False  # «Solo mi voz» desactivado
     host._closing = False
     host.recorder = None
@@ -184,6 +185,7 @@ class AppRoutingTests(unittest.TestCase):
         host = Mock()
         host.events = queue.Queue()
         host._find_phrase_routine.return_value = None
+        host._split_orders.return_value = None  # una sola orden
         with patch("jarvis_core.procesar_stt") as stt:
             JarvisApp._voice_worker(host, None, 0.0, "conv", transcript="desactiva la escucha continua")
         stt.assert_not_called()

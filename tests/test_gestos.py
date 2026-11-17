@@ -57,8 +57,10 @@ class ClassifierTests(unittest.TestCase):
             "dos_dedos": mano(("indice", "medio")),
             "mano_abierta": mano(("indice", "medio", "anular", "menique")),
             "puno": mano(()),
-            "pellizco": mano(("medio", "anular", "menique"), pellizco=True),
-            "otro": mano(("indice", "menique")),
+            "pellizco": mano((), pellizco=True),
+            "ok": mano(("medio", "anular", "menique"), pellizco=True),  # 👌 (fase 5)
+            "cuernos": mano(("indice", "menique")),  # 🤘 (fase 5)
+            "otro": mano(("medio", "anular")),
         }
         for esperado, puntos in casos.items():
             with self.subTest(gesto=esperado):
@@ -570,6 +572,126 @@ class ShortcutAppTests(unittest.TestCase):
                                     ("browser_history", {"action": "back"}, "gestos")])
 
 
+def llamame():
+    p = list(mano(("menique",)))
+    p[4] = (0.15, 0.5)  # pulgar bien afuera
+    return p
+
+
+def paz(x=0.5):
+    """Índice y medio estirados y separados en V."""
+    p = list(mano(("indice", "medio")))
+    p[6], p[7], p[8] = (0.38, 0.5), (0.34, 0.42), (0.30, 0.35)
+    p[10], p[11], p[12] = (0.54, 0.5), (0.58, 0.42), (0.62, 0.35)
+    dx = x - 0.5
+    return [(px + dx, py) for px, py in p]
+
+
+class CustomGestureTests(unittest.TestCase):
+    """Fase 5: 🤘 🤙 👌 ✌ asignables a una rutina, una frase o un atajo de teclado."""
+
+    def test_new_shapes(self) -> None:
+        self.assertEqual(g.clasificar(mano(("indice", "menique"))), "cuernos")
+        self.assertEqual(g.clasificar(llamame()), "llamame")
+        self.assertEqual(g.clasificar(mano(("menique",))), "otro")  # meñique solo, sin el pulgar
+        self.assertEqual(g.clasificar(mano(("medio", "anular", "menique"), pellizco=True)), "ok")
+        self.assertEqual(g.clasificar(paz()), "dos_dedos")  # ✌ es «dos dedos»…
+        self.assertTrue(g.en_v(paz()))  # …pero en V
+        self.assertFalse(g.en_v(mano(("indice", "medio"))))  # juntos: el scroll
+
+    def _correr(self, cuadros, apuntando=False):
+        a = g.Atajos()
+        a.apuntando = apuntando
+        salida, progresos = [], []
+        for i, (estable, puntos) in enumerate(cuadros):
+            salida += a.actualizar(estable, puntos, i * 0.04, estable)
+            progresos.append(a.progreso)
+        return salida, progresos
+
+    def test_held_custom_gesture_fires_once_with_progress(self) -> None:
+        salida, progresos = self._correr([("cuernos", mano(("indice", "menique")))] * 30)
+        self.assertEqual(salida, [("propio:cuernos", False)])  # una sola vez, aunque siga
+        fracciones = [p[1] for p in progresos if p]
+        self.assertEqual(fracciones, sorted(fracciones))  # el anillo se llena
+        self.assertEqual(self._correr([("ok", mano())] * 10)[0], [])  # 0,4 s: todavía no
+
+    def test_still_v_is_peace_but_moving_v_is_scroll(self) -> None:
+        self.assertEqual(self._correr([("dos_dedos", paz())] * 20)[0], [("propio:paz", False)])
+        moviendo = [("dos_dedos", paz(0.4 + i * 0.02)) for i in range(20)]
+        self.assertEqual(self._correr(moviendo)[0], [])
+        juntos = [("dos_dedos", mano(("indice", "medio")))] * 20
+        self.assertEqual(self._correr(juntos)[0], [])
+
+    def test_not_while_pointing(self) -> None:
+        salida, _ = self._correr([("ok", mano(("medio", "anular", "menique"), pellizco=True))] * 30,
+                                 apuntando=True)
+        self.assertEqual(salida, [])
+
+    def test_keyboard_shortcuts(self) -> None:
+        import jarvis_screen_actions as s
+
+        self.assertEqual(s.parsear_atajo("Ctrl + Shift + T"), [0x11, 0x10, 0x54])
+        self.assertEqual(s.parsear_atajo("win+d"), [0x5B, 0x44])
+        for malo in ("", "ctrl", "ctrl+xyz"):
+            with self.subTest(malo=malo), self.assertRaises(ValueError):
+                s.parsear_atajo(malo)
+        user32 = Mock()
+        user32.SendInput.return_value = 4
+        s.pulsar_atajo("alt+tab", user32=user32)
+        cantidad, entradas, _tam = user32.SendInput.call_args.args
+        self.assertEqual(cantidad, 4)  # apretar alt, tab; soltar tab, alt
+        orden = [(entradas[i].u.ki.wVk, bool(entradas[i].u.ki.dwFlags & 0x2)) for i in range(4)]
+        self.assertEqual(orden, [(0x12, False), (0x09, False), (0x09, True), (0x12, True)])
+
+
+class CustomGestureAppTests(unittest.TestCase):
+    def _host(self, asignados: dict, **estado):
+        valores = {"_gesture_actions": queue.Queue(), "busy": False, "recorder": None,
+                   "_pending_plan_reply": None, "TIPOS_PROPIOS": JarvisApp.TIPOS_PROPIOS,
+                   "HISTORIAL_GESTOS": JarvisApp.HISTORIAL_GESTOS, **estado}
+        host = _host(**valores)
+        host._custom_gestures = lambda: asignados
+        host._gesture_queue = lambda: host._gesture_actions
+        host._describe_custom_gesture = lambda a: JarvisApp._describe_custom_gesture(host, a)
+        host._gesture_history_add = lambda gesto, texto: JarvisApp._gesture_history_add(host, gesto, texto)
+        host._run_custom_gesture = lambda gesto: JarvisApp._run_custom_gesture(host, gesto)
+        host._gesture_history = []
+        return host
+
+    def test_keys(self) -> None:
+        host = self._host({"cuernos": {"tipo": "teclas", "valor": "ctrl+w"}})
+        JarvisApp._on_gesture_shortcut(host, "propio:cuernos", False)
+        self.assertEqual(host._gesture_actions.get_nowait(), ("teclas", "ctrl+w"))
+        self.assertIn("teclas ctrl+w", host._gesture_history[0])
+
+    def test_routine_and_phrase(self) -> None:
+        host = self._host({"llamame": {"tipo": "rutina", "valor": 7}, "ok": {"tipo": "frase", "valor": "pausa"}})
+        with patch("jarvis_routines.listar_automatizaciones", return_value=[SimpleNamespace(identifier=7,
+                                                                                             name="Cine")]):
+            JarvisApp._on_gesture_shortcut(host, "propio:llamame", False)
+        host._run_routine_from_mobile.assert_called_once_with(7, desde="con un gesto")
+        self.assertIn("rutina «Cine»", host._gesture_history[0])
+        JarvisApp._on_gesture_shortcut(host, "propio:ok", False)
+        host._send_text_as_typed.assert_called_once_with("pausa")
+
+    def test_unassigned_and_busy(self) -> None:
+        host = self._host({})
+        JarvisApp._on_gesture_shortcut(host, "propio:paz", False)
+        self.assertIn("SIN ASIGNAR", host._set_status.call_args.args[0])
+        host = self._host({"ok": {"tipo": "frase", "valor": "pausa"}}, busy=True)
+        JarvisApp._on_gesture_shortcut(host, "propio:ok", False)
+        host._send_text_as_typed.assert_not_called()
+        self.assertIn("OCUPADO", host._set_status.call_args.args[0])
+
+    def test_saved_assignments_are_validated(self) -> None:
+        host = _host(_PREFERENCIA_PROPIOS="gestos_propios", TIPOS_PROPIOS=JarvisApp.TIPOS_PROPIOS)
+        guardado = {"gestos_propios": '{"cuernos": {"tipo": "teclas", "valor": "ctrl+w"}, '
+                                      '"pulgar_arriba": {"tipo": "teclas", "valor": "x"}, '
+                                      '"ok": {"tipo": "raro", "valor": "x"}}'}
+        with patch("jarvis_core.obtener_preferencia", side_effect=guardado.get):
+            self.assertEqual(JarvisApp._custom_gestures(host), {"cuernos": {"tipo": "teclas", "valor": "ctrl+w"}})
+
+
 class ImageTests(unittest.TestCase):
     def test_dark_frames_are_brightened(self) -> None:
         import cv2
@@ -614,17 +736,68 @@ class _CamaraFalsa:
 
 
 class _ModeloFalso:
-    def __init__(self, puntos) -> None:
+    def __init__(self, puntos, lado="Left") -> None:  # «Left» = la mano derecha del usuario
         self.puntos = puntos
+        self.lado = lado  # qué mano dice MediaPipe que es
         self.cerrado = False
 
     def detect_for_video(self, _imagen, _ms):
         if not self.puntos:
-            return SimpleNamespace(hand_landmarks=[])
-        return SimpleNamespace(hand_landmarks=[[SimpleNamespace(x=x, y=y) for x, y in self.puntos]])
+            return SimpleNamespace(hand_landmarks=[], handedness=[])
+        return SimpleNamespace(hand_landmarks=[[SimpleNamespace(x=x, y=y) for x, y in self.puntos]],
+                               handedness=[[SimpleNamespace(category_name=self.lado, score=0.95)]])
 
     def close(self):
         self.cerrado = True
+
+
+class HandSideTests(unittest.TestCase):
+    """Solo la mano elegida (la derecha por defecto)."""
+
+    @staticmethod
+    def _resultado(*lados):
+        return SimpleNamespace(
+            hand_landmarks=[[SimpleNamespace(x=0.5, y=0.5)] * 21 for _ in lados],
+            handedness=[[SimpleNamespace(category_name=lado, score=score)] for lado, score in lados])
+
+    def test_pick_the_chosen_hand(self) -> None:
+        dos = self._resultado(("Left", 0.9), ("Right", 0.8))
+        self.assertEqual(g.elegir_mano(dos, "Right"), 1)
+        self.assertEqual(g.elegir_mano(dos, "Left"), 0)
+        self.assertEqual(g.elegir_mano(dos, None), 0)
+        self.assertIsNone(g.elegir_mano(self._resultado(("Left", 0.9)), "Right"))  # solo la izquierda
+        self.assertIsNone(g.elegir_mano(self._resultado(), "Right"))
+        # Dos «derechas» (un error de MediaPipe): la de más confianza.
+        self.assertEqual(g.elegir_mano(self._resultado(("Right", 0.6), ("Right", 0.9)), "Right"), 1)
+
+    def test_left_hand_is_ignored_by_the_thread(self) -> None:
+        eventos: queue.Queue = queue.Queue()
+        detector = g.DetectorGestos(eventos, lambda: True, Path("."),
+                                    crear_modelo=lambda: _ModeloFalso(mano(("indice", "medio")), lado="Right"),
+                                    abrir_camara=lambda: _CamaraFalsa(8, detector))
+        hilo = threading.Thread(target=detector._bucle)
+        hilo.start()
+        hilo.join(5)
+        publicados = [eventos.get_nowait() for _ in range(eventos.qsize())]
+        self.assertEqual([e for e in publicados if e[0] == "gesture"], [])  # «Right» = la izquierda: no cuenta
+
+    def test_hand_setting_cycles(self) -> None:
+        guardado = {}
+        detector = Mock()
+        host = _host(gesture_detector=detector, _PREFERENCIA_MANO="gestos_mano")
+        host._gesture_hand = lambda: guardado.get("gestos_mano", "derecha")
+        with patch("jarvis_core.guardar_preferencia", side_effect=guardado.__setitem__):
+            JarvisApp._cycle_gesture_hand(host)
+            self.assertEqual(detector.mano, "Right")  # izquierda (MediaPipe la etiqueta al revés)
+            JarvisApp._cycle_gesture_hand(host)
+            self.assertIsNone(detector.mano)  # cualquiera
+            JarvisApp._cycle_gesture_hand(host)
+        self.assertEqual(detector.mano, "Left")  # derecha
+
+    def test_right_hand_is_what_mediapipe_calls_left(self) -> None:
+        """2026-11-16: con «derecha» → «Right» no seguía la mano derecha (el log: «se sigue Left»)."""
+        self.assertEqual(g.MANOS["derecha"], "Left")
+        self.assertEqual(g.MANOS[g.MANO_POR_DEFECTO], "Left")
 
 
 class DetectorThreadTests(unittest.TestCase):
@@ -724,6 +897,8 @@ def _host(**estado) -> Mock:
     host._start_gestures = lambda: JarvisApp._start_gestures(host)
     host._stop_gestures = lambda: JarvisApp._stop_gestures(host)
     host._gesture_queue = lambda: JarvisApp._gesture_queue(host)
+    host._gesture_hand = lambda: "derecha"
+    host._gesture_progress = None
     host._merge_gesture_actions = JarvisApp._merge_gesture_actions
     for clave, valor in estado.items():
         setattr(host, clave, valor)
@@ -894,6 +1069,7 @@ class AppTests(unittest.TestCase):
         host = Mock()
         host.events = queue.Queue()
         host._find_phrase_routine.return_value = None
+        host._split_orders.return_value = None  # una sola orden
         with patch("jarvis_core.procesar_stt"):
             JarvisApp._voice_worker(host, None, 0.0, "c", transcript="activa los gestos")
         eventos = [host.events.get_nowait() for _ in range(host.events.qsize())]

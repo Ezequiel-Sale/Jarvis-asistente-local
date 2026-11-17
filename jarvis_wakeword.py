@@ -132,7 +132,7 @@ MAXIMO_VOZ_RESPUESTA = 2.5
 # Escucha continua: frases sin «Hey Jarvis».
 PREVIO_FRASE = 5  # bloques (~0,4 s) antes de que la energía suba: el inicio de la palabra
 SILENCIO_FRASE = 1.3  # como en las órdenes tras «Hey Jarvis»
-MAXIMO_FRASE = 20.0
+MAXIMO_FRASE = 12.0  # las órdenes duran mucho menos; más es sonido de fondo (antes 20 s)
 MINIMO_VOZ_FRASE = 0.35  # menos es un golpe, una tos o un clic
 
 

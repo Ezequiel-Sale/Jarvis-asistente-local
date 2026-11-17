@@ -114,6 +114,19 @@ class VerifierTests(unittest.TestCase):
         self.assertFalse(nuevo.registrada())
         self.assertFalse((self.carpeta / h.ARCHIVO_HUELLA).exists())
 
+    def test_finds_your_voice_inside_a_long_clip_with_other_voices(self) -> None:
+        """2026-11-16: con la tele de fondo, trozos de 16–20 s; tu orden quedaba adentro y se descartaba."""
+        mia = self.ver.huella_de(_voz(2.0, 200))[0]
+        self.ver.guardar_huella([mia])
+        clip = np.concatenate([_voz(5.0, 5000), _voz(2.0, 200), _voz(4.0, 5000)])
+        tramo = self.ver.buscar_tramo(clip, "media")
+        self.assertIsNotNone(tramo)
+        inicio, fin, parecido = (tramo[0] / h.FRECUENCIA, tramo[1] / h.FRECUENCIA, tramo[2])
+        self.assertLessEqual(inicio, 5.0)
+        self.assertGreaterEqual(fin, 7.0)
+        self.assertLess(fin - inicio, 5.0)  # solo tu tramo (con margen), no los 11 s
+        self.assertIsNone(self.ver.buscar_tramo(_voz(8.0, 5000), "media"))  # sin tu voz: nada
+
     def test_damaged_print_means_not_registered(self) -> None:
         (self.carpeta / h.ARCHIVO_HUELLA).write_text("{roto", encoding="utf-8")
         self.assertFalse(h.Verificador(self.carpeta).registrada())
@@ -127,6 +140,7 @@ class VerifierTests(unittest.TestCase):
 
 def _host(**estado) -> Mock:
     host = Mock()
+    host._speaker_clip = lambda ruta: JarvisApp._speaker_clip(host, ruta)
     host.events = queue.Queue()
     host._speaker_filter = True
     host._speaker_strictness = "media"
@@ -182,6 +196,29 @@ class AppFilterTests(unittest.TestCase):
         host._approval_decision = Mock(return_value=True)
         JarvisApp._free_approval_worker(host, "si.wav", "plan", object())
         host._speaker_rejected.assert_called_once_with("si.wav", corta_pasa=True)
+
+    @patch("audio_capture.limpiar_audio")
+    def test_long_clip_transcribes_only_your_segment(self, limpiar: Mock) -> None:
+        carpeta = Path(tempfile.mkdtemp())
+        ruta = _wav(carpeta, "largo.wav", np.concatenate([_voz(5.0, 5000), _voz(2.0, 200), _voz(4.0, 5000)]))
+        host = _host(TRAMO_DESDE=JarvisApp.TRAMO_DESDE)
+        host._speaker_rejected = lambda _ruta, **_k: True  # el trozo entero no pasa
+        host.speaker_verifier.buscar_tramo.return_value = (5 * 16000, 7 * 16000, 0.62)
+        transcriptos = []
+
+        def stt(ruta_audio, **_k):
+            transcriptos.append(ruta_audio)
+            return "arregla el escalado"
+
+        with patch("jarvis_core.procesar_stt", side_effect=stt):
+            JarvisApp._continuous_worker(host, ruta, False)
+        self.assertEqual(len(transcriptos), 1)
+        self.assertNotEqual(transcriptos[0], ruta)  # se transcribió el recorte, no el trozo
+        evento = host.events.get_nowait()
+        self.assertEqual((evento[0], evento[1][0], evento[1][1].lower()),
+                         ("continuous_result", "orden", "arregla el escalado"))
+        limpiados = {c.args[0] for c in limpiar.call_args_list}
+        self.assertEqual(limpiados, {ruta, transcriptos[0]})  # se borran los dos
 
     @patch("audio_capture.limpiar_audio")
     def test_wakeword_command_from_other_voice(self, limpiar: Mock) -> None:

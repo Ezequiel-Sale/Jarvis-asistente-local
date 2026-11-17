@@ -29,11 +29,17 @@ CARPETA_MODELO = "gestos-modelo"
 MODELO = "hand_landmarker.task"
 TAMANO_MODELO = 7_819_105  # bytes (verificado al descargarlo)
 
-GESTOS = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "pulgar_arriba", "pulgar_abajo", "otro")
+GESTOS = ("indice", "dos_dedos", "pellizco", "puno", "mano_abierta", "pulgar_arriba", "pulgar_abajo",
+          "cuernos", "llamame", "ok", "otro")
+# Fase 5: gestos que el usuario asigna a una rutina, una frase o un atajo de teclado. «paz» no es una
+# clase de ``clasificar``: es «dos dedos» separados en V y con la mano quieta (lo detecta ``Atajos``),
+# para no romper el scroll con dos dedos.
+PROPIOS = ("cuernos", "llamame", "ok", "paz")
+EMOJIS = {"cuernos": "🤘", "llamame": "🤙", "ok": "👌", "paz": "✌"}
 NOMBRES = {
     "indice": "índice", "dos_dedos": "dos dedos · scroll", "pellizco": "pellizco", "puno": "puño",
     "mano_abierta": "mano abierta", "pulgar_arriba": "pulgar arriba", "pulgar_abajo": "pulgar abajo",
-    "otro": "otro",
+    "cuernos": "cuernos", "llamame": "llamame", "ok": "OK", "paz": "paz", "otro": "otro",
 }
 
 # Índices de MediaPipe: 0 muñeca; pulgar 1–4; índice 5–8; medio 9–12; anular 13–16; meñique 17–20.
@@ -98,6 +104,8 @@ def clasificar(puntos: Sequence[Punto]) -> str:
     # En el puño el pulgar también queda cerca del índice: es pellizco solo si el índice no está
     # enroscado del todo (su punta, más lejos de la muñeca que su nudillo).
     indice_abierto = _distancia(muneca, puntos[PUNTA_INDICE]) > _distancia(muneca, puntos[BASE_INDICE]) * 1.1
+    if juntos and {"medio", "anular", "menique"} <= estirados:
+        return "ok"  # 👌: pulgar con índice y los otros tres estirados (antes que el pellizco)
     if juntos and indice_abierto:
         return "pellizco"
     if not estirados:
@@ -109,7 +117,20 @@ def clasificar(puntos: Sequence[Punto]) -> str:
         return "dos_dedos"
     if len(estirados) == 4:
         return "mano_abierta"
+    if estirados == {"indice", "menique"}:
+        return "cuernos"
+    if estirados == {"menique"} and _distancia(puntos[PUNTA_PULGAR], puntos[BASE_INDICE]) / tamano >= PULGAR_ESTIRADO:
+        return "llamame"
     return "otro"
+
+
+SEPARACION_PAZ = 0.45  # puntas del índice y del medio / tamaño de la mano: más es una V
+
+
+def en_v(puntos: Sequence[Punto]) -> bool:
+    """«Dos dedos» con el índice y el medio separados en V (✌), no juntos (el scroll)."""
+    tamano = _distancia(puntos[MUNECA], puntos[9]) or 1e-6
+    return _distancia(puntos[PUNTA_INDICE], puntos[12]) / tamano >= SEPARACION_PAZ
 
 
 class Estabilizador:
@@ -356,7 +377,7 @@ class Puntero:
 
     # Con el puntero ya armado, estos gestos estables lo mantienen («otro»: el dedo medio un poco
     # abierto, un cuadro raro). Solo lo sueltan puño, mano abierta, dos dedos o perder la mano.
-    SIGUE_ARMADO = ("indice", "pellizco", "otro")
+    SIGUE_ARMADO = ("indice", "pellizco", "ok", "otro")  # «ok»: pellizco con los otros dedos abiertos
 
     def _con_banda(self, fx: float, fy: float) -> tuple[int, int]:
         """El ancla solo se mueve cuando el punto filtrado sale del radio ``BANDA``: el temblor de la
@@ -476,6 +497,8 @@ class Atajos:
     SIN_ABIERTA = 0.6  # s sin ver la mano abierta antes de olvidar su rastro
     SOSTENER_PULGAR = 0.4
     REPETIR_PULGAR = 0.6
+    SOSTENER_PROPIO = 0.6  # gestos propios (fase 5): sostenidos este tiempo, con un anillo de progreso
+    QUIETA_PAZ = 0.04  # ✌ tiene que estar quieta (si se mueve, es scroll)
 
     def __init__(self) -> None:
         self._quieta: list[tuple[float, float, float]] = []  # (t, x, y) con «mano abierta» estable
@@ -487,6 +510,12 @@ class Atajos:
         self._pulgar: str | None = None
         self._pulgar_desde = 0.0
         self._pulgar_ultimo: float | None = None
+        self._propio: str | None = None  # gesto propio que se está sosteniendo
+        self._propio_desde = 0.0
+        self._propio_hecho = False
+        self._paz: list[tuple[float, float, float]] = []
+        self.progreso: tuple[str, float] | None = None  # (gesto, 0–1) para el indicador
+        self.apuntando = False  # el puntero está armado (lo pone el hilo de la cámara)
 
     def actualizar(self, estable: str | None, puntos: Sequence[Punto] | None, ahora: float,
                    gesto: str | None = None) -> list[tuple]:
@@ -509,7 +538,42 @@ class Atajos:
             self._quieta = [m for m in self._quieta if ahora - m[0] <= max(self.QUIETA_PAUSA, 1.5)]
             acciones += self._pausa(ahora, x, y)
         acciones += self._pulgares(estable, ahora)
+        acciones += self._propios(estable, puntos, ahora)
         return acciones
+
+    def _propio_actual(self, estable: str | None, puntos, ahora: float) -> str | None:
+        """Qué gesto propio se está haciendo (✌ = dos dedos en V y quietos)."""
+        if estable in ("cuernos", "llamame", "ok"):
+            self._paz = []
+            return estable
+        if estable == "dos_dedos" and puntos is not None and en_v(puntos):
+            x, y = centro_palma(puntos)
+            self._paz = [m for m in self._paz + [(ahora, x, y)] if ahora - m[0] <= self.SOSTENER_PROPIO]
+            xs, ys = [m[1] for m in self._paz], [m[2] for m in self._paz]
+            if max(xs) - min(xs) <= self.QUIETA_PAZ and max(ys) - min(ys) <= self.QUIETA_PAZ:
+                return "paz"
+            return None
+        if estable == "dos_dedos" and puntos is None and self._propio == "paz":
+            return "paz"  # un cuadro sin mano no corta el sostener
+        self._paz = []
+        return None
+
+    def _propios(self, estable: str | None, puntos, ahora: float) -> list[tuple]:
+        """Fase 5: un gesto propio sostenido ``SOSTENER_PROPIO`` s dispara su acción una vez; se
+        rearma al cambiar de gesto. ``progreso`` sigue cuánto falta (para el anillo). Mientras se usa
+        el puntero (``apuntando``) no se disparan: un arrastre con los dedos abiertos parece 👌."""
+        actual = None if self.apuntando else self._propio_actual(estable, puntos, ahora)
+        if actual != self._propio:
+            self._propio, self._propio_desde, self._propio_hecho = actual, ahora, False
+        if actual is None or self._propio_hecho:
+            self.progreso = None
+            return []
+        fraccion = min(1.0, (ahora - self._propio_desde) / self.SOSTENER_PROPIO)
+        self.progreso = (actual, fraccion)
+        if fraccion >= 1.0:
+            self._propio_hecho, self.progreso = True, None
+            return [(f"propio:{actual}", False)]
+        return []
 
     def _olvidar_rastro(self) -> None:
         if self._recorrido_maximo >= 0.08:
@@ -598,6 +662,27 @@ def aclarar(cuadro, cv2, clahe):
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR), brillo
 
 
+# Qué mano se sigue, como la etiqueta MediaPipe, o None: cualquiera. Con la imagen que Jarvis ya
+# espeja, MediaPipe llama «Left» a la mano derecha del usuario (al revés de lo que dice su
+# documentación; comprobado el 2026-11-16: con «derecha» → «Right» no seguía la derecha y el
+# usuario tuvo que elegir «izquierda»; el log mostró «se sigue Left» con su mano derecha).
+MANOS = {"derecha": "Left", "izquierda": "Right", "cualquiera": None}
+MANO_POR_DEFECTO = "derecha"
+
+
+def elegir_mano(resultado, permitida: str | None) -> int | None:
+    """Índice de la mano a seguir entre las detectadas (la de más confianza si hay varias), o None."""
+    manos = getattr(resultado, "hand_landmarks", None) or []
+    if not manos:
+        return None
+    if permitida is None:
+        return 0
+    lados = getattr(resultado, "handedness", None) or []
+    candidatas = [(cat[0].score, i) for i, cat in enumerate(lados[:len(manos)])
+                  if cat and cat[0].category_name == permitida]
+    return max(candidatas)[1] if candidatas else None
+
+
 def ruta_modelo(carpeta: Path) -> Path:
     return Path(carpeta) / CARPETA_MODELO / MODELO
 
@@ -628,7 +713,8 @@ class DetectorGestos(threading.Thread):
                  abrir_camara: Callable | None = None, crear_modelo: Callable | None = None,
                  al_desplazar: Callable[[int], None] | None = None, invertir_scroll: bool = False,
                  al_apuntar: Callable[[list], None] | None = None, monitor=None,
-                 al_atajo: Callable[[str, bool], None] | None = None) -> None:
+                 al_atajo: Callable[[str, bool], None] | None = None,
+                 mano: str | None = MANOS[MANO_POR_DEFECTO]) -> None:
         """``al_desplazar(cantidad)``: girar la rueda; ``al_apuntar(acciones)``: mover el puntero y
         los clics del pellizco (``Puntero``) en ``monitor``. La app los hace en otro hilo, en orden
         y por el registro de herramientas; este hilo nunca espera."""
@@ -649,6 +735,8 @@ class DetectorGestos(threading.Thread):
         self.puntero = Puntero(monitor) if al_apuntar is not None and monitor is not None else None
         self._estado_puntero: str | None = None
         self.al_atajo = al_atajo  # fase 4: pausa, atrás/adelante, pulgares (la app decide qué hacer)
+        self.mano = mano  # «Right», «Left» o None (cualquiera); la app la puede cambiar en marcha
+        self._mano_vista: str | None = None  # para el log: qué mano se vio por última vez
         self.atajos = Atajos()
 
     def stop(self) -> None:
@@ -669,7 +757,9 @@ class DetectorGestos(threading.Thread):
 
         opciones = vision.HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=str(ruta_modelo(self.carpeta))),
-            running_mode=vision.RunningMode.VIDEO, num_hands=1,
+            # Dos manos: si se busca solo la derecha y la izquierda aparece primero, con una sola
+            # la derecha quedaría sin seguir. La segunda solo cuesta cuando hay dos a la vista.
+            running_mode=vision.RunningMode.VIDEO, num_hands=2,
             # Un poco más bajos que lo normal (0,5): una vez encontrada, la mano se sigue aunque
             # gire (con la palma hacia el piso el detector la pierde: la ve casi de canto).
             min_hand_detection_confidence=0.5, min_hand_presence_confidence=0.4, min_tracking_confidence=0.4)
@@ -724,12 +814,14 @@ class DetectorGestos(threading.Thread):
                 rgb = cv2.cvtColor(cuadro, cv2.COLOR_BGR2RGB)
                 imagen = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 resultado = modelo.detect_for_video(imagen, int((time.perf_counter() - inicio) * 1000))
-                puntos = None
-                if resultado.hand_landmarks:
-                    puntos = [(p.x, p.y) for p in resultado.hand_landmarks[0]]
-                mundo = None
-                if puntos and getattr(resultado, "hand_world_landmarks", None):
-                    mundo = [(p.x, p.y, p.z) for p in resultado.hand_world_landmarks[0]]  # metros
+                puntos = mundo = None
+                indice = elegir_mano(resultado, self.mano)
+                self._anotar_mano(resultado, indice)
+                if indice is not None:
+                    puntos = [(p.x, p.y) for p in resultado.hand_landmarks[indice]]
+                    mundos = getattr(resultado, "hand_world_landmarks", None)
+                    if mundos and len(mundos) > indice:
+                        mundo = [(p.x, p.y, p.z) for p in mundos[indice]]  # metros
                 gesto = clasificar(puntos) if puntos else None
                 cambio = estabilizador.agregar(gesto)
                 if cambio is not False:
@@ -771,11 +863,28 @@ class DetectorGestos(threading.Thread):
         if cantidad:
             self.al_desplazar(cantidad)
 
+    def _anotar_mano(self, resultado, indice: int | None) -> None:
+        """Log cuando cambia qué mano se ve (para confirmar que «derecha» es la derecha)."""
+        lados = getattr(resultado, "handedness", None) or []
+        vistas = sorted(c[0].category_name for c in lados if c)
+        resumen = ",".join(vistas) or None
+        if resumen != self._mano_vista:
+            self._mano_vista = resumen
+            if resumen:
+                logging.info("Gestos: manos a la vista %s; se sigue %s.", resumen,
+                             "ninguna (no es la elegida)" if indice is None else (self.mano or "cualquiera"))
+
     def _atajos(self, estable: str | None, puntos, gesto: str | None = None) -> None:
         if self.al_atajo is None:
             return
+        self.atajos.apuntando = self.puntero is not None and self.puntero.armado
         for accion, repetida in self.atajos.actualizar(estable, puntos, time.monotonic(), gesto):
             self.al_atajo(accion, repetida)
+        progreso = self.atajos.progreso
+        cuarto = (progreso[0], int(progreso[1] * 4)) if progreso else None
+        if cuarto != getattr(self, "_progreso_publicado", None):
+            self._progreso_publicado = cuarto
+            self.events.put(("gesture_progress", cuarto))
 
     def _apuntar(self, estable: str | None, puntos, mundo=None) -> None:
         """Fase 3: puntero con el índice; clic y arrastre con el pellizco."""

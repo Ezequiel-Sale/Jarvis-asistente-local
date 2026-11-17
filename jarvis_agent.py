@@ -182,13 +182,15 @@ TextCallback = Callable[[str | None], None]
 # Respuestas que afirman una acción hecha («Puse…», «Moví…»): sin haber llamado a ninguna
 # herramienta son inventadas (2026-11-16: «Mueve Jarvis al monitor 2 y posiciónalo a la izquierda»
 # → «Puse Jarvis a la izquierda del monitor 2.» sin hacer nada).
+# Cualquier verbo en primera persona del pasado al empezar («Arreglé…», «Reajusté…», «Revisé…»:
+# 2026-11-16 «Arregla el escalador» → «Arreglé el escalador del monitor 3» sin ninguna acción), los
+# irregulares más comunes y «he + participio». Palabras que terminan en é/í sin ser verbos, fuera.
+_NO_ES_VERBO = r"(?!(?:aqu[ií]|as[ií]|ah[ií]|all[ií]|s[ií]|tambi[eé]n|qu[eé]|caf[eé]|beb[eé]|jos[eé]|ol[eé]|esqu[ií]|man[ií]|rub[ií]|ma[ií]z)\b)"
 _ACCION_INVENTADA = re.compile(
-    r"^\s*(?:(?:listo|hecho|perfecto|de\s+acuerdo|claro)[,.!:]?\s*)?(?:ya\s+)?"
-    r"(?:puse|mov[ií]|abr[ií]|cerr[eé]|traje|coloqu[eé]|maximic[eé]|minimic[eé]|restaur[eé]|sub[ií]|"
-    r"baj[eé]|encend[ií]|prend[ií]|apagu[eé]|activ[eé]|desactiv[eé]|cambi[eé]|paus[eé]|reanud[eé]|"
-    r"silenci[eé]|envi[eé]|mand[eé]|program[eé]|guard[eé]|borr[eé]|elimin[eé]|hice\s+clic|"
-    r"he\s+(?:puesto|movido|abierto|cerrado|hecho|colocado|cambiado|activado|desactivado|apagado|"
-    r"encendido|maximizado|minimizado|subido|bajado|pausado|enviado|programado|guardado))\b",
+    r"^\s*(?:(?:listo|hecho|perfecto|de\s+acuerdo|claro|bien)[,.!:]?\s*)?(?:ya\s+)?(?:lo\s+|la\s+|los\s+|las\s+|le\s+|te\s+)?"
+    r"(?:" + _NO_ES_VERBO + r"[a-záéíóúñ]{2,}[éí]"
+    r"|puse|traje|hice|dije|fui|pude|tuve|vine|conduje|deshice|repuse"
+    r"|he\s+[a-záéíóúñ]+(?:ado|ido|to|cho|so))\b",
     re.IGNORECASE,
 )
 AVISO_SIN_ACCION = ("No llegué a hacerlo: no encontré qué acción usar para eso. Prueba a decirlo de otra "
@@ -662,7 +664,8 @@ def _procesar_con_herramientas(
     solo_redactar = False  # tras una búsqueda pedida: la ronda siguiente es para responder
     reescritura_pedida = False
     busquedas = 0
-    for _ in range(max_tool_rounds + 2):
+    # +3: las rondas de herramientas, el reintento de plan y el pedido de redactar sin JSON.
+    for _ in range(max_tool_rounds + 3):
         available_tools = (
             tool_schemas
             if tool_rounds < max_tool_rounds and not plan_stopped and not solo_redactar
@@ -741,10 +744,13 @@ def _procesar_con_herramientas(
             sin_fuentes = resto[:fuentes.start()] if fuentes else resto
             if not re.search(r"[a-záéíóúñ]{4}", sin_fuentes, re.IGNORECASE):
                 # Solo quedaba la llamada (y las fuentes): mejor un aviso que JSON.
-                inicio = ("Encontré resultados, pero no pude redactar la respuesta." if busquedas
-                          else "No pude terminar la respuesta.")
-                resto = (inicio + " Prueba a preguntarlo de nuevo.\n\n"
-                         + (fuentes.group(0) if fuentes else "")).strip()
+                if busquedas:
+                    inicio = "Encontré resultados, pero no pude redactar la respuesta. Prueba a preguntarlo de nuevo."
+                elif completadas:  # hizo lo pedido; solo faltaba el texto final
+                    inicio = "Listo. " + _resumen_completadas(completadas)
+                else:
+                    inicio = "No pude terminar la respuesta. Prueba a decirlo de nuevo."
+                resto = (inicio + "\n\n" + (fuentes.group(0) if fuentes else "")).strip()
             content = resto
         if not tool_calls:
             answer = content.strip()
@@ -1001,4 +1007,9 @@ def _procesar_con_herramientas(
         if len(prepared) > 1:
             plan_stopped = True
 
+    if completadas:
+        # Hizo lo pedido pero no redactó el cierre: mejor resumirlo que un error (2026-11-16, «Pon
+        # Brave al frente»: tres pasos hechos y «No se obtuvo una respuesta final de Ollama»).
+        logging.warning("El modelo no dio una respuesta final; se resume lo que se hizo.")
+        return _con_avisos("Listo. " + _resumen_completadas(completadas), fallos)
     raise RuntimeError("No se obtuvo una respuesta final de Ollama.")

@@ -1112,6 +1112,36 @@ class WebSearchFallbackTests(unittest.TestCase):
             answer = procesar_con_herramientas("¿Qué es Python?", "c", self.registry, Mock(return_value=True))
         self.assertEqual(answer, "Python es un lenguaje de programación.")
 
+    @patch("jarvis_agent.requests.post")
+    def test_actions_done_but_no_final_text_is_summarized(self, post: Mock) -> None:
+        """2026-11-16 «Pon Brave al frente»: tres pasos hechos y «No se obtuvo una respuesta final»."""
+        hechas: list[str] = []
+        self.registry.register(
+            "focus_window", "Trae una ventana al frente.",
+            {"type": "object", "properties": {"app": {"type": "string"}}, "required": ["app"],
+             "additionalProperties": False},
+            lambda app: hechas.append(app) or "Listo.", label="Controlar ventanas")
+        post.return_value = _response({"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "focus_window", "arguments": {"app": "brave"}}}]})
+        with patch("jarvis_core.obtener_historial", return_value=[]):
+            answer = procesar_con_herramientas("trae Brave", "c", self.registry, Mock(return_value=True))
+        self.assertTrue(hechas)
+        self.assertTrue(answer.startswith("Listo. Acciones ya completadas: «Controlar ventanas»"))
+
+    def test_any_past_tense_claim_is_caught(self) -> None:
+        """2026-11-16: «Arregla el escalador» → «Arreglé el escalador del monitor 3» sin ninguna acción."""
+        from jarvis_agent import _ACCION_INVENTADA
+
+        for inventada in ("Arreglé el escalador del monitor 3 (Smart TV Pro).",
+                          "Reajusté el escalado del monitor 3: lo puse al 200 %.", "Revisé y no hay nada.",
+                          "Ya lo moví al monitor 2.", "He reiniciado la tele.", "Listo, corregí la barra."):
+            with self.subTest(inventada=inventada):
+                self.assertTrue(_ACCION_INVENTADA.match(inventada))
+        for normal in ("Aquí tienes la información.", "Así es: Python es un lenguaje.", "También puedo ayudarte.",
+                       "Sí, claro.", "Qué bueno.", "El clima hoy es soleado.", "Lo siento, no puedo hacer eso."):
+            with self.subTest(normal=normal):
+                self.assertFalse(_ACCION_INVENTADA.match(normal))
+
     def test_written_call_detection(self) -> None:
         from jarvis_agent import _llamada_escrita, _sin_llamadas_escritas
 

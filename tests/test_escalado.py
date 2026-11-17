@@ -22,6 +22,9 @@ class PhraseTests(unittest.TestCase):
             "corrige la barra de tareas de la pantalla dos": {"monitor": 2},
             "repara la escala en el monitor 3": {"monitor": 3},
             "reajusta el escalado": {},
+            # Como lo transcribió Whisper el 2026-11-16 (fue a la IA, que inventó haberlo hecho).
+            "Arregla el escalador": {},
+            "Arregle el escalador": {},
         }
         for texto, argumentos in casos.items():
             with self.subTest(texto=texto):

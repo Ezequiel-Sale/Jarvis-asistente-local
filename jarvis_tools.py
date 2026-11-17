@@ -619,6 +619,22 @@ def crear_registro_herramientas(
         exposed=False,  # solo la cámara de gestos; el modelo no la ve
     )
     registry.register(
+        "gesture_keys",
+        "Aprieta un atajo de teclado (keys: «ctrl+w», «alt+tab», «win+d»…). Solo lo usan los gestos propios.",
+        {
+            "type": "object",
+            "properties": {"keys": {"type": "string", "minLength": 1, "maxLength": 60}},
+            "required": ["keys"],
+            "additionalProperties": False,
+        },
+        lambda keys: jarvis_screen_actions.pulsar_atajo(keys),
+        risk=ToolRisk.MEDIUM,
+        label="Atajo de teclado con gesto",
+        timeout_seconds=2,
+        record_result=False,
+        exposed=False,  # el atajo lo eligió el usuario en Ajustes; el modelo no la ve
+    )
+    registry.register(
         "gesture_click",
         (
             "Botón izquierdo del mouse en un punto (action: click, down para empezar a arrastrar, "

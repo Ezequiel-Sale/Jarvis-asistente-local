@@ -4,6 +4,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+import jarvis_gestos
 import jarvis_theme
 from jarvis_actions import CancellationToken
 from jarvis_theme import (
@@ -581,12 +582,41 @@ class JarvisUIMixin:
             extras = tk.Frame(marco, bg=PANEL)
             extras.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
             self._ui_button(extras, "📷  VER CÁMARA", self._open_gesture_preview, fg=CYAN).pack(side="left")
+            self.gesture_hand_button = self._ui_button(extras, "✋  MANO …", self._cycle_gesture_hand, fg=MUTED)
+            self.gesture_hand_button.pack(side="left", padx=(8, 0))
             self.gesture_monitor_button = self._ui_button(extras, "🖱  PUNTERO …", self._cycle_gesture_monitor,
                                                           fg=MUTED)
             self.gesture_monitor_button.pack(side="left", padx=(8, 0))
             self.gesture_scroll_button = self._ui_button(extras, "↕  SCROLL …", self._toggle_gesture_scroll_direction,
                                                          fg=MUTED)
             self.gesture_scroll_button.pack(side="left", padx=(8, 0))
+            # Fase 5: gestos propios (🤘 🤙 👌 ✌) → rutina, frase o atajo de teclado.
+            propios = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+            propios.pack(fill="x", pady=(0, 10))
+            tk.Label(propios, text="Gestos propios", bg=PANEL, fg=TEXT,
+                     font=("Segoe UI", 11, "bold")).pack(anchor="w")
+            tk.Label(propios, text="Sostené el gesto 0,6 s frente a la cámara (el indicador se llena) y Jarvis hace "
+                     "lo que elijas: una rutina, una frase o un atajo de teclado. ✌ es con los dedos en V y la "
+                     "mano quieta (moviéndola, sigue siendo scroll). No se disparan mientras usás el puntero.",
+                     bg=PANEL, fg=MUTED, wraplength=540, justify="left", font=("Segoe UI", 9)).pack(anchor="w",
+                                                                                            pady=(2, 8))
+            self.custom_gesture_labels = {}
+            for gesto in jarvis_gestos.PROPIOS:
+                renglon = tk.Frame(propios, bg=PANEL)
+                renglon.pack(fill="x", pady=2)
+                tk.Label(renglon, text=f"{jarvis_gestos.EMOJIS[gesto]}  {jarvis_gestos.NOMBRES[gesto].capitalize()}",
+                         bg=PANEL, fg=TEXT, width=14, anchor="w", font=("Segoe UI Emoji", 10)).pack(side="left")
+                etiqueta = tk.Label(renglon, text="", bg=PANEL, fg=MUTED, anchor="w", font=("Segoe UI", 9))
+                etiqueta.pack(side="left", fill="x", expand=True)
+                self.custom_gesture_labels[gesto] = etiqueta
+                self._ui_button(renglon, "ASIGNAR", lambda g=gesto: self._assign_custom_gesture(g),
+                                fg=CYAN).pack(side="right")
+            tk.Label(propios, text="Últimos gestos:", bg=PANEL, fg=MUTED,
+                     font=("Consolas", 8, "bold")).pack(anchor="w", pady=(10, 2))
+            self.gesture_history_label = tk.Label(propios, text="", bg=PANEL, fg=MUTED, justify="left",
+                                                  anchor="w", font=("Consolas", 9))
+            self.gesture_history_label.pack(anchor="w")
+            self._refresh_custom_gestures()
             fila("Iniciar con Windows",
                  "Al encender la PC, Jarvis arranca oculto en la bandeja. "
                  "También: «desactiva el inicio con Windows».",

@@ -143,6 +143,24 @@ def promedio(huellas: list[np.ndarray]) -> np.ndarray:
     return media / (np.linalg.norm(media) + 1e-9)
 
 
+# Trozos largos con ruido de fondo (la tele, un directo): la escucha no encuentra silencios y graba
+# 16–20 s donde tu orden queda mezclada; la huella del trozo entero no se parece a la tuya y se
+# descartaba todo (2026-11-16). Entonces se busca tu voz en ventanas y se recorta ese tramo.
+VENTANA_TRAMO = 1.6  # s
+PASO_TRAMO = 0.4  # s
+VOZ_MINIMA_VENTANA = 0.6  # s de voz en la ventana para compararla
+MARGEN_TRAMO = 0.3  # s antes y después del tramo recortado
+TOLERANCIA_TRAMO = 0.05  # al extender el tramo, ventanas vecinas algo por debajo del umbral
+
+
+def guardar_wav(muestras: np.ndarray, ruta: str) -> None:
+    with wave.open(ruta, "wb") as archivo:
+        archivo.setnchannels(1)
+        archivo.setsampwidth(2)
+        archivo.setframerate(FRECUENCIA)
+        archivo.writeframes(np.clip(muestras, -32768, 32767).astype(np.int16).tobytes())
+
+
 @dataclass(frozen=True)
 class Resultado:
     aceptada: bool
@@ -230,6 +248,37 @@ class Verificador:
     def borrar_huella(self) -> None:
         self.ruta_huella.unlink(missing_ok=True)
         self._huella, self._huella_leida = None, True
+
+    def buscar_tramo(self, muestras: np.ndarray, exigencia: str) -> tuple[int, int, float] | None:
+        """Tu voz dentro de un trozo largo con otras voces o sonido de fondo: ``(inicio, fin, parecido)``
+        en muestras (con margen) del tramo continuo que más se parece a tu huella, o None."""
+        propia = self.huella()
+        if propia is None:
+            return None
+        ventana, paso = int(VENTANA_TRAMO * FRECUENCIA), int(PASO_TRAMO * FRECUENCIA)
+        inicios = list(range(0, max(1, len(muestras) - ventana + 1), paso))
+        parecidos: list[float | None] = []
+        for inicio in inicios:
+            voz, segundos = solo_voz(muestras[inicio:inicio + ventana])
+            if segundos < VOZ_MINIMA_VENTANA:
+                parecidos.append(None)
+                continue
+            huella, _ = self.huella_de(muestras[inicio:inicio + ventana])
+            parecidos.append(similitud(huella, propia) if huella is not None else None)
+        umbral = umbral_para(exigencia, VENTANA_TRAMO)  # ventana corta: con el descuento
+        validos = [(p, i) for i, p in enumerate(parecidos) if p is not None and p >= umbral]
+        if not validos:
+            return None
+        mejor, centro = max(validos)
+        izquierda = derecha = centro
+        minimo = umbral - TOLERANCIA_TRAMO
+        while izquierda > 0 and parecidos[izquierda - 1] is not None and parecidos[izquierda - 1] >= minimo:
+            izquierda -= 1
+        while derecha < len(inicios) - 1 and parecidos[derecha + 1] is not None and parecidos[derecha + 1] >= minimo:
+            derecha += 1
+        margen = int(MARGEN_TRAMO * FRECUENCIA)
+        return (max(0, inicios[izquierda] - margen), min(len(muestras), inicios[derecha] + ventana + margen),
+                mejor)
 
     def verificar(self, ruta_wav: str, exigencia: str, *, corta_pasa: bool = False) -> Resultado:
         """¿Es tu voz? Sin huella, se deja pasar. Con menos de ``MINIMO_AUDIO`` de voz no hay con

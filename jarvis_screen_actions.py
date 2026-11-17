@@ -479,6 +479,60 @@ def hacer_clic(x: int, y: int) -> None:
     _enviar_raton(user32, _MOUSEEVENTF_LEFTUP)
 
 
+# --- Atajos de teclado (gestos propios, fase 5) -----------------------------------------
+_TECLAS = {
+    "ctrl": 0x11, "control": 0x11, "alt": 0x12, "shift": 0x10, "mayus": 0x10, "mayúsculas": 0x10,
+    "win": 0x5B, "windows": 0x5B,
+    "esc": 0x1B, "escape": 0x1B, "tab": 0x09, "enter": 0x0D, "intro": 0x0D, "espacio": 0x20, "space": 0x20,
+    "backspace": 0x08, "borrar": 0x08, "supr": 0x2E, "delete": 0x2E, "insert": 0x2D,
+    "inicio": 0x24, "home": 0x24, "fin": 0x23, "end": 0x23, "repag": 0x21, "pageup": 0x21,
+    "avpag": 0x22, "pagedown": 0x22, "arriba": 0x26, "up": 0x26, "abajo": 0x28, "down": 0x28,
+    "izquierda": 0x25, "left": 0x25, "derecha": 0x27, "right": 0x27,
+    "impr": 0x2C, "printscreen": 0x2C,
+    "volumen+": 0xAF, "volumeup": 0xAF, "volumen-": 0xAE, "volumedown": 0xAE, "silencio": 0xAD, "mute": 0xAD,
+    "playpause": 0xB3, "play": 0xB3, "siguiente": 0xB0, "next": 0xB0, "anterior": 0xB1, "prev": 0xB1,
+    **{f"f{n}": 0x6F + n for n in range(1, 25)},
+    **{chr(c): ord(chr(c).upper()) for c in range(ord("a"), ord("z") + 1)},
+    **{str(d): 0x30 + d for d in range(10)},
+}
+# Teclas «extendidas»: sin esta marca, SendInput confunde flechas e Inicio/Fin con el teclado numérico.
+_EXTENDIDAS = {0x5B, 0x2E, 0x2D, 0x24, 0x23, 0x21, 0x22, 0x26, 0x28, 0x25, 0x27, 0x2C}
+_KEYEVENTF_EXTENDEDKEY = 0x0001
+MODIFICADORES = {0x11, 0x12, 0x10, 0x5B}
+
+
+def parsear_atajo(texto: str) -> list[int]:
+    """«ctrl+shift+t», «alt+tab», «win+d», «f5» → códigos de tecla (los modificadores primero)."""
+    partes = [p.strip().lower() for p in str(texto or "").replace(" ", "").split("+") if p.strip()]
+    if not partes:
+        raise ValueError("Escribe un atajo, por ejemplo ctrl+w o alt+tab.")
+    codigos = []
+    for parte in partes:
+        if parte not in _TECLAS:
+            raise ValueError(f"No conozco la tecla «{parte}». Ejemplos: ctrl, alt, shift, win, a–z, 0–9, f1–f12, "
+                             "tab, esc, enter, espacio, flechas (arriba, abajo, izquierda, derecha).")
+        codigos.append(_TECLAS[parte])
+    if all(c in MODIFICADORES for c in codigos):
+        raise ValueError("Falta la tecla principal (por ejemplo, ctrl+w y no solo ctrl).")
+    return codigos
+
+
+def pulsar_atajo(texto: str, *, user32=None) -> str:
+    """Aprieta las teclas del atajo en orden y las suelta al revés (herramienta ``gesture_keys``)."""
+    codigos = parsear_atajo(texto)
+    user32 = user32 or ctypes.WinDLL("user32", use_last_error=True)
+    _MOUSEINPUT, KEYBDINPUT, INPUT = _estructuras_entrada()
+    secuencia = [(c, 0) for c in codigos] + [(c, _KEYEVENTF_KEYUP) for c in reversed(codigos)]
+    entradas = (INPUT * len(secuencia))()
+    for i, (codigo, flags) in enumerate(secuencia):
+        entradas[i].type = _INPUT_KEYBOARD
+        extra = _KEYEVENTF_EXTENDEDKEY if codigo in _EXTENDIDAS else 0
+        entradas[i].u.ki = KEYBDINPUT(codigo, 0, flags | extra, 0, 0)
+    if user32.SendInput(len(secuencia), entradas, ctypes.sizeof(INPUT)) != len(secuencia):
+        raise OSError("Windows no aceptó el atajo de teclado.")
+    return f"Apreté {texto}."
+
+
 def escribir_texto(texto: str) -> None:
     """Escribe texto como si se tecleara (caracteres Unicode, incluidas tildes)."""
     _MOUSEINPUT, KEYBDINPUT, INPUT = _estructuras_entrada()

@@ -1089,7 +1089,9 @@ def detectar(texto: str) -> tuple[str, dict[str, object]] | None:
     """«Prende la tele», «sube el volumen de la tele 10», «abre Netflix en la tele»,
     «pon la tele en HDMI 2», «pausa la tele»… (solo con «tele/TV/televisor» en la frase)."""
     consulta = _normalizar(texto)
-    if not re.search(r"\b(?:tele|tv|teve|televisor|television|smart\s*tv)\b", consulta):
+    # «hdmi» solo existe en la tele: «pon HDMI 2» sin decir «tele» se tomaba como mover una ventana
+    # llamada «hdmi 2» (2026-11-17).
+    if not re.search(r"\b(?:tele|tv|teve|televisor|television|smart\s*tv|hdmi)\b", consulta):
         return None
     for patron, funcion in _PATRONES:
         coincidencia = patron.fullmatch(consulta)

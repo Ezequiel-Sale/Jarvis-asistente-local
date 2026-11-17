@@ -65,6 +65,7 @@ class AppTests(unittest.TestCase):
         host = Mock()
         host.events = queue.Queue()
         host._find_phrase_routine.return_value = None
+        host._split_orders.return_value = None  # una sola orden
         with patch("jarvis_core.procesar_stt"):
             JarvisApp._voice_worker(host, None, 0.0, "c", transcript="Jarvis rutinas")
         eventos = [host.events.get_nowait() for _ in range(host.events.qsize())]
@@ -73,6 +74,7 @@ class AppTests(unittest.TestCase):
     def test_typed_text_routes_navigation(self) -> None:
         host = Mock()
         host._find_phrase_routine.return_value = None
+        host._split_orders.return_value = None  # una sola orden
         host.input.get.return_value = "ve a ajustes"
         host.busy = False
         host.recorder = None
