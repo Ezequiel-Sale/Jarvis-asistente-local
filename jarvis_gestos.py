@@ -261,6 +261,43 @@ class FiltroUnEuro:
 # cámara del usuario está centrada arriba del monitor 1, así que la mano de frente cae en el
 # centro. 2026-11-16: con (0,28–0,72 × 0,25–0,68) costaba llegar a los bordes: ahora ~30 % del ancho.
 ZONA_PUNTERO = (0.35, 0.32, 0.65, 0.60)  # izquierda, arriba, derecha, abajo
+
+
+# Sensibilidad del puntero (Ajustes) [2026-11-17]: «se mueve mucho al mínimo movimiento». Una zona
+# más grande pide recorrer más con la mano para cruzar el monitor: cada milímetro mueve menos el
+# puntero (y el temblor de la cámara también pesa menos). Barra de 1 a 10: 10 es la zona de la
+# fase 3; cada punto menos la agranda un 14 % (1 → ×2,26: ~68 % del ancho de la imagen). Con los tres
+# niveles de antes, «media» (×1,25) todavía era mucho: por defecto 5 (×1,7).
+SENSIBILIDAD_MINIMA, SENSIBILIDAD_MAXIMA = 1, 10
+SENSIBILIDAD_POR_DEFECTO = 5
+PASO_SENSIBILIDAD = 0.14
+# Lo que guardaba la versión de tres niveles (mismo tamaño de zona, redondeado).
+SENSIBILIDAD_ANTERIOR = {"baja": 6, "media": 8, "alta": 10}
+
+
+def nivel_sensibilidad(valor) -> int:
+    """Preferencia guardada → 1–10 (acepta los nombres de antes; cualquier otra cosa, el defecto)."""
+    if valor in SENSIBILIDAD_ANTERIOR:
+        return SENSIBILIDAD_ANTERIOR[valor]
+    try:
+        nivel = int(round(float(valor)))
+    except (TypeError, ValueError):
+        return SENSIBILIDAD_POR_DEFECTO
+    return min(SENSIBILIDAD_MAXIMA, max(SENSIBILIDAD_MINIMA, nivel))
+
+
+def zona_con_sensibilidad(nivel, zona=ZONA_PUNTERO) -> tuple[float, float, float, float]:
+    """``zona`` agrandada (o igual) alrededor de su centro, sin salirse de la imagen."""
+    escala = 1.0 + (SENSIBILIDAD_MAXIMA - nivel_sensibilidad(nivel)) * PASO_SENSIBILIDAD
+    if escala == 1.0:
+        return tuple(zona)
+    izquierda, arriba, derecha, abajo = zona
+    cx, cy = (izquierda + derecha) / 2, (arriba + abajo) / 2
+    medio_ancho, medio_alto = (derecha - izquierda) / 2 * escala, (abajo - arriba) / 2 * escala
+    return (max(0.0, cx - medio_ancho), max(0.0, cy - medio_alto),
+            min(1.0, cx + medio_ancho), min(1.0, cy + medio_alto))
+
+
 # Centro de la palma: muñeca y los cuatro nudillos. Un solo punto (el nudillo del índice) temblaba
 # varios píxeles por cuadro; el promedio de cinco casi no, y no se mueve al pellizcar.
 PALMA = (0, 5, 9, 13, 17)
@@ -322,8 +359,9 @@ class Puntero:
     BANDA = 10.0
     HISTORIAL = 5  # cuadros (~200 ms): el clic va donde estaba el puntero antes de acercar el pulgar
 
-    def __init__(self, monitor) -> None:
+    def __init__(self, monitor, zona=ZONA_PUNTERO) -> None:
         self.monitor = monitor
+        self.zona = zona  # la app la cambia en marcha (sensibilidad)
         self.armado = False
         self.arrastrando = False
         # 2026-11-16: con min_corte 0,35 se atrasaba con la mano lenta y después «alcanzaba» de golpe
@@ -417,7 +455,7 @@ class Puntero:
             return []
         self.armado = True
         acciones: list[tuple] = []
-        crudo = a_pantalla(*centro_palma(puntos), self.monitor)
+        crudo = a_pantalla(*centro_palma(puntos), self.monitor, self.zona)
         x, y = self._con_banda(self._fx(crudo[0], ahora), self._fy(crudo[1], ahora))
         self._medir(crudo, (x, y))
 
@@ -714,7 +752,7 @@ class DetectorGestos(threading.Thread):
                  al_desplazar: Callable[[int], None] | None = None, invertir_scroll: bool = False,
                  al_apuntar: Callable[[list], None] | None = None, monitor=None,
                  al_atajo: Callable[[str, bool], None] | None = None,
-                 mano: str | None = MANOS[MANO_POR_DEFECTO]) -> None:
+                 mano: str | None = MANOS[MANO_POR_DEFECTO], zona=ZONA_PUNTERO) -> None:
         """``al_desplazar(cantidad)``: girar la rueda; ``al_apuntar(acciones)``: mover el puntero y
         los clics del pellizco (``Puntero``) en ``monitor``. La app los hace en otro hilo, en orden
         y por el registro de herramientas; este hilo nunca espera."""
@@ -732,7 +770,7 @@ class DetectorGestos(threading.Thread):
         self.al_desplazar = al_desplazar
         self.desplazamiento = Desplazamiento(invertir_scroll)
         self.al_apuntar = al_apuntar
-        self.puntero = Puntero(monitor) if al_apuntar is not None and monitor is not None else None
+        self.puntero = Puntero(monitor, zona) if al_apuntar is not None and monitor is not None else None
         self._estado_puntero: str | None = None
         self.al_atajo = al_atajo  # fase 4: pausa, atrás/adelante, pulgares (la app decide qué hacer)
         self.mano = mano  # «Right», «Left» o None (cualquiera); la app la puede cambiar en marcha

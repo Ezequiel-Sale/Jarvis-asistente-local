@@ -59,7 +59,8 @@ class GestosMixin:
             al_desplazar=self._queue_gesture_scroll, invertir_scroll=self._gesture_scroll_inverted(),
             al_apuntar=self._queue_gesture_pointer, monitor=self._gesture_monitor(),
             al_atajo=lambda accion, repetida: self.events.put(("gesture_shortcut", accion, repetida)),
-            mano=jarvis_gestos.MANOS[self._gesture_hand()])
+            mano=jarvis_gestos.MANOS[self._gesture_hand()],
+            zona=jarvis_gestos.zona_con_sensibilidad(self._gesture_sensitivity()))
         self.gesture_detector.start()
         return None
 
@@ -223,6 +224,32 @@ class GestosMixin:
             detector.mano = jarvis_gestos.MANOS[siguiente]
         logging.info("Gestos: mano %s.", siguiente)
         self._refresh_gesture_indicator()
+
+    # --- Sensibilidad del puntero [2026-11-17] ------------------------------------------
+    _PREFERENCIA_SENSIBILIDAD = "gestos_sensibilidad"
+
+    def _gesture_sensitivity(self) -> int:
+        """1 (el puntero se mueve poco) a 10 (mucho)."""
+        try:
+            valor = core.obtener_preferencia(self._PREFERENCIA_SENSIBILIDAD)
+        except Exception:
+            valor = None
+        return jarvis_gestos.nivel_sensibilidad(valor)
+
+    def _set_gesture_sensitivity(self, valor) -> None:
+        """La barra de Ajustes (hilo de Tk): se aplica en marcha mientras la arrastrás."""
+        nivel = jarvis_gestos.nivel_sensibilidad(valor)
+        detector = getattr(self, "gesture_detector", None)
+        if detector is not None and detector.puntero is not None:
+            detector.puntero.zona = jarvis_gestos.zona_con_sensibilidad(nivel)
+        if nivel == getattr(self, "_gesture_sensitivity_saved", None):
+            return
+        self._gesture_sensitivity_saved = nivel
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_SENSIBILIDAD, str(nivel))
+        except Exception:
+            logging.exception("No se pudo guardar la sensibilidad del puntero con gestos.")
+        logging.info("Gestos: sensibilidad del puntero %d de 10.", nivel)
 
     # --- Monitor del puntero (fase 3) ---------------------------------------------------
     _PREFERENCIA_MONITOR = "gestos_monitor"

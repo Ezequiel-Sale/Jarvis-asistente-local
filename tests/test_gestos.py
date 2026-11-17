@@ -794,6 +794,47 @@ class HandSideTests(unittest.TestCase):
             JarvisApp._cycle_gesture_hand(host)
         self.assertEqual(detector.mano, "Left")  # derecha
 
+    def test_sensitivity_slider_applies_live(self) -> None:
+        guardado = {}
+        detector = Mock()
+        host = _host(gesture_detector=detector, _PREFERENCIA_SENSIBILIDAD="gestos_sensibilidad")
+        with patch("jarvis_core.guardar_preferencia", side_effect=guardado.__setitem__) as guardar:
+            JarvisApp._set_gesture_sensitivity(host, "10")  # tk.Scale manda el valor como texto
+            self.assertEqual(detector.puntero.zona, g.ZONA_PUNTERO)  # 10: la zona de la fase 3
+            JarvisApp._set_gesture_sensitivity(host, "3")
+            JarvisApp._set_gesture_sensitivity(host, "3")  # el mismo valor no se vuelve a guardar
+        self.assertEqual(guardar.call_count, 2)
+        self.assertEqual(guardado["gestos_sensibilidad"], "3")
+        self.assertEqual(detector.puntero.zona, g.zona_con_sensibilidad(3))
+
+    def test_saved_levels(self) -> None:
+        self.assertEqual(g.nivel_sensibilidad(None), g.SENSIBILIDAD_POR_DEFECTO)
+        self.assertEqual(g.nivel_sensibilidad("7"), 7)
+        self.assertEqual(g.nivel_sensibilidad("99"), 10)
+        self.assertEqual(g.nivel_sensibilidad("0"), 1)
+        self.assertEqual(g.nivel_sensibilidad("raro"), g.SENSIBILIDAD_POR_DEFECTO)
+        self.assertEqual(g.nivel_sensibilidad("media"), 8)  # los tres niveles de antes
+        self.assertEqual(g.nivel_sensibilidad("alta"), 10)
+
+    def test_lower_sensitivity_moves_less(self) -> None:
+        """2026-11-17: «el puntero se mueve mucho al mínimo movimiento»."""
+        izquierda, arriba, derecha, abajo = g.ZONA_PUNTERO
+        cx, cy = (izquierda + derecha) / 2, (arriba + abajo) / 2
+
+        def recorrido(nivel: int) -> int:
+            zona = g.zona_con_sensibilidad(nivel)
+            return g.a_pantalla(cx + 0.01, cy, MONITOR_1, zona)[0] - g.a_pantalla(cx, cy, MONITOR_1, zona)[0]
+
+        recorridos = [recorrido(n) for n in range(1, 11)]
+        self.assertEqual(recorridos, sorted(recorridos))  # más sensibilidad, más se mueve
+        self.assertLess(recorridos[0], recorridos[-1] / 2)  # en 1 se mueve menos de la mitad que en 10
+        for nivel in range(1, 11):
+            with self.subTest(nivel=nivel):
+                zona = g.zona_con_sensibilidad(nivel)
+                x, y = g.a_pantalla(cx, cy, MONITOR_1, zona)
+                self.assertLessEqual(abs(x - 960) + abs(y - 540), 2)  # la mano de frente: el centro
+                self.assertTrue(0.0 <= zona[0] < zona[2] <= 1.0 and 0.0 <= zona[1] < zona[3] <= 1.0)
+
     def test_right_hand_is_what_mediapipe_calls_left(self) -> None:
         """2026-11-16: con «derecha» → «Right» no seguía la mano derecha (el log: «se sigue Left»)."""
         self.assertEqual(g.MANOS["derecha"], "Left")
@@ -898,6 +939,7 @@ def _host(**estado) -> Mock:
     host._stop_gestures = lambda: JarvisApp._stop_gestures(host)
     host._gesture_queue = lambda: JarvisApp._gesture_queue(host)
     host._gesture_hand = lambda: "derecha"
+    host._gesture_sensitivity = lambda: 5
     host._gesture_progress = None
     host._merge_gesture_actions = JarvisApp._merge_gesture_actions
     for clave, valor in estado.items():

@@ -590,6 +590,20 @@ class JarvisUIMixin:
             self.gesture_scroll_button = self._ui_button(extras, "↕  SCROLL …", self._toggle_gesture_scroll_direction,
                                                          fg=MUTED)
             self.gesture_scroll_button.pack(side="left", padx=(8, 0))
+            # Sensibilidad del puntero: barra 1–10, se aplica mientras se arrastra [2026-11-17].
+            barra = tk.Frame(marco, bg=PANEL)
+            barra.grid(row=3, column=0, columnspan=2, sticky="we", pady=(10, 0))
+            tk.Label(barra, text="🎯  SENSIBILIDAD DEL PUNTERO", bg=PANEL, fg=MUTED,
+                     font=("Segoe UI", 9, "bold")).pack(side="left")
+            tk.Label(barra, text="menos", bg=PANEL, fg=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(12, 4))
+            self.gesture_sensitivity_scale = tk.Scale(
+                barra, from_=jarvis_gestos.SENSIBILIDAD_MINIMA, to=jarvis_gestos.SENSIBILIDAD_MAXIMA,
+                orient="horizontal", resolution=1, length=220, showvalue=True, bg=PANEL, fg=TEXT,
+                troughcolor=BORDER, activebackground=CYAN, highlightthickness=0, bd=0, sliderrelief="flat",
+                font=("Segoe UI", 9), command=self._set_gesture_sensitivity)
+            self.gesture_sensitivity_scale.set(self._gesture_sensitivity() or jarvis_gestos.SENSIBILIDAD_POR_DEFECTO)
+            self.gesture_sensitivity_scale.pack(side="left")
+            tk.Label(barra, text="más", bg=PANEL, fg=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
             # Fase 5: gestos propios (🤘 🤙 👌 ✌) → rutina, frase o atajo de teclado.
             propios = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
             propios.pack(fill="x", pady=(0, 10))
