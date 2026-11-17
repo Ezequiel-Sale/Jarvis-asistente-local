@@ -64,6 +64,8 @@ class GestosMixin:
             mano=jarvis_gestos.MANOS[self._gesture_hand()],
             zona=jarvis_gestos.zona_con_sensibilidad(self._gesture_sensitivity()))
         self.gesture_detector.aprendidos = jarvis_gestos_aprendidos.Aprendidos(self._learned_gestures())
+        if self.gesture_detector.puntero is not None:  # para empujar el borde hacia otro monitor
+            self.gesture_detector.puntero.listar_monitores = jarvis_vision.listar_monitores
         self.gesture_detector.start()
         return None
 
@@ -139,6 +141,9 @@ class GestosMixin:
                                                    confirmed=True, origin="gestos")
                     elif accion[0] == "mover":
                         self._set_pointer_target(accion[1], accion[2])  # el hilo de deslizar lo lleva suave
+                    elif accion[0] == "monitor":  # empujó el borde: el puntero salta, sin deslizar
+                        self._pointer_jump = True
+                        self.events.put(("gesture_monitor", accion[1]))
                     elif accion[0] == "media":
                         self.tool_registry.execute("media_control", {"action": accion[1]},
                                                    confirmed=True, origin="gestos")

@@ -395,6 +395,27 @@ def centro_palma(puntos: Sequence[Punto]) -> Punto:
     return (sum(puntos[i][0] for i in PALMA) / len(PALMA), sum(puntos[i][1] for i in PALMA) / len(PALMA))
 
 
+def monitor_vecino(actual, monitores: Sequence, direccion: str | None, tolerancia: int = 4):
+    """El monitor pegado a ``actual`` hacia ``direccion`` («izquierda», «derecha», «arriba»,
+    «abajo») que comparte borde con él, o None."""
+    if direccion is None:
+        return None
+    for m in monitores:
+        if m.numero == actual.numero:
+            continue
+        en_x = m.x < actual.x + actual.ancho and actual.x < m.x + m.ancho
+        en_y = m.y < actual.y + actual.alto and actual.y < m.y + m.alto
+        if direccion == "izquierda" and en_y and abs(m.x + m.ancho - actual.x) <= tolerancia:
+            return m
+        if direccion == "derecha" and en_y and abs(actual.x + actual.ancho - m.x) <= tolerancia:
+            return m
+        if direccion == "arriba" and en_x and abs(m.y + m.alto - actual.y) <= tolerancia:
+            return m
+        if direccion == "abajo" and en_x and abs(actual.y + actual.alto - m.y) <= tolerancia:
+            return m
+    return None
+
+
 def a_pantalla(x: float, y: float, monitor, zona=ZONA_PUNTERO) -> tuple[int, int]:
     """Punto de la imagen (0–1) → píxel físico del monitor (``x``, ``y``, ``ancho``, ``alto``)."""
     izquierda, arriba, derecha, abajo = zona
@@ -475,6 +496,13 @@ class Puntero:
         self._minima = math.inf  # distancia mínima pulgar–índice durante el pellizco (log)
         self.descartados = 0  # pellizcos que no fueron clic (muy cortos o con la mano en movimiento)
         self._ele_hecho = False  # ya se hizo el clic derecho de esta L (otro: volver a apuntar)
+        # Empujar el borde hacia otro monitor [2026-11-17]: los monitores (la app los pone y
+        # ``listar_monitores`` los actualiza al empezar a apuntar), hacia dónde se empuja y desde cuándo.
+        self.monitores: list = []
+        self.listar_monitores = None
+        self._empuje: str | None = None
+        self._empuje_desde = 0.0
+        self._ultimo_cambio = -math.inf
 
     def _medir(self, crudo: tuple[int, int], filtrado: tuple[int, int]) -> None:
         if self._crudo is not None and self._filtrado is not None:
@@ -499,6 +527,7 @@ class Puntero:
         self._historial, self._saltos_crudos, self._saltos_filtrados = [], [], []
         self._congelados = self._sin_mano = 0
         self._ele_hecho = False
+        self._empuje = None
         return acciones
 
     def soltar(self) -> list[tuple]:
@@ -521,6 +550,56 @@ class Puntero:
                 k = (distancia - self.BANDA) / distancia
                 self._ancla = (self._ancla[0] + dx * k, self._ancla[1] + dy * k)
         return round(self._ancla[0]), round(self._ancla[1])
+
+    # --- Empujar el borde hacia otro monitor [2026-11-17] --------------------------------------
+    # «Que el puntero vaya a los otros monitores sin decir "puntero en el monitor 2"». Como con el
+    # mouse: del lado donde hay otro monitor, la zona de la mano se achica ``EMPUJE_MARGEN`` (de la
+    # imagen) para que haya dónde empujar sin sacar la mano de la cámara; con la palma ahí (el
+    # puntero ya está en el borde) ``EMPUJE_SEGUNDOS`` s, pasa a ese monitor. La mano sigue
+    # mandando en forma absoluta sobre el monitor nuevo (aparece en su borde del mismo lado).
+    EMPUJE_MARGEN = 0.03
+    EMPUJE_SEGUNDOS = 0.35
+    EMPUJE_ESPERA = 1.0  # s entre un cambio y el siguiente
+
+    def _zona_con_empuje(self) -> tuple[float, float, float, float]:
+        izquierda, arriba, derecha, abajo = self.zona
+        m = self.EMPUJE_MARGEN
+        if monitor_vecino(self.monitor, self.monitores, "izquierda"):
+            izquierda += m
+        if monitor_vecino(self.monitor, self.monitores, "derecha"):
+            derecha -= m
+        if monitor_vecino(self.monitor, self.monitores, "arriba"):
+            arriba += m
+        if monitor_vecino(self.monitor, self.monitores, "abajo"):
+            abajo -= m
+        return izquierda, arriba, derecha, abajo
+
+    def _empujar(self, palma: Punto, ahora: float) -> tuple | None:
+        """``("monitor", numero)`` si la palma empujó el borde lo suficiente; si no, None."""
+        if len(self.monitores) < 2 or (self._pellizco and not self.arrastrando):
+            self._empuje = None
+            return None
+        izquierda, arriba, derecha, abajo = self._zona_con_empuje()
+        x, y = palma
+        direccion = ("izquierda" if x < izquierda else "derecha" if x > derecha
+                     else "arriba" if y < arriba else "abajo" if y > abajo else None)
+        vecino = monitor_vecino(self.monitor, self.monitores, direccion) if direccion else None
+        if vecino is None:
+            self._empuje = None
+            return None
+        if self._empuje != direccion:
+            self._empuje, self._empuje_desde = direccion, ahora
+            return None
+        if ahora - self._empuje_desde < self.EMPUJE_SEGUNDOS or ahora - self._ultimo_cambio < self.EMPUJE_ESPERA:
+            return None
+        logging.info("Puntero con gestos: del monitor %s al %s (empujando hacia la %s).",
+                     self.monitor.numero, vecino.numero, direccion)
+        self.monitor = vecino
+        self._ultimo_cambio, self._empuje = ahora, None
+        self._fx.reiniciar()
+        self._fy.reiniciar()
+        self._ancla, self._historial = None, []  # sin arrastrar el suavizado del monitor anterior
+        return ("monitor", vecino.numero)
 
     def _distancia_pellizco(self, puntos: Sequence[Punto], mundo,
                             dedo: int = PUNTA_INDICE) -> tuple[float, float, float, float, str]:
@@ -560,9 +639,18 @@ class Puntero:
             # ni se reinicia (2026-11-16: se frenaba y al cuadro siguiente pegaba un salto).
             self._sin_mano += 1
             return []
+        if not self.armado and self.listar_monitores is not None:
+            try:
+                self.monitores = list(self.listar_monitores())
+            except Exception:
+                logging.debug("No pude actualizar los monitores del puntero.", exc_info=True)
         self.armado = True
         acciones: list[tuple] = []
-        crudo = a_pantalla(*centro_palma(puntos), self.monitor, self.zona)
+        palma = centro_palma(puntos)
+        cambio = self._empujar(palma, ahora)
+        if cambio is not None:
+            acciones.append(cambio)
+        crudo = a_pantalla(*palma, self.monitor, self._zona_con_empuje())
         x, y = self._con_banda(self._fx(crudo[0], ahora), self._fy(crudo[1], ahora))
         self._medir(crudo, (x, y))
 

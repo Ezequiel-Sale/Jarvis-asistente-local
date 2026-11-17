@@ -308,6 +308,11 @@ def cambiar_estado_ventana_brave(accion: str, brave: Path) -> bool:
     user32.ShowWindow.restype = wintypes.BOOL
     show_command = 6 if accion == "minimize" else 3
     user32.ShowWindow(ventanas[0], show_command)
+    if accion == "maximize":
+        # Si no, queda maximizada detrás de la ventana que está al frente (2026-11-17).
+        import jarvis_windows
+
+        jarvis_windows.enfocar(ventanas[0])
     return True
 
 def _nombre_coincide_con_juego(nombre: str, carpeta: str) -> bool:

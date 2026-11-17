@@ -469,6 +469,84 @@ def abierta(x=0.5, y=0.45):
     return [(px + dx, py + dy) for px, py in base]
 
 
+class MonitorEdgeTests(unittest.TestCase):
+    """2026-11-17: el puntero pasa a otro monitor empujando el borde, sin decir «puntero en el monitor 2».
+    Los monitores del usuario: el 1 (2560×1440, principal) y el 2 (1920×1080) a su izquierda."""
+
+    M1 = SimpleNamespace(numero=1, x=0, y=0, ancho=2560, alto=1440)
+    M2 = SimpleNamespace(numero=2, x=-1920, y=0, ancho=1920, alto=1080)
+
+    def test_neighbours_share_an_edge(self) -> None:
+        monitores = [self.M1, self.M2]
+        self.assertIs(g.monitor_vecino(self.M1, monitores, "izquierda"), self.M2)
+        self.assertIs(g.monitor_vecino(self.M2, monitores, "derecha"), self.M1)
+        self.assertIsNone(g.monitor_vecino(self.M1, monitores, "derecha"))
+        self.assertIsNone(g.monitor_vecino(self.M1, monitores, "arriba"))
+        lejos = SimpleNamespace(numero=3, x=5000, y=0, ancho=1920, alto=1080)
+        self.assertIsNone(g.monitor_vecino(self.M1, [self.M1, lejos], "derecha"))  # no se tocan
+
+    def _puntero(self):
+        p = g.Puntero(self.M1)
+        p.listar_monitores = lambda: [self.M1, self.M2]
+        return p
+
+    def _mano_en(self, palma_x: float):
+        """Índice estirado con el centro de la palma en ``palma_x`` (de la imagen)."""
+        base = apuntando()
+        dx = palma_x - g.centro_palma(base)[0]
+        return [(x + dx, y) for x, y in base]
+
+    def test_pushing_the_left_edge_jumps_to_the_left_monitor(self) -> None:
+        p = self._puntero()
+        izquierda = g.ZONA_PUNTERO[0]
+        acciones = p.actualizar("indice", self._mano_en(0.5), 0.0)
+        # Solo hacia donde hay otro monitor se achica la zona (para tener dónde empujar).
+        self.assertEqual(p._zona_con_empuje()[0], izquierda + p.EMPUJE_MARGEN)
+        self.assertEqual(p._zona_con_empuje()[2], g.ZONA_PUNTERO[2])
+        # Un toque al borde no alcanza.
+        afuera = self._mano_en(izquierda + p.EMPUJE_MARGEN / 2)
+        for i in range(3):
+            acciones += p.actualizar("indice", afuera, 0.1 + i * 0.1)
+        self.assertNotIn("monitor", [a[0] for a in acciones])
+        self.assertIs(p.monitor, self.M1)
+        # Sostenido, salta al monitor 2 y sigue en sus coordenadas.
+        acciones = []
+        for i in range(3):
+            acciones += p.actualizar("indice", afuera, 0.4 + i * 0.04)
+        self.assertIn(("monitor", 2), acciones)
+        self.assertIs(p.monitor, self.M2)
+        ultimo = [a for a in acciones if a[0] == "mover"][-1]
+        self.assertTrue(self.M2.x <= ultimo[1] < self.M2.x + 200)  # cerca de su borde izquierdo
+        # Seguir empujando a la izquierda no hace nada más (no hay otro monitor ahí).
+        mas = []
+        for i in range(20):
+            mas += p.actualizar("indice", afuera, 1.0 + i * 0.1)
+        self.assertNotIn("monitor", [a[0] for a in mas])
+
+    def test_back_to_the_right_and_not_while_pinching(self) -> None:
+        p = self._puntero()
+        p.actualizar("indice", self._mano_en(0.5), 0.0)
+        p.monitor = self.M2
+        derecha = self._mano_en(g.ZONA_PUNTERO[2] - p.EMPUJE_MARGEN / 2)
+        acciones = []
+        for i in range(12):
+            acciones += p.actualizar("indice", derecha, 2.0 + i * 0.05)
+        self.assertIn(("monitor", 1), acciones)
+        # Con el pellizco (un clic en el borde) no se cambia de monitor.
+        p2 = self._puntero()
+        p2.actualizar("indice", self._mano_en(0.5), 0.0)
+        p2._pellizco = True
+        for i in range(12):
+            p2._empujar(g.centro_palma(self._mano_en(g.ZONA_PUNTERO[0] + 0.01)), 0.1 + i * 0.1)
+        self.assertIs(p2.monitor, self.M1)
+
+    def test_single_monitor_keeps_the_whole_zone(self) -> None:
+        p = g.Puntero(self.M1)
+        p.listar_monitores = lambda: [self.M1]
+        p.actualizar("indice", self._mano_en(0.5), 0.0)
+        self.assertEqual(p._zona_con_empuje(), tuple(g.ZONA_PUNTERO))
+
+
 class ShortcutTests(unittest.TestCase):
     """Fase 4: pausa con la mano quieta, deslizar, pulgares."""
 

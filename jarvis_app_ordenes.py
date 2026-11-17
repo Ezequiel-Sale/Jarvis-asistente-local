@@ -88,7 +88,8 @@ class OrdenesMixin:
         try:
             return bool(detectar_comando_gestos(texto) or detectar_navegacion(texto)
                         or detectar_modo_continuo(texto) is not None or detectar_comando_escucha(texto) is not None
-                        or jarvis_tv.detectar(texto) or jarvis_screen_actions.detectar_comando(texto)
+                        or jarvis_tv.detectar(texto) or jarvis_apuntar.detectar(texto)
+                        or jarvis_screen_actions.detectar_comando(texto)
                         or self._direct_tool_for(texto) or jarvis_routines.buscar_rutina_por_frase(texto))
         except Exception:
             logging.debug("No se pudo revisar si «…» es una orden conocida.", exc_info=True)

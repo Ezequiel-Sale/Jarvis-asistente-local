@@ -434,6 +434,9 @@ ACCIONES_ESTADO = {
     "window_close": ("cerré", "cerrar"),
 }
 WM_CLOSE = 0x0010
+# 2026-11-17: «maximizá Brave» la maximizaba detrás de la ventana que estaba al frente (Windows no
+# deja que un programa de fondo active otra ventana con ShowWindow) y parecía que no hacía nada.
+AL_FRENTE_TAMBIEN = (SW_MAXIMIZE, SW_RESTORE)
 VK_MENU, KEYEVENTF_KEYUP = 0x12, 0x0002
 
 
@@ -488,6 +491,8 @@ def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = No
             if comando == "cerrar":
                 return bool(user32.PostMessageW(ventana.hwnd, WM_CLOSE, 0, 0))
             user32.ShowWindow(ventana.hwnd, comando)
+            if comando in AL_FRENTE_TAMBIEN:
+                enfocar(ventana.hwnd, user32)
             return True
 
     hechas = 0

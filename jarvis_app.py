@@ -866,6 +866,8 @@ class JarvisApp(
                             reply.put(False)
                         else:
                             self._show_display_keep_dialog(descripcion, reply)
+                    elif event[0] == "gesture_monitor":
+                        self._set_status(f"✋ PUNTERO EN EL MONITOR {event[1]}", CYAN)
                     elif event[0] == "pointed":
                         _, pedido, command = event
                         self._set_idle()

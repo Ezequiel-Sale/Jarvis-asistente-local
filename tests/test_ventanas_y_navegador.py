@@ -1,6 +1,7 @@
 """Ventanas de cualquier programa y página anterior/siguiente/recargar en Brave (sin tocar ventanas reales)."""
 
 import unittest
+import unittest.mock
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -83,6 +84,25 @@ class StateTests(unittest.TestCase):
         (cuantas, _), hechas = self._aplicar("todo", "window_minimize")
         self.assertEqual(cuantas, 4)
         self.assertNotIn(2, [h for h, _ in hechas])  # la de Jarvis no se toca
+
+    def test_maximize_also_brings_it_to_the_front(self) -> None:
+        """2026-11-17: «maximizá Brave» la maximizaba detrás de la ventana del frente y no se veía."""
+        user32 = unittest.mock.Mock()
+        with patch.object(w, "_user32", return_value=user32), patch.object(w, "enfocar") as enfocar:
+            w.cambiar_estado("spotify", "window_maximize", ventanas=VENTANAS, propio_pid=PROPIO)
+            w.cambiar_estado("spotify", "window_restore", ventanas=VENTANAS, propio_pid=PROPIO)
+            w.cambiar_estado("spotify", "window_minimize", ventanas=VENTANAS, propio_pid=PROPIO)
+        self.assertEqual([c.args[0] for c in enfocar.call_args_list], [4, 4])  # minimizar, no
+        self.assertEqual([c.args[1] for c in user32.ShowWindow.call_args_list],
+                         [w.SW_MAXIMIZE, w.SW_RESTORE, w.SW_MINIMIZE])
+
+    def test_brave_maximize_brings_it_to_the_front(self) -> None:
+        import jarvis_system
+
+        with patch.object(jarvis_system, "obtener_ventanas_brave", return_value=[55]),                 patch("ctypes.WinDLL"), patch.object(w, "enfocar") as enfocar:
+            self.assertTrue(jarvis_system.cambiar_estado_ventana_brave("maximize", "brave.exe"))
+            self.assertTrue(jarvis_system.cambiar_estado_ventana_brave("minimize", "brave.exe"))
+        enfocar.assert_called_once_with(55)
 
     def test_by_title_and_errors(self) -> None:
         self.assertEqual(self._aplicar("premium", "window_maximize")[1], [(4, w.SW_MAXIMIZE)])
