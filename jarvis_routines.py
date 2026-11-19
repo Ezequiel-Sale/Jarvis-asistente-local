@@ -21,9 +21,19 @@ DISPARADOR_AURICULARES_DESCONECTADOS = "auriculares_desconectados"
 # Modo juego automático (jarvis_games_watch): al abrir el primer juego / al cerrar el último.
 DISPARADOR_JUEGO_ABIERTO = "juego_abierto"
 DISPARADOR_JUEGO_CERRADO = "juego_cerrado"
+# 2026-11-19 (jarvis_disparadores): pendrive o disco USB, un programa concreto e internet.
+DISPARADOR_USB_CONECTADO = "usb_conectado"
+DISPARADOR_USB_DESCONECTADO = "usb_desconectado"
+DISPARADOR_PROGRAMA_ABIERTO = "programa_abierto"   # el programa va en «frases» (un solo nombre)
+DISPARADOR_PROGRAMA_CERRADO = "programa_cerrado"
+DISPARADOR_SIN_INTERNET = "sin_internet"
+DISPARADOR_CON_INTERNET = "con_internet"
+DISPARADORES_PROGRAMA = frozenset({DISPARADOR_PROGRAMA_ABIERTO, DISPARADOR_PROGRAMA_CERRADO})
 DISPARADORES_EVENTO = frozenset(
     {DISPARADOR_AURICULARES_CONECTADOS, DISPARADOR_AURICULARES_DESCONECTADOS,
-     DISPARADOR_JUEGO_ABIERTO, DISPARADOR_JUEGO_CERRADO}
+     DISPARADOR_JUEGO_ABIERTO, DISPARADOR_JUEGO_CERRADO, DISPARADOR_USB_CONECTADO,
+     DISPARADOR_USB_DESCONECTADO, DISPARADOR_SIN_INTERNET, DISPARADOR_CON_INTERNET}
+    | DISPARADORES_PROGRAMA
 )
 # Valores que usa la herramienta schedule_routine (en inglés, como el resto de su esquema)
 _TRIGGER_FROM_TOOL = {
@@ -32,6 +42,12 @@ _TRIGGER_FROM_TOOL = {
     "headphones_disconnected": DISPARADOR_AURICULARES_DESCONECTADOS,
     "game_started": DISPARADOR_JUEGO_ABIERTO,
     "game_stopped": DISPARADOR_JUEGO_CERRADO,
+    "usb_connected": DISPARADOR_USB_CONECTADO,
+    "usb_disconnected": DISPARADOR_USB_DESCONECTADO,
+    "program_started": DISPARADOR_PROGRAMA_ABIERTO,
+    "program_stopped": DISPARADOR_PROGRAMA_CERRADO,
+    "internet_lost": DISPARADOR_SIN_INTERNET,
+    "internet_restored": DISPARADOR_CON_INTERNET,
 }
 _TRIGGER_TO_TOOL = {value: key for key, value in _TRIGGER_FROM_TOOL.items()}
 _TRIGGER_LABELS = {
@@ -39,6 +55,10 @@ _TRIGGER_LABELS = {
     DISPARADOR_AURICULARES_DESCONECTADOS: "al desconectar los auriculares",
     DISPARADOR_JUEGO_ABIERTO: "al abrir un juego",
     DISPARADOR_JUEGO_CERRADO: "al cerrar un juego",
+    DISPARADOR_USB_CONECTADO: "al conectar un pendrive o disco USB",
+    DISPARADOR_USB_DESCONECTADO: "al desconectar un pendrive o disco USB",
+    DISPARADOR_SIN_INTERNET: "al quedarse sin internet",
+    DISPARADOR_CON_INTERNET: "al volver internet",
 }
 PERMISO_PREGUNTAR = "preguntar"
 PERMISO_AUTOMATICA = "automatica"
@@ -104,6 +124,9 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "get_system_status",
         "get_jarvis_diagnostics",
         "get_weather",
+        "windows_setting",
+        "open_settings",
+        "pc_doctor",
     }
 )
 _LIST_PATTERN = re.compile(
@@ -203,6 +226,18 @@ _GAME_ROUTINE = re.compile(
     r"\s*[,:]?\s*(?P<rest>.+)$",
     re.IGNORECASE,
 )
+_CUANDO = (r"^\s*(?:jarvis[,:\s]+)?(?:(?:crea|crear|programa|programar|agenda|agendar)\s+una\s+"
+           r"(?:rutina|automatizaci[oó]n)\s+(?:para\s+que\s+|que\s+)?)?cuando\s+(?:yo\s+)?")
+_USB_ROUTINE = re.compile(
+    _CUANDO + r"(?:(?P<sacar>desconect\w*|saqu\w*|quit\w*|desenchuf\w*)|conect\w*|enchuf\w*|meta|meto|ponga|pongo)"
+    r"\s+(?:un|una|el|la|mi)?\s*(?:pendrive|pen\s*drive|usb|memoria(?:\s+usb)?|disco(?:\s+(?:externo|usb))?)"
+    r"\s*[,:]?\s*(?P<rest>.+)$", re.IGNORECASE)
+_PROGRAM_ROUTINE = re.compile(
+    _CUANDO + r"(?:(?P<cerrar>cierre|cierro|se\s+cierre)|abra|abro|inicie|inicio|arranque|se\s+abra)\s+"
+    r"(?:el\s+programa\s+|la\s+app\s+)?(?P<programa>[\w.+\- ]{2,40}?)\s*[,:]\s*(?P<rest>.+)$", re.IGNORECASE)
+_NET_ROUTINE = re.compile(
+    _CUANDO + r"(?:(?P<sin>me\s+quede\s+sin|se\s+(?:corte|caiga|vaya)|no\s+haya)\s+(?:el\s+)?internet"
+    r"|(?:vuelva|regrese|vuelve)\s+(?:el\s+)?internet)\s*[,:]?\s*(?P<rest>.+)$", re.IGNORECASE)
 _AUTOMATIC_WORDS = re.compile(
     r"\b(?:autom[aá]ticamente|de\s+forma\s+autom[aá]tica|sin\s+preguntar(?:me)?|"
     r"sin\s+pedir(?:me)?\s+(?:permiso|confirmaci[oó]n))\b",
@@ -270,6 +305,7 @@ class RoutineCreationRequest:
     trigger: str = "time"
     automatic: bool = False
     once: bool = False
+    program: str = ""  # disparadores program_started / program_stopped
 
     def tool_arguments(self) -> dict[str, object]:
         """Argumentos para schedule_routine (solo incluye los no predeterminados)."""
@@ -286,6 +322,8 @@ class RoutineCreationRequest:
             arguments["automatic"] = True
         if self.once:
             arguments["once"] = True
+        if self.program:
+            arguments["program"] = self.program
         return arguments
 
 
@@ -383,10 +421,7 @@ def _validate_trigger(value: object) -> str:
             return _TRIGGER_FROM_TOOL[value]
         if value == DISPARADOR_HORA or value in DISPARADORES_EVENTO or value == DISPARADOR_FRASE:
             return value
-    raise ValueError(
-        "el disparador debe ser time, headphones_connected, headphones_disconnected, "
-        "game_started o game_stopped."
-    )
+    raise ValueError("el disparador debe ser uno de: " + ", ".join(sorted(_TRIGGER_FROM_TOOL)) + ".")
 
 
 def acciones_con_permiso(tool_names: Iterable[str], registry: ToolRegistry) -> list[str]:
@@ -414,17 +449,26 @@ def describir_disparador(
 ) -> str:
     if trigger == DISPARADOR_FRASE:
         return "al decir " + " o ".join(f"«{p}»" for p in phrases) if phrases else "al decir su frase"
+    if trigger in DISPARADORES_PROGRAMA:
+        programa = phrases[0] if phrases else "un programa"
+        return f"al {'abrir' if trigger == DISPARADOR_PROGRAMA_ABIERTO else 'cerrar'} {programa}"
     if trigger in _TRIGGER_LABELS:
         return _TRIGGER_LABELS[trigger]
     return f"a las {time}, {_routine_days_label(days)}"
 
 
-def _event_routine_name(trigger: str) -> str:
+def _event_routine_name(trigger: str, programa: str = "") -> str:
     base = {
         DISPARADOR_AURICULARES_CONECTADOS: "Al conectar auriculares",
         DISPARADOR_AURICULARES_DESCONECTADOS: "Al desconectar auriculares",
         DISPARADOR_JUEGO_ABIERTO: "Al abrir un juego",
         DISPARADOR_JUEGO_CERRADO: "Al cerrar un juego",
+        DISPARADOR_USB_CONECTADO: "Al conectar un USB",
+        DISPARADOR_USB_DESCONECTADO: "Al desconectar un USB",
+        DISPARADOR_PROGRAMA_ABIERTO: f"Al abrir {programa}",
+        DISPARADOR_PROGRAMA_CERRADO: f"Al cerrar {programa}",
+        DISPARADOR_SIN_INTERNET: "Sin internet",
+        DISPARADOR_CON_INTERNET: "Volvió internet",
     }.get(trigger, "Rutina")
     existentes = {name.casefold() for _, name, _, _, _ in listar_rutinas()}
     if base.casefold() not in existentes:
@@ -529,13 +573,15 @@ def _parsear_rutina_evento(
         bloqueantes = acciones_con_permiso((s["tool"] for s in steps), registry)
         if bloqueantes:
             raise _error_automatica(bloqueantes)
+    programa = (match.groupdict().get("programa") or "").strip() if trigger in DISPARADORES_PROGRAMA else ""
     return RoutineCreationRequest(
-        name=_event_routine_name(trigger),
+        name=_event_routine_name(trigger, programa),
         time="",
         days=_ALL_DAYS,
         steps_json=json.dumps(steps, ensure_ascii=False, separators=(",", ":")),
         trigger=_TRIGGER_TO_TOOL[trigger],
         automatic=automatic,
+        program=programa,
     )
 
 
@@ -643,6 +689,39 @@ def _parsear_atajo_energia(
     )
 
 
+def detectar_disparador(text: str) -> tuple[str, str, str, bool] | None:
+    """«Cuando abra Spotify, poné el volumen al 20» → (disparador, programa, resto, automática),
+    sin interpretar los pasos (la app los arma con sus órdenes directas, que entienden el voseo)."""
+    for patron, elegir in (
+        (_USB_ROUTINE, lambda m: DISPARADOR_USB_DESCONECTADO if m.group("sacar") else DISPARADOR_USB_CONECTADO),
+        (_NET_ROUTINE, lambda m: DISPARADOR_SIN_INTERNET if m.group("sin") else DISPARADOR_CON_INTERNET),
+        (_EVENT_ROUTINE, lambda m: DISPARADOR_AURICULARES_DESCONECTADOS
+         if (m.group("event") or "").casefold().startswith(("des", "apag", "quit")) else DISPARADOR_AURICULARES_CONECTADOS),
+        (_GAME_ROUTINE, lambda m: DISPARADOR_JUEGO_CERRADO if (m.group("cerrar") or m.group("dejar"))
+         else DISPARADOR_JUEGO_ABIERTO),
+        (_PROGRAM_ROUTINE, lambda m: DISPARADOR_PROGRAMA_CERRADO if m.group("cerrar") else DISPARADOR_PROGRAMA_ABIERTO),
+    ):
+        m = patron.search(text)
+        if m is None:
+            continue
+        programa = (m.groupdict().get("programa") or "").strip()
+        if patron is _PROGRAM_ROUTINE and re.search(r"\b(?:juego|videojuego|partida)\b", programa, re.IGNORECASE):
+            continue
+        resto = m.group("rest")
+        automatica = _AUTOMATIC_WORDS.search(resto) is not None
+        return elegir(m), programa, _AUTOMATIC_WORDS.sub(" ", resto).strip(" ,.;:"), automatica
+    return None
+
+
+def solicitud_de_evento(trigger: str, programa: str, pasos: list[dict[str, object]],
+                        automatica: bool = False) -> RoutineCreationRequest:
+    return RoutineCreationRequest(
+        name=_event_routine_name(trigger, programa), time="", days=_ALL_DAYS,
+        steps_json=json.dumps(pasos, ensure_ascii=False, separators=(",", ":")),
+        trigger=_TRIGGER_TO_TOOL[trigger], automatic=automatica, program=programa,
+    )
+
+
 def parsear_solicitud_creacion(
     text: str,
     registry: ToolRegistry | None = None,
@@ -650,7 +729,22 @@ def parsear_solicitud_creacion(
     event_match = _EVENT_ROUTINE.search(text)
     if event_match is not None:
         return _parsear_rutina_evento(event_match, registry)
+    usb_match = _USB_ROUTINE.search(text)
+    if usb_match is not None:
+        return _parsear_rutina_evento(
+            usb_match, registry, DISPARADOR_USB_DESCONECTADO if usb_match.group("sacar") else DISPARADOR_USB_CONECTADO)
+    net_match = _NET_ROUTINE.search(text)
+    if net_match is not None:
+        return _parsear_rutina_evento(
+            net_match, registry, DISPARADOR_SIN_INTERNET if net_match.group("sin") else DISPARADOR_CON_INTERNET)
     game_match = _GAME_ROUTINE.search(text)
+    if game_match is None:
+        program_match = _PROGRAM_ROUTINE.search(text)
+        if program_match is not None and not re.search(r"\b(?:juego|videojuego|partida)\b", program_match.group("programa"),
+                                                       re.IGNORECASE):
+            return _parsear_rutina_evento(
+                program_match, registry,
+                DISPARADOR_PROGRAMA_CERRADO if program_match.group("cerrar") else DISPARADOR_PROGRAMA_ABIERTO)
     if game_match is not None:
         return _parsear_rutina_evento(
             game_match, registry,
@@ -783,7 +877,8 @@ def crear_rutina(
         ).fetchone()
         if existing is not None:
             raise ValueError(f"Ya existe una rutina llamada «{name}».")
-        _comprobar_frases_libres(connection, frases_json, None)
+        if trigger == DISPARADOR_FRASE:
+            _comprobar_frases_libres(connection, frases_json, None)
         cursor = connection.execute(
             "INSERT INTO rutinas (nombre, hora, accion, activa, dias_semana, "
             "disparador, modo_permiso, una_vez, frases) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
@@ -823,7 +918,8 @@ def actualizar_rutina(
         ).fetchone()
         if otro is not None:
             raise ValueError(f"Ya existe otra rutina llamada «{name}».")
-        _comprobar_frases_libres(connection, frases_json, identifier)
+        if trigger == DISPARADOR_FRASE:
+            _comprobar_frases_libres(connection, frases_json, identifier)
         cursor = connection.execute(
             "UPDATE rutinas SET nombre = ?, hora = ?, accion = ?, dias_semana = ?, "
             "disparador = ?, modo_permiso = ?, una_vez = ?, frases = ?, ultima_ejecucion = NULL "
@@ -863,7 +959,11 @@ def _validate_phrases(phrases: Iterable[str], trigger: str) -> str:
             frases.append(frase)
     if trigger == DISPARADOR_FRASE and not frases:
         raise ValueError("Indica al menos una frase para activar el comando.")
-    if trigger != DISPARADOR_FRASE:
+    if trigger in DISPARADORES_PROGRAMA:
+        if not frases:
+            raise ValueError("Indica qué programa (por ejemplo, Spotify).")
+        frases = frases[:1]
+    elif trigger != DISPARADOR_FRASE:
         frases = []
     return json.dumps(frases, ensure_ascii=False)
 
@@ -1014,22 +1114,48 @@ def _routine_from_row(connection, row) -> Routine | None:
     )
 
 
-def rutinas_para_evento(trigger: str) -> list[Routine]:
-    """Rutinas activas asociadas a un evento (p. ej. auriculares conectados)."""
+def rutinas_para_evento(trigger: str, valor: str = "") -> list[Routine]:
+    """Rutinas activas asociadas a un evento (p. ej. auriculares conectados). Para los de
+    programa, ``valor`` es el proceso que se abrió o cerró («spotify»)."""
     if trigger not in DISPARADORES_EVENTO:
         raise ValueError(f"Evento desconocido: {trigger}")
     routines: list[Routine] = []
     with core.conexion_db() as connection:
         rows = connection.execute(
-            "SELECT id, nombre, hora, accion, dias_semana, disparador, modo_permiso "
+            "SELECT id, nombre, hora, accion, dias_semana, disparador, modo_permiso, frases "
             "FROM rutinas WHERE activa = 1 AND disparador = ? ORDER BY id",
             (trigger,),
         ).fetchall()
         for row in rows:
-            routine = _routine_from_row(connection, row)
+            frases = _leer_frases(row[7])
+            if trigger in DISPARADORES_PROGRAMA and not any(programa_coincide(valor, f) for f in frases):
+                continue
+            routine = _routine_from_row(connection, row[:7])
             if routine is not None:
                 routines.append(routine)
     return routines
+
+
+def programa_coincide(proceso: str, nombre: str) -> bool:
+    """«Spotify.exe» con «Spotify»; «msedge» con «Edge»; «Google Chrome» con «chrome»."""
+    tallo = normalizar_frase(proceso).removesuffix(" exe").replace(" ", "")
+    clave = normalizar_frase(nombre).replace(" ", "")
+    if not tallo or not clave:
+        return False
+    alias = {"googlechrome": "chrome", "microsoftedge": "msedge", "edge": "msedge", "blocdenotas": "notepad",
+             "calculadora": "win32calc", "visualstudiocode": "code", "vscode": "code"}
+    clave = alias.get(clave, clave)
+    return tallo == clave or (len(clave) >= 4 and (tallo.startswith(clave) or clave.startswith(tallo)))
+
+
+def programas_vigilados() -> set[str]:
+    """Programas con rutinas «al abrir / al cerrar» activas (para no vigilar de más)."""
+    with core.conexion_db() as connection:
+        filas = connection.execute(
+            "SELECT frases FROM rutinas WHERE activa = 1 AND disparador IN (?, ?)",
+            tuple(DISPARADORES_PROGRAMA),
+        ).fetchall()
+    return {f for (valor,) in filas for f in _leer_frases(valor)}
 
 
 # Margen para una rutina que no se revisó justo a su hora (Jarvis ocupado, la confirmación
@@ -1272,8 +1398,10 @@ def registrar_herramienta(
             "trigger indica cuándo se ejecuta: time (a una hora; usa time en formato "
             "HH:MM de 24 horas (o HH:MM:SS) y days con números del 1 (lunes) al 7 (domingo) "
             "separados por comas), headphones_connected (al conectar los auriculares) "
-            "headphones_disconnected (al desconectarlos), game_started (al abrir un juego) "
-            "o game_stopped (al cerrar el último juego). "
+            "headphones_disconnected (al desconectarlos), game_started (al abrir un juego), "
+            "game_stopped (al cerrar el último juego), usb_connected / usb_disconnected (pendrive o "
+            "disco USB), program_started / program_stopped (al abrir o cerrar el programa de program) "
+            "o internet_lost / internet_restored. "
             "steps_json debe ser una cadena JSON como "
             "'[{\"tool\":\"set_system_volume\",\"arguments\":{\"percentage\":30}}]'. "
             "automatic=true solo si el usuario pide que se ejecute sin preguntar; "
@@ -1302,6 +1430,7 @@ def registrar_herramienta(
                 },
                 "automatic": {"type": "boolean"},
                 "once": {"type": "boolean"},
+                "program": {"type": "string", "maxLength": 60},
             },
             "required": ["name", "steps_json"],
             "additionalProperties": False,

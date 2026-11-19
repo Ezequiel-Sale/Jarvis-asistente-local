@@ -98,6 +98,16 @@ GAME_NAME_ALIASES = {
         "garrys mod",
         "gmod",
     ),
+    # 2026-11-17: Whisper lo escribió «Project Sunboid», «Project Zone Void» (y una vez «peseta»).
+    "projectzomboid": (
+        "zomboid",
+        "project zomboid",
+        "proyecto zomboid",
+        "project sunboid",
+        "project zone void",
+        "zombo",
+        "zomboy",
+    ),
     "left4dead2": (
         "left 4 dead",
         "l4d2",
@@ -441,6 +451,10 @@ def localizar_ejecutable_juego(nombre: str) -> tuple[str, Path]:
     if coincidencias_exactas:
         coincidencias = coincidencias_exactas
     if not coincidencias:
+        parecida = _juego_que_suena_parecido(nombre)
+        if parecida is not None:
+            coincidencias = [parecida]
+    if not coincidencias:
         raise FileNotFoundError(
             f"No encontré «{nombre}» en las carpetas de juegos configuradas."
         )
@@ -456,6 +470,43 @@ def localizar_ejecutable_juego(nombre: str) -> tuple[str, Path]:
 
     carpeta = coincidencias[0]
     return carpeta.name, _elegir_ejecutable_juego(carpeta)
+
+# Por cómo suena [2026-11-17]: Whisper escribe en español lo que oye de un nombre en inglés
+# («Project Sunboid» por Project Zomboid: 0,86 de parecido, el siguiente juego 0,48).
+PARECIDO_JUEGO = 0.8
+MARGEN_JUEGO = 0.15
+
+
+def _juego_que_suena_parecido(nombre: str) -> Path | None:
+    """La carpeta del juego cuyo nombre (o alias) suena claramente más parecido a ``nombre``."""
+    from difflib import SequenceMatcher
+
+    import jarvis_windows
+
+    buscado = jarvis_windows.clave_fonetica(nombre)
+    if len(buscado) < 5:
+        return None
+    mejores: dict[Path, float] = {}
+    for raiz in carpetas_juegos():
+        try:
+            carpetas = [c for c in raiz.iterdir() if c.is_dir()]
+        except OSError:
+            continue
+        for carpeta in carpetas:
+            clave = normalizar_nombre_juego(carpeta.name).replace(" ", "")
+            nombres = [carpeta.name, *GAME_NAME_ALIASES.get(clave, ())]
+            parecido = max(SequenceMatcher(None, buscado, jarvis_windows.clave_fonetica(n)).ratio() for n in nombres)
+            mejores[carpeta] = max(parecido, mejores.get(carpeta, 0.0))
+    orden = sorted(mejores.items(), key=lambda par: par[1], reverse=True)
+    if not orden or orden[0][1] < PARECIDO_JUEGO:
+        return None
+    distinto = next((p for c, p in orden[1:]
+                     if normalizar_nombre_juego(c.name) != normalizar_nombre_juego(orden[0][0].name)), 0.0)
+    if distinto > orden[0][1] - MARGEN_JUEGO:
+        return None  # dos juegos parecidos por igual: mejor no adivinar
+    logging.info("«%s» se tomó como el juego %s (suena parecido, %.2f).", nombre, orden[0][0].name, orden[0][1])
+    return orden[0][0]
+
 
 def iniciar_ejecutable_juego(executable: Path) -> None:
     try:

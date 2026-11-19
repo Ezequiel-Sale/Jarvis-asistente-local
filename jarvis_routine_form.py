@@ -90,6 +90,12 @@ DISPARADORES = (
     ("headphones_disconnected", "Al desconectar los auriculares"),
     ("game_started", "Al abrir un juego (modo juego)"),
     ("game_stopped", "Al cerrar el juego"),
+    ("program_started", "Al abrir un programa"),
+    ("program_stopped", "Al cerrar un programa"),
+    ("usb_connected", "Al conectar un pendrive o disco USB"),
+    ("usb_disconnected", "Al desconectar un pendrive o disco USB"),
+    ("internet_lost", "Al quedarme sin internet"),
+    ("internet_restored", "Al volver internet"),
 )
 _DB_A_FORM = {
     jarvis_routines.DISPARADOR_FRASE: "frase",
@@ -98,6 +104,12 @@ _DB_A_FORM = {
     jarvis_routines.DISPARADOR_AURICULARES_DESCONECTADOS: "headphones_disconnected",
     jarvis_routines.DISPARADOR_JUEGO_ABIERTO: "game_started",
     jarvis_routines.DISPARADOR_JUEGO_CERRADO: "game_stopped",
+    jarvis_routines.DISPARADOR_PROGRAMA_ABIERTO: "program_started",
+    jarvis_routines.DISPARADOR_PROGRAMA_CERRADO: "program_stopped",
+    jarvis_routines.DISPARADOR_USB_CONECTADO: "usb_connected",
+    jarvis_routines.DISPARADOR_USB_DESCONECTADO: "usb_disconnected",
+    jarvis_routines.DISPARADOR_SIN_INTERNET: "internet_lost",
+    jarvis_routines.DISPARADOR_CON_INTERNET: "internet_restored",
 }
 
 
@@ -163,6 +175,9 @@ CATALOGO: dict[str, tuple[str, str, str]] = {
     "get_current_datetime": ("Avisos e información", "Decir la fecha y la hora", "Fecha, hora o las dos."),
     "set_theme": ("Jarvis", "Cambiar el tema", "Colores de Jarvis."),
     "set_voice": ("Jarvis", "Cambiar la voz", "La voz con que habla Jarvis."),
+    "windows_setting": ("Equipo y energía", "Ajuste de Windows", "Luz nocturna, modo oscuro, Wi-Fi o Bluetooth."),
+    "open_settings": ("Equipo y energía", "Abrir Configuración", "Una página de Configuración de Windows."),
+    "pc_doctor": ("Equipo y energía", "Revisar la salud de la PC", "Caídas, discos o errores recientes."),
 }
 
 
@@ -360,10 +375,11 @@ class RoutineForm:
 
         self.marco_frase = tk.Frame(cuerpo, bg=PANEL, padx=12, pady=8)
         self.frases = tk.StringVar(value=", ".join(routine.phrases) if routine else "")
-        tk.Label(
+        self.etiqueta_frase = tk.Label(
             self.marco_frase, text="Frases que lo activan (separadas por comas):",
             bg=PANEL, fg=MUTED, font=("Segoe UI", 9),
-        ).pack(anchor="w")
+        )
+        self.etiqueta_frase.pack(anchor="w")
         self._entrada(self.marco_frase, self.frases, 60).pack(anchor="w", fill="x")
         tk.Label(
             self.marco_frase,
@@ -513,7 +529,11 @@ class RoutineForm:
     def _actualizar_cuando(self) -> None:
         self.marco_frase.pack_forget()
         self.marco_hora.pack_forget()
-        if self.disparador.get() == "frase":
+        if self.disparador.get() in ("frase", "program_started", "program_stopped"):
+            # En los de programa, el mismo campo guarda el nombre del programa (2026-11-19).
+            self.etiqueta_frase.configure(
+                text="Frases que lo activan (separadas por comas):" if self.disparador.get() == "frase"
+                else "Programa (su nombre, p. ej. Spotify, Discord, chrome):")
             self.marco_frase.pack(fill="x", pady=(6, 0), before=self.ancla_cuando)
         elif self.disparador.get() == "time":
             self.marco_hora.pack(fill="x", pady=(6, 0), before=self.ancla_cuando)

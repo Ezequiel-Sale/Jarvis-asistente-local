@@ -1225,3 +1225,45 @@ class WebSearchFallbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DelegarPantallaTests(unittest.TestCase):
+    """2026-11-19: tocar la pantalla o la página pasa entero al piloto, con una sola aprobación."""
+
+    def setUp(self) -> None:
+        for objetivo, valor in (("jarvis_agent.jarvis_memory.buscar_recuerdos", []),
+                                ("jarvis_agent.core.cargar_contexto_db", "Contexto."),
+                                ("jarvis_agent.core.obtener_historial", [])):
+            parche = patch(objetivo, return_value=valor)
+            parche.start()
+            self.addCleanup(parche.stop)
+        self.registry = ToolRegistry()
+        self.tocado = []
+        self.registry.register(
+            "press_keys", "Aprieta un atajo.",
+            {"type": "object", "properties": {"keys": {"type": "string"}}, "required": ["keys"],
+             "additionalProperties": False},
+            lambda keys: self.tocado.append(keys) or "ok", risk=ToolRisk.MEDIUM, requires_confirmation=True)
+
+    def _llamada(self):
+        return _response({"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "press_keys", "arguments": {"keys": "enter"}}}]})
+
+    @patch("jarvis_agent.requests.post")
+    def test_screen_actions_go_to_the_autopilot_once(self, post: Mock) -> None:
+        post.return_value = self._llamada()
+        delegar, confirmar = Mock(return_value="Busqué recetas de pizza."), Mock(return_value=True)
+        respuesta = procesar_con_herramientas("Escribí recetas de pizza en el buscador y buscá", "c",
+                                              self.registry, confirmar, delegar_pantalla=delegar)
+        self.assertEqual(respuesta, "Busqué recetas de pizza.")
+        delegar.assert_called_once_with("Escribí recetas de pizza en el buscador y buscá")
+        confirmar.assert_not_called()
+        self.assertEqual(self.tocado, [])
+
+    @patch("jarvis_agent.requests.post")
+    def test_rejected_card_touches_nothing(self, post: Mock) -> None:
+        post.return_value = self._llamada()
+        respuesta = procesar_con_herramientas("Apretá enter en la página", "c", self.registry, Mock(),
+                                              delegar_pantalla=Mock(return_value=None))
+        self.assertEqual(respuesta, "No toqué nada.")
+        self.assertEqual(self.tocado, [])

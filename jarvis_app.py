@@ -3,6 +3,7 @@ import logging
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +11,11 @@ from tkinter import messagebox
 
 import jarvis_core as core
 import jarvis_health
+import jarvis_ajustes
+import jarvis_brave
 import jarvis_deshacer
+import jarvis_disparadores
+import jarvis_gestor_archivos
 import jarvis_servicios
 import jarvis_displays
 import jarvis_ollama_gpu
@@ -129,6 +134,7 @@ class JarvisApp(
         self._plan_approve_button: tk.Button | None = None
         self._plan_reject_button: tk.Button | None = None
         self.busy = False
+        self._oferta_piloto: tuple[str, str, str] | None = None  # tarjeta del piloto tras la respuesta
         self.cancel_token = CancellationToken()
         self.player_thread: threading.Thread | None = None
         self.player_stop: threading.Event | None = None
@@ -276,9 +282,17 @@ class JarvisApp(
             "tema": jarvis_theme.tema_actual,
             "monitores": jarvis_displays.guardar_configuracion,
             "restaurar_monitores": jarvis_displays.restaurar_configuracion,
+            "ajuste": jarvis_ajustes.estado,
+            "inicio": jarvis_ajustes.inicio_activo,
         })
         self.tool_registry.antes_de_ejecutar = self.deshacer.capturar
         self.tool_registry.tras_exito = self.deshacer.anotar
+        # Archivos: cada movimiento, renombre o envío a la papelera queda para «deshacé».
+        jarvis_gestor_archivos.anotar_deshacer = lambda descripcion, funcion: self.deshacer.anotar(
+            jarvis_deshacer.Deshacer(descripcion, accion=funcion, momento=time.monotonic()))
+        self.portapapeles = jarvis_gestor_archivos.HistorialPortapapeles()
+        threading.Thread(target=self.portapapeles.vigilar, args=(threading.Event(),), daemon=True,
+                         name="JarvisPortapapeles").start()
         self.tool_registry.register(
             "mobile_remote_control",
             "Activa o corta el control del mouse y el teclado de la PC desde la app del celular.",
@@ -335,6 +349,11 @@ class JarvisApp(
         self.global_hotkey_listener.start()
         self.headphones_watcher = HeadphonesWatcher(self.events)
         self.headphones_watcher.start()
+        # Rutinas «al conectar un pendrive», «al abrir Spotify», «al quedarme sin internet».
+        self.disparadores = jarvis_disparadores.VigilanteDisparadores(self.events)
+        self.disparadores.start()
+        # Control profundo de Brave: puente local para la extensión «Jarvis para Brave».
+        self.puente_brave = jarvis_brave.iniciar()
         self.battery_watcher = HeadsetBatteryWatcher(self.events)
         self.battery_watcher.start()
         self.reminder_watcher = jarvis_reminders.VigilanteRecordatorios(self.events)
@@ -575,11 +594,17 @@ class JarvisApp(
     _LEARNING_INTERVAL_MS = 60000
 
     def _check_learning(self) -> None:
-        """Cada minuto: si hay conversaciones inactivas sin revisar, aprende de ellas."""
+        """Cada minuto: si hay conversaciones inactivas sin revisar, aprende de ellas.
+
+        Con un juego abierto espera: revisarlas cargaría el modelo en la GPU (~9 GB, 2 h) en plena
+        partida (2026-11-17). Quedan pendientes y se revisan al cerrar el juego."""
         if self._closing:
             return
         self.root.after(self._LEARNING_INTERVAL_MS, self._check_learning)
         if self._learning_running or self.busy:
+            return
+        vigilante = getattr(self, "games_watcher", None)
+        if vigilante is not None and vigilante.jugando:
             return
         self._learning_running = True
         threading.Thread(target=self._learning_worker, name="JarvisAprendizaje", daemon=True).start()
@@ -647,7 +672,8 @@ class JarvisApp(
         except Exception:
             logging.exception("No se pudo preparar la voz a texto en la GPU.")
         try:
-            self.tv.conectar()  # si está vinculada; se reconecta sola si la tele se apaga
+            if not self.tv.en_silencio():  # dormida, no se la toca (ver jarvis_tv.SILENCIO_REPOSO)
+                self.tv.conectar()  # si está vinculada; se reconecta sola si la tele se apaga
         except Exception:
             logging.exception("No se pudo conectar con la tele.")
         try:
@@ -900,7 +926,7 @@ class JarvisApp(
                         if not self.busy:
                             self._set_status("OLLAMA NO DISPONIBLE", ERROR)
                     elif event[0] == "device_event":
-                        self._handle_device_event(event[1])
+                        self._handle_device_event(*event[1:3])
                     elif event[0] == "routines_changed":  # se activó o pausó una desde el celular
                         panel = self._routines_panel
                         if panel is not None and panel.is_open():
@@ -1252,6 +1278,8 @@ class JarvisApp(
                         self._show_screen_approval(*event[1:])
                     elif event[0] == "screen_execute":
                         self._execute_screen_action(*event[1:])
+                    elif event[0] == "autopilot_status":
+                        self._set_status(event[1], CYAN)
                     elif event[0] == "screen_finished":
                         _, mensaje, command, conversation_id = event
                         self._finish_screen_action(mensaje, command, conversation_id)
@@ -1267,6 +1295,7 @@ class JarvisApp(
                         _, _tool_name, response = event
                         self._show_direct_response(_tool_name, response)
                         self._set_idle()
+                        self._mostrar_oferta_piloto()  # «control z» tras el piloto: tarjeta para revertir
                         if _tool_name in ("configure_display", "fix_display_scaling") \
                                 and self._current_page == "ajustes":
                             self._refresh_monitor_map()
@@ -1342,6 +1371,7 @@ class JarvisApp(
                             ):
                                 self._play_audio(audio)
                         self._set_idle()
+                        self._mostrar_oferta_piloto()  # «¿Quieres que lo corrija?» → tarjeta del piloto
                     elif event[0] == "empty_transcript":
                         self._add_message(
                             "assistant",
@@ -1417,6 +1447,9 @@ class JarvisApp(
         self.global_hotkey_listener.stop()
         self.global_hotkey_listener.join(timeout=1)
         self.headphones_watcher.stop()
+        self.disparadores.stop()
+        if self.puente_brave is not None:
+            self.puente_brave.detener()
         self.battery_watcher.stop()
         self.reminder_watcher.stop()
         self.health_watcher.stop()

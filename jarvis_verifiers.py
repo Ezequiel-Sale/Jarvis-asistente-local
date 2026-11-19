@@ -10,6 +10,8 @@ Sin verificador a propósito:
 - ``launch_game``: muchos juegos arrancan mediante lanzadores que terminan
   enseguida, así que comprobar el proceso daría falsos negativos.
 - ``manage_window``: depende del estado de Tk o de ventanas ajenas.
+- ``window_action``: el handler comprueba el texto escrito; el piloto compara la ventana tras cada paso.
+- ``type_text`` y ``press_keys``: la ventana de destino no siempre expone qué recibió.
 - ``power_control``, ``cancel_power_action`` y ``lock_computer``: el handler ya
   comprueba el código de Windows, y después de apagar, suspender o bloquear
   no hay nada que Jarvis pueda comprobar.
@@ -154,6 +156,30 @@ def verificar_volumen_app(
     return Verificacion(False, f"se pidió {esperado}%, pero Windows reporta {actual}%.")
 
 
+def verificar_ajuste(arguments: Mapping[str, object], _result: object, *, leer=None) -> Verificacion:
+    """Tras cambiar un ajuste de Windows, se vuelve a leer su estado."""
+    import jarvis_ajustes
+
+    leer = leer or jarvis_ajustes.estado
+    esperado = arguments["state"] == "on"
+    if leer(str(arguments["setting"])) == esperado:
+        return Verificacion(True, "Windows informa el ajuste " + ("activado." if esperado else "desactivado."))
+    return Verificacion(False, "Windows sigue informando el estado anterior.")
+
+
+def verificar_inicio(arguments: Mapping[str, object], _result: object, *, leer=None) -> Verificacion:
+    """Tras activar o desactivar un programa de inicio, su marca de Windows debe coincidir."""
+    import jarvis_ajustes
+
+    if arguments.get("action") not in ("enable", "disable"):
+        return Verificacion(True, "Solo se listaron los programas.")
+    leer = leer or jarvis_ajustes.inicio_activo
+    esperado = arguments["action"] == "enable"
+    if leer(str(arguments.get("name", ""))) == esperado:
+        return Verificacion(True, "Windows lo tiene " + ("activado" if esperado else "desactivado") + " al iniciar.")
+    return Verificacion(False, "la marca de inicio de Windows no cambió.")
+
+
 def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
     def verificar_audio_jarvis(arguments: Mapping[str, object], _result: object) -> Verificacion:
         esperado = bool(arguments["enabled"])
@@ -183,4 +209,6 @@ def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
         "media_control": verificar_reproduccion,
         "set_app_volume": verificar_volumen_app,
         "fix_display_scaling": verificar_barras_de_tareas,
+        "windows_setting": verificar_ajuste,
+        "startup_apps": verificar_inicio,
     }

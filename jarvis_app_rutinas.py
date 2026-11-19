@@ -7,6 +7,7 @@ los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``�
 import jarvis_core as core
 import jarvis_displays
 import jarvis_power
+import jarvis_deshacer
 import jarvis_routines
 import json
 import logging
@@ -43,7 +44,8 @@ class RutinasMixin:
         action = PlannedAction(tool=tool, arguments=arguments)
         trigger = jarvis_routines._validate_trigger(request.trigger)
         days = jarvis_routines._parse_days(request.days)
-        cuando = jarvis_routines.describir_disparador(trigger, request.time, days)
+        cuando = jarvis_routines.describir_disparador(
+            trigger, request.time, days, (request.program,) if getattr(request, "program", "") else ())
         if request.once:
             cuando += ", una sola vez"
         goal = (
@@ -79,7 +81,10 @@ class RutinasMixin:
         trigger: str = "time",
         automatic: bool = False,
         once: bool = False,
+        program: str = "",
     ) -> str:
+        disparador = jarvis_routines._validate_trigger(trigger)
+        programas = (program,) if program and disparador in jarvis_routines.DISPARADORES_PROGRAMA else ()
         jarvis_routines.crear_rutina(
             name,
             time,
@@ -89,12 +94,13 @@ class RutinasMixin:
             trigger=trigger,
             automatic=automatic,
             once=once,
+            phrases=programas,
         )
-        disparador = jarvis_routines._validate_trigger(trigger)
         cuando = jarvis_routines.describir_disparador(
             disparador,
             time,
             jarvis_routines._parse_days(days or "1,2,3,4,5,6,7"),
+            programas,
         )
         permiso = self._routine_permission_text(steps_json, automatic)
         if once:
@@ -122,11 +128,24 @@ class RutinasMixin:
         "auriculares_desconectados": "AURICULARES DESCONECTADOS",
         "juego_abierto": "MODO JUEGO: {detalle}",
         "juego_cerrado": "JUEGO CERRADO: {detalle}",
+        "usb_conectado": "USB CONECTADO: {detalle}",
+        "usb_desconectado": "USB DESCONECTADO: {detalle}",
+        "programa_abierto": "SE ABRIÓ {detalle}",
+        "programa_cerrado": "SE CERRÓ {detalle}",
+        "sin_internet": "SIN INTERNET",
+        "con_internet": "VOLVIÓ INTERNET",
     }
+
+    @property
+    def _modos_activos(self) -> dict:
+        """Rutina por frase (id) → lo que cambió al activarla, para «desactivá el modo …»."""
+        if "_modos" not in self.__dict__:
+            self.__dict__["_modos"] = {}
+        return self.__dict__["_modos"]
 
     def _handle_device_event(self, trigger: str, detalle: str = "") -> None:
         try:
-            routines = jarvis_routines.rutinas_para_evento(trigger)
+            routines = jarvis_routines.rutinas_para_evento(trigger, detalle)
         except Exception:
             logging.exception("No se pudieron cargar las rutinas del evento %s.", trigger)
             return
@@ -223,6 +242,30 @@ class RutinasMixin:
             return "set_output_device", {"device": dispositivo}
         return None
 
+    def _rutina_de_evento_con_ordenes(self, texto: str) -> "jarvis_routines.RoutineCreationRequest | None":
+        """«Cuando conecte un pendrive, abrí el Explorador»: cada paso con las órdenes directas."""
+        detectado = jarvis_routines.detectar_disparador(texto)
+        if detectado is None or not detectado[2]:
+            return None
+        trigger, programa, resto, automatica = detectado
+        if trigger in jarvis_routines.DISPARADORES_PROGRAMA and not programa:
+            return None
+        encadenada = self._chained_orders(resto)
+        if encadenada is not None:
+            pasos = [{"tool": p.tool, "arguments": dict(p.arguments)} for p in encadenada.steps]
+        else:
+            orden = self._direct_tool_for(resto)
+            if orden is None:
+                rutina = jarvis_routines.buscar_rutina_por_frase(resto)
+                if rutina is None:
+                    return None
+                pasos = [{"tool": p.tool, "arguments": dict(p.arguments)} for p in rutina.steps]
+            else:
+                pasos = [{"tool": orden[0], "arguments": dict(orden[1])}]
+        if not pasos or any(p["tool"] not in jarvis_routines._ROUTINE_ALLOWED_TOOLS for p in pasos):
+            return None
+        return jarvis_routines.solicitud_de_evento(trigger, programa, pasos, automatica)
+
     def _find_undo_routine(self, texto: str) -> "jarvis_routines.Routine | None":
         """«Desactiva el modo gaming 2K»: si esa rutina cambió los monitores y hay una
         configuración guardada de antes, se vuelve a ella (comando directo, sin la IA)."""
@@ -230,14 +273,22 @@ class RutinasMixin:
         if resto is None:
             return None
         rutina = jarvis_routines.buscar_rutina_por_frase(resto)
-        if rutina is None or not any(p.tool == "configure_display" for p in rutina.steps):
+        if rutina is None:
             return None
-        if jarvis_displays.base_desde_texto(core.obtener_preferencia(jarvis_displays.PREFERENCIA_BASE)) is None:
+        pasos: list[jarvis_routines.RoutineStep] = []
+        modos = self._modos_activos
+        cambios = modos.pop(rutina.identifier, []) if isinstance(modos, dict) else []
+        # Lo reversible que cambió al activarlo, del último al primero (los monitores van aparte).
+        for deshacer in reversed(cambios):
+            if deshacer.herramienta != "configure_display":
+                pasos.append(jarvis_routines.RoutineStep(deshacer.herramienta, dict(deshacer.argumentos)))
+        if any(p.tool == "configure_display" for p in rutina.steps) and jarvis_displays.base_desde_texto(
+                core.obtener_preferencia(jarvis_displays.PREFERENCIA_BASE)) is not None:
+            pasos.append(jarvis_routines.RoutineStep("restore_display_config", {"routine": rutina.name}))
+        if not pasos:
             return None
         return jarvis_routines.Routine(
-            -rutina.identifier, f"Desactivar {rutina.name}", "", (),
-            (jarvis_routines.RoutineStep("restore_display_config", {"routine": rutina.name}),),
-            jarvis_routines.DISPARADOR_FRASE,
+            -rutina.identifier, f"Desactivar {rutina.name}", "", (), tuple(pasos), jarvis_routines.DISPARADOR_FRASE,
         )
 
     def _start_phrase_routine(self, rutina: "jarvis_routines.Routine", command: str) -> None:
@@ -261,6 +312,10 @@ class RutinasMixin:
         started = time.perf_counter()
         resultados: list[str] = []
         lote = self._start_display_batch()
+        historial = getattr(self, "deshacer", None)
+        if not isinstance(historial, jarvis_deshacer.Historial):
+            historial = None
+        antes = historial.instantanea() if historial is not None else []
         for paso in rutina.steps:
             nombre = paso.tool
             try:
@@ -286,6 +341,11 @@ class RutinasMixin:
                     logging.exception("Falló un paso del comando %s.", rutina.name)
                 resultados.append(f"«{nombre}» falló: {error}")
                 break
+        if historial is not None and rutina.identifier > 0:
+            # «Desactivá el modo cine» vuelve atrás todo lo reversible que cambió (2026-11-19).
+            cambios = [d for d in historial.nuevas_desde(antes) if d.herramienta]
+            if cambios:
+                self._modos_activos[rutina.identifier] = cambios
         try:
             if (revertido := self._confirm_display_batch(lote, rutina.name)) is not None:
                 resultados.append(revertido)

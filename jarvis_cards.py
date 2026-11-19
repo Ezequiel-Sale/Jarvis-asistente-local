@@ -24,7 +24,13 @@ ICONOS = {
     "open_program": "📂", "open_app": "📂", "manage_window": "🗔", "window_control": "🗔", "browser_history": "🔄", "power_control": "⏻",
     "cancel_power_action": "⏻", "lock_computer": "🔒", "set_reminder": "⏰",
     "cancel_reminder": "⏰", "list_reminders": "⏰", "schedule_routine": "⏱",
-    "screen_click": "🖱", "screen_vision": "👁", "set_theme": "🎨",
+    "screen_click": "🖱", "screen_vision": "👁", "set_theme": "🎨", "read_window": "👁",
+    "read_screen_text": "👁", "window_action": "🖱", "type_text": "⌨", "press_keys": "⌨", "autopilot": "🧭",
+    "windows_setting": "⚙", "startup_apps": "🚀", "open_settings": "⚙", "pc_doctor": "🩺", "run_powershell": "📜",
+    "file_action": "📁", "organize_folder": "🗂", "clipboard_history": "📋",
+    "search_programs": "📦", "install_program": "📦", "uninstall_program": "📦", "list_program_updates": "📦",
+    "update_programs": "📦", "ask_document": "📄", "search_documents": "📄",
+    "browser_read_page": "🦁", "browser_page_action": "🦁",
     "get_weather": "☁", "web_search": "🔎", "get_headset_battery": "🔋", "get_system_status": "📊",
     "list_top_processes": "📊", "list_open_applications": "🗂",
     "get_current_datetime": "🕒", "morning_briefing": "☀", "undo_last_action": "↶",
@@ -32,7 +38,8 @@ ICONOS = {
     "tv_control": "📺", "tv_open_app": "📺", "tv_status": "📺", "press_window_button": "🖱", "routine_wait": "⏳", "say_text": "🗣", "notify_phone": "📱",
     "close_program": "✖", "get_jarvis_diagnostics": "🩺",
 }
-ORIGENES = {"directo": "directo", "agente": "IA", "rutina": "rutina", "frase": "frase", "pantalla": "pantalla"}
+ORIGENES = {"directo": "directo", "agente": "IA", "rutina": "rutina", "frase": "frase", "pantalla": "pantalla",
+            "piloto": "piloto"}
 
 
 def icono(herramienta: str) -> str:
@@ -195,6 +202,23 @@ def _frase_especifica(herramienta: str, a: dict) -> str | None:
         return f"Cerrar {a['names']}"
     if herramienta == "press_window_button" and a.get("button"):
         return f"Pulsar «{a['button']}» en {a.get('program', 'la ventana')}"
+    if herramienta == "window_action":
+        import jarvis_control
+
+        return jarvis_control.descripcion(a.get("n"), accion=str(a.get("action") or "click"),
+                                          texto=str(a.get("text") or ""))
+    if herramienta == "type_text" and a.get("text"):
+        return f"Escribir «{a['text']}» en la ventana activa"
+    if herramienta == "press_keys" and a.get("keys"):
+        return f"Apretar {a['keys']} en la ventana activa"
+    if herramienta == "autopilot" and a.get("goal"):
+        return f"Manejar la PC para: {a['goal']}"
+    if herramienta == "browser_page_action":
+        import jarvis_brave
+
+        return jarvis_brave.descripcion(a.get("n"), str(a.get("action") or "click"), str(a.get("text") or ""))
+    if herramienta == "run_powershell" and a.get("script"):
+        return f"Correr este script para {a.get('purpose') or 'lo que pediste'}:\n{a['script']}"
     if herramienta == "screen_click":
         texto = f" y escribir «{a['text']}»" if a.get("text") else ""
         return f"Hacer clic en la pantalla{texto}"
@@ -233,7 +257,17 @@ _AVISOS = {
     "launch_game": "Abre un juego, que puede ocupar la pantalla y usar mucha memoria.",
     "manage_window": "Cambia el tamaño de una ventana.",
     "screen_click": "Jarvis moverá el mouse y hará clic por ti.",
+    "window_action": "Jarvis tocará ese control de la ventana por ti.",
+    "type_text": "Jarvis escribirá en la ventana activa.",
+    "press_keys": "Jarvis apretará esas teclas en la ventana activa.",
+    "autopilot": "Jarvis usará tus ventanas paso a paso. Te pregunta antes de borrar, comprar o enviar. "
+                 "Esc o mover el mouse lo frenan.",
     "mobile_remote_control": "El celular podrá mover el mouse y escribir en esta PC.",
+    "run_powershell": "Leé el script antes de aprobarlo: corre con los permisos de Jarvis (administrador).",
+    "browser_page_action": "Jarvis usará la página abierta en Brave por ti (con tu sesión iniciada).",
+    "install_program": "Se descarga del repositorio de winget y, al instalarlo, aceptás la licencia del programa.",
+    "update_programs": "Se descargan las versiones nuevas de winget y aceptás sus licencias; cerrá esos programas antes.",
+    "uninstall_program": "Se quita el programa de la PC (sus archivos de usuario suelen quedar).",
 }
 
 

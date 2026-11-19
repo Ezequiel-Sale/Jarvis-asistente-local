@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS rutinas (
     modo_permiso TEXT NOT NULL DEFAULT 'preguntar',
     -- 1 = se desactiva sola después de ejecutarse (p. ej. «apaga el equipo a las 2»)
     una_vez INTEGER NOT NULL DEFAULT 0,
-    -- Disparador 'frase': lista JSON de frases que la activan («modo juego»…)
+    -- Disparador 'frase': lista JSON de frases que la activan («modo juego»…).
+    -- 'programa_abierto' / 'programa_cerrado': el nombre del programa, como lista de uno.
+    -- Otros eventos: 'usb_conectado', 'usb_desconectado', 'sin_internet', 'con_internet'.
     frases TEXT NOT NULL DEFAULT '[]'
 );
 

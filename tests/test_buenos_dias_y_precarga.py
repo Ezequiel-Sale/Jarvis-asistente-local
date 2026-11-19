@@ -115,10 +115,8 @@ class PreloadTests(unittest.TestCase):
         self.assertEqual(cuerpo["options"]["num_ctx"], agent.NUM_CTX)
         self.assertEqual(cuerpo["keep_alive"], agent.KEEP_ALIVE)
         self.assertNotIn("prompt", cuerpo)  # solo carga, no genera
-        # Después, el de visión para clics, que convive con él (con el mismo keep_alive).
-        vision = post.call_args_list[1].kwargs["json"]
-        self.assertEqual((vision["model"], vision["options"]["num_ctx"], vision["keep_alive"]),
-                         (agent.core.MODEL_VISION, agent.core.VISION_NUM_CTX, agent.KEEP_ALIVE))
+        # El de visión no se precarga: juntos desbordaban la GPU (2026-11-19).
+        self.assertEqual(post.call_count, 1)
 
     @patch("jarvis_agent.requests.post")
     @patch("jarvis_agent.modelo_cargado", return_value=True)
@@ -171,6 +169,26 @@ class PreloadTests(unittest.TestCase):
         with patch("jarvis_buenos_dias.toca_automatico", return_value=True):
             JarvisApp._check_morning_brief(host2)  # jugando: no sale, y no falla
         host2._start_direct_tool_action.assert_not_called()
+
+    def test_learning_waits_until_the_game_closes(self) -> None:
+        # 2026-11-17: revisar la conversación cargó el modelo en la GPU en plena partida.
+        import queue
+
+        import jarvis_games_watch
+
+        vigilante = jarvis_games_watch.VigilanteJuegos(queue.Queue())  # antes del patch: crea su hilo
+        vigilante._confirmado = {"Elden Ring"}
+        host = Mock(_closing=False, _learning_running=False, busy=False, _LEARNING_INTERVAL_MS=60000)
+        host.games_watcher = vigilante
+        with patch("threading.Thread") as hilo:
+            JarvisApp._check_learning(host)
+            hilo.assert_not_called()
+            self.assertFalse(host._learning_running)
+            host.root.after.assert_called_once()  # sigue revisando cada minuto
+            vigilante._confirmado = set()
+            JarvisApp._check_learning(host)
+            hilo.assert_called_once()
+        self.assertTrue(host._learning_running)
 
     @staticmethod
     def _real_host_for_brief(vigilante):

@@ -277,7 +277,7 @@ class AppAutomationTests(unittest.TestCase):
         host._pending_routines = queue.Queue()
         host.busy = True
         JarvisApp._handle_device_event(host, CONNECTED)
-        for_event.assert_called_once_with(CONNECTED)
+        for_event.assert_called_once_with(CONNECTED, "")
         self.assertIs(host._pending_routines.get_nowait(), routine)
 
 

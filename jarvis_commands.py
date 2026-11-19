@@ -39,8 +39,10 @@ AUDIO_TOGGLE_COMMAND_PATTERN = re.compile(
 GAME_LAUNCH_COMMAND_PATTERN = re.compile(
     r"^\s*(?:(?:jarvis(?:\s*[,;:]\s*|\s+)|"
     r"(?:por favor|puedes|podrias|quiero)(?:\s*[,;:]\s*|\s+)))*"
-    r"(?:abre|abrir|inicia|iniciar)\s+"
-    r"(?:(?:el|la)\s+)?(?:juego\s+)?(.+?)\s*[.!?]*\s*$",
+    # 2026-11-17: también en voseo («abrí», «iniciá», que con tilde no coincidían) y «jugá al …».
+    r"(?:abre|abri|abrí|abrir|abrime|inicia|iniciá|iniciar"
+    r"|juega\s+(?:al?|el)|jugá\s+(?:al?|el)|(?:quiero|vamos\s+a)\s+jugar(?:\s+(?:al?|el))?)\s+"
+    r"(?:(?:el|la|al)\s+)?(?:juego\s+)?(.+?)\s*[.!?]*\s*$",
     re.IGNORECASE,
 )
 

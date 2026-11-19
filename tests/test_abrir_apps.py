@@ -52,6 +52,14 @@ class PhraseTests(unittest.TestCase):
             with self.subTest(frase=frase):
                 self.assertEqual(detectar_comando_juego(frase), "WhatsApp")
 
+    def test_more_ways_to_start_a_game(self) -> None:
+        """2026-11-17: también en voseo y «jugá al …» / «quiero jugar al …»."""
+        for frase in ("Abrí el Project Zomboid", "Iniciá el Project Zomboid", "Jugá al Project Zomboid",
+                      "Quiero jugar al Project Zomboid", "Vamos a jugar al Project Zomboid", "Abre el juego Project Zomboid"):
+            with self.subTest(frase=frase):
+                self.assertEqual(detectar_comando_juego(frase), "Project Zomboid")
+        self.assertIsNone(detectar_comando_juego("arrancá la música"))
+
     def test_a_second_order_is_not_part_of_the_name(self) -> None:
         """2026-11-17: «Abre Discord y pon el volumen al 30» abría Discord y se perdía el volumen."""
         for frase in ("Abre Discord y pon el volumen al 30", "abre Spotify, después baja el volumen",

@@ -31,6 +31,7 @@ sys.path.insert(0, str(RAIZ.parent))
 import jarvis_agent  # noqa: E402
 import jarvis_core as core  # noqa: E402
 import jarvis_system_info  # noqa: E402
+import jarvis_temas  # noqa: E402
 from examen.evaluar import CORRECTO, ILEGIBLE, NO_ACTUO, VEREDICTOS, corregir  # noqa: E402
 from jarvis_tools import crear_registro_herramientas  # noqa: E402
 
@@ -161,7 +162,8 @@ def main() -> None:
         sin_ia = lo_resuelve_sin_ia(caso["texto"])
         for vuelta in range(args.repeticiones):
             try:
-                llamadas, texto, segundos = preguntar(args.modelo, system, tools, caso["texto"], pensar)
+                llamadas, texto, segundos = preguntar(args.modelo, system, jarvis_temas.elegir(tools, caso["texto"]),
+                                                      caso["texto"], pensar)
                 veredicto, detalle = corregir(caso, llamadas)
             except (requests.RequestException, KeyError, ValueError) as error:
                 llamadas, texto, segundos, veredicto, detalle = [], "", 0.0, "error", str(error)

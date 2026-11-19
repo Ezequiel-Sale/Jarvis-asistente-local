@@ -15,7 +15,11 @@ a = Analysis(
            ('vendor/PresentMon', 'vendor/PresentMon'),
            ('vendor/adb', 'vendor/adb')]
     + collect_data_files('openwakeword') + collect_data_files('pythonnet')
-    + collect_data_files('clr_loader') + collect_data_files('mediapipe'),
+    + collect_data_files('clr_loader') + collect_data_files('mediapipe')
+    # Documentos (jarvis_documentos): las plantillas XML de python-docx.
+    + collect_data_files('docx')
+    # Extensión «Jarvis para Brave» (se carga desde _internal/brave_extension; config.js lo escribe Jarvis).
+    + [('brave_extension/manifest.json', 'brave_extension'), ('brave_extension/background.js', 'brave_extension')],
     hiddenimports=['mss.windows', 'av', 'dxcam', 'pyaudiowpatch', 'pystray._win32', 'pystray._util.win32',
                    'winrt.windows.media.control', 'winrt.windows.storage.streams', 'winrt.windows.foundation',
                    # Interfaces COM de UI Automation ya generadas (clic en pantalla).
@@ -25,7 +29,9 @@ a = Analysis(
                    # Tele (jarvis_tv): se importan dentro de funciones.
                    *collect_submodules('androidtvremote2'), *collect_submodules('zeroconf'),
                    # Gestos (jarvis_gestos): MediaPipe y OpenCV se importan dentro de funciones.
-                   'cv2', *collect_submodules('mediapipe')],
+                   'cv2', *collect_submodules('mediapipe'),
+                   # Documentos: se importan dentro de funciones.
+                   'pypdf', 'docx', 'lxml.etree', 'lxml._elementpath'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -10,6 +10,15 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 
 | Área | Ejemplos |
 |---|---|
+| **Manejar la PC por vos** | «Hacelo vos: activá el modo oscuro»: mira la ventana, avanza paso a paso y se frena con Esc o moviendo el mouse. Si Jarvis te ofrece corregir algo en una ventana, te muestra la tarjeta para aprobarlo. También lee ventanas, escribe y aprieta atajos por voz |
+| **Ajustes de Windows** | «Desactivá la luz nocturna», «activá el modo oscuro», «apagá el bluetooth», «sacá Discord del inicio»: al instante, verificado y con «deshacé» |
+| **Doctor de la PC** | «¿Por qué se colgó la PC anoche?», «¿están sanos los discos?», «¿hubo errores hoy?»: lee los registros de Windows y te dice la causa probable |
+| **Scripts a medida** | «Hacé un script que liste los archivos más grandes de Descargas»: te muestra el script entero y lo corre solo si lo aprobás |
+| **Archivos y portapapeles** | «Mové el segundo a Documentos», «comprimí esa carpeta», «mandalo a la papelera» (con «deshacé»), «ordená Descargas», «pegá lo que copié antes» |
+| **Programas** | «Instalá VLC», «¿qué programas tienen actualizaciones?», «actualizá todos los programas» (con winget, siempre preguntando) |
+| **Tus documentos** | «Resumí el segundo» después de buscar, «¿qué dice el contrato sobre el aumento?», «buscá documentos que hablen de la garantía»: todo local |
+| **Automatización** | «Cuando abra Spotify, poné el volumen al 20», «cuando conecte un pendrive…», «cuando me quede sin internet…»; y «desactivá el modo cine» deshace lo que cambió el modo |
+| **Brave a fondo** | Con la extensión «Jarvis para Brave»: «¿qué dice esta página?», «completá el formulario…», y el piloto usa la página directamente. Nunca bancos ni contraseñas |
 | **Conversación con memoria** | «Recuerda que prefiero Brave», «¿qué recuerdas sobre mi navegador?». Busca recuerdos por significado y **aprende solo** de las conversaciones («¿qué aprendiste de mí?», «desactiva el aprendizaje automático») |
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
 | **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» (incluye temperaturas de la GPU y la CPU; avisa solo si algo se calienta demasiado) |

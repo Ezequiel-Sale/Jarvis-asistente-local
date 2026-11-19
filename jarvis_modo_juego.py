@@ -129,10 +129,49 @@ def cerrar_programas(texto: str) -> str:
     nombres = nombres_de(texto)
     if not nombres:
         raise ValueError("Indica qué programa cerrar (los del sistema y Jarvis no se cierran).")
-    cerrados = cerrar(nombres)
+    procesos = por_ventana(nombres)
+    cerrados = cerrar(list(procesos))
     if not cerrados:
         return f"No estaba abierto: {', '.join(nombres)}."
-    return f"Cerré {', '.join(c.nombre for c in cerrados)}."
+    return f"Cerré {', '.join(procesos.get(c.nombre, c.nombre) for c in cerrados)}."
+
+
+# Cómo se dice el programa → su proceso (sirve aunque no tenga ventana, p. ej. en segundo plano).
+ALIAS = {
+    "google chrome": "chrome", "microsoft edge": "msedge", "edge": "msedge", "brave browser": "brave",
+    "mozilla firefox": "firefox", "bloc de notas": "notepad", "explorador de archivos": "explorer",
+    "visual studio code": "code", "vs code": "code", "calculadora": "win32calc",
+}
+
+
+def por_ventana(nombres: list[str], ventanas: Callable[[], list] | None = None) -> dict[str, str]:
+    """{proceso: como lo dijiste}. Si el nombre no es el del proceso, el de su ventana.
+
+    2026-11-19: «cerrá la calculadora» no cerraba nada porque el proceso se llama win32calc; la
+    ventana se busca igual que en las órdenes de ventanas (alias, título o sonido parecido)."""
+    import os
+
+    import jarvis_windows
+
+    try:
+        abiertas = ventanas() if ventanas is not None else jarvis_windows.listar_ventanas()
+    except Exception:
+        logging.debug("No se pudieron leer las ventanas para cerrar un programa.", exc_info=True)
+        abiertas = []
+    resultado: dict[str, str] = {}
+    for nombre in nombres:
+        if any(coincide(v.programa, nombre) for v in abiertas) or not abiertas:
+            resultado.setdefault(nombre, nombre)
+            continue
+        programas = [v.programa for v in jarvis_windows.elegir(abiertas, nombre, os.getpid())
+                     if v.programa and v.programa not in PROTEGIDOS]
+        # 2026-11-19: «cerrá Google Chrome» no cerraba nada si Chrome seguía sin ventana (proceso chrome).
+        alias = ALIAS.get(nombre)
+        if not programas and alias and alias not in PROTEGIDOS:
+            programas = [alias]
+        for programa in dict.fromkeys(programas) or [nombre]:
+            resultado.setdefault(programa, nombre)
+    return resultado
 
 
 def reabrir(cerrados: Iterable[Cerrado], lanzar: Callable[..., object] | None = None) -> list[str]:

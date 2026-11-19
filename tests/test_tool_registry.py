@@ -137,12 +137,34 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 55)
+        self.assertEqual(len(tools), 77)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
             {
                 "set_system_volume",
+                "read_window",
+                "read_screen_text",
+                "window_action",
+                "type_text",
+                "press_keys",
+                "windows_setting",
+                "startup_apps",
+                "open_settings",
+                "pc_doctor",
+                "run_powershell",
+                "file_action",
+                "organize_folder",
+                "clipboard_history",
+                "search_programs",
+                "install_program",
+                "uninstall_program",
+                "list_program_updates",
+                "update_programs",
+                "ask_document",
+                "search_documents",
+                "browser_read_page",
+                "browser_page_action",
                 "power_control",
                 "get_current_datetime",
                 "morning_briefing",

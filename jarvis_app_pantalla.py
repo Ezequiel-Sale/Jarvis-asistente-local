@@ -7,6 +7,8 @@ los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``�
 import jarvis_apuntar
 import jarvis_clics_aprendidos
 import jarvis_core as core
+import jarvis_deshacer
+import jarvis_piloto
 import jarvis_screen_actions
 import jarvis_vision
 import json
@@ -23,6 +25,41 @@ from jarvis_tool_registry import ToolError
 
 
 class PantallaMixin:
+    def _tool_autopilot(self, goal: str) -> str:
+        """«Hacelo vos»: corre en el hilo de la herramienta; la tarjeta ya se aprobó."""
+        vigilante = getattr(self, "games_watcher", None)
+        if vigilante is not None and vigilante.jugando:
+            raise RuntimeError("Con un juego abierto no manejo la PC: simular teclas puede traerte "
+                               "problemas con los antitrampas.")
+        token = self.cancel_token
+        piloto = jarvis_piloto.Piloto(
+            self.tool_registry, self._request_tool_confirmation,
+            avisar=lambda texto: self.events.put(("autopilot_status", texto)),
+            freno=jarvis_piloto.Freno(), cancelado=lambda: token.cancelled,
+        )
+        try:
+            return piloto.correr(goal)
+        finally:
+            self._anotar_deshacer_piloto(goal, list(piloto.hechos))
+
+    def _anotar_deshacer_piloto(self, goal: str, hechos: list[str]) -> None:
+        """«Control Z» después del piloto: ofrece revertirlo con otra tarjeta del piloto.
+
+        2026-11-19: tras desactivar la luz nocturna con el piloto, «control z» decía que no había
+        nada para deshacer (solo se anotaban volumen, ventanas, monitores…)."""
+        historial = getattr(self, "deshacer", None)
+        if historial is None or not hechos:
+            return
+        objetivo = jarvis_piloto.objetivo_para_revertir(goal, hechos)
+        conversacion = self.conversation_id
+
+        def ofrecer() -> str:
+            self._oferta_piloto = (objetivo, "deshacer", conversacion)
+            return "Lo hice manejando las ventanas: para volver atrás, aprobá la tarjeta."
+
+        historial.anotar(jarvis_deshacer.Deshacer(f"Revertir «{goal[:80]}»", accion=ofrecer,
+                                                  momento=time.monotonic()))
+
     def _start_screen_action(self, pedido: dict, command: str) -> None:
         """«Haz clic en … del monitor N»: captura (sin las ventanas de Jarvis),
         busca el elemento y pide confirmación con la marca antes de actuar."""

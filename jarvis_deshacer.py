@@ -6,7 +6,9 @@ saca la última anotación y ejecuta la acción inversa con el registro de herra
 
 Reversibles: volumen del equipo y de un programa, salida de audio, silencio de pestañas,
 pausa/reanudar, pantalla completa, modo teatro, tema de Jarvis, minimizar/maximizar
-ventanas y cambios de monitores (se vuelve a la configuración exacta de antes).
+ventanas, cambios de monitores (se vuelve a la configuración exacta de antes), ajustes de
+Windows (luz nocturna, modo oscuro, Wi-Fi, Bluetooth), programas de inicio y lo que hizo el
+piloto (se ofrece revertirlo con otra tarjeta).
 ``inverso`` es lógica pura: el estado actual se lee con funciones que se le pasan.
 """
 
@@ -77,6 +79,25 @@ def inverso(herramienta: str, args: Mapping[str, object], leer: Lectores) -> Des
         modo = "pantalla completa" if herramienta == "video_fullscreen" else "modo teatro"
         return Deshacer(f"{'Volver a poner' if activar else 'Quitar'} {modo}", herramienta,
                         {**args, "enabled": activar})
+    if herramienta == "windows_setting":
+        ajuste = str(args.get("setting", ""))
+        previo = bool(leer["ajuste"](ajuste))
+        if previo == (args.get("state") == "on"):
+            return None
+        import jarvis_ajustes
+
+        nombre = jarvis_ajustes.NOMBRES.get(ajuste, ajuste)
+        return Deshacer(f"Volver a {'activar' if previo else 'desactivar'} {nombre}", "windows_setting",
+                        {"setting": ajuste, "state": "on" if previo else "off"})
+    if herramienta == "startup_apps":
+        if args.get("action") not in ("enable", "disable"):
+            return None
+        nombre = str(args.get("name", ""))
+        previo = bool(leer["inicio"](nombre))
+        if previo == (args.get("action") == "enable"):
+            return None
+        return Deshacer(f"Que {nombre} {'vuelva a arrancar' if previo else 'no arranque'} con Windows", "startup_apps",
+                        {"action": "enable" if previo else "disable", "name": nombre})
     if herramienta == "set_theme":
         previo = leer["tema"]()
         if previo == args.get("theme"):
@@ -98,6 +119,7 @@ def inverso(herramienta: str, args: Mapping[str, object], leer: Lectores) -> Des
 REVERSIBLES = frozenset({
     "set_system_volume", "set_app_volume", "set_output_device", "mute_browser_tab", "media_control",
     "video_fullscreen", "video_theater", "set_theme", "window_control", "configure_display",
+    "windows_setting", "startup_apps",
 })
 
 
@@ -129,6 +151,15 @@ class Historial:
             return
         with self._cerrojo:
             self._pila.append(deshacer)
+
+    def instantanea(self) -> list[Deshacer]:
+        with self._cerrojo:
+            return list(self._pila)
+
+    def nuevas_desde(self, antes: list[Deshacer]) -> list[Deshacer]:
+        """Lo anotado después de ``instantanea()`` (p. ej. lo que cambió un modo), en orden."""
+        with self._cerrojo:
+            return [d for d in self._pila if not any(d is a for a in antes)]
 
     def sacar(self) -> Deshacer | None:
         with self._cerrojo:

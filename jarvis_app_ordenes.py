@@ -18,6 +18,12 @@ import jarvis_deshacer
 import jarvis_memory
 import jarvis_reminders
 import jarvis_routines
+import jarvis_control
+import jarvis_ajustes
+import jarvis_doctor
+import jarvis_gestor_archivos
+import jarvis_winget
+import jarvis_piloto
 import jarvis_screen_actions
 import jarvis_tv
 import jarvis_system
@@ -90,6 +96,9 @@ class OrdenesMixin:
             return bool(detectar_comando_gestos(texto) or detectar_navegacion(texto)
                         or detectar_modo_continuo(texto) is not None or detectar_comando_escucha(texto) is not None
                         or jarvis_tv.detectar(texto) or jarvis_apuntar.detectar(texto)
+                        or jarvis_ajustes.detectar(texto) or jarvis_doctor.detectar(texto)
+                        or jarvis_gestor_archivos.detectar(texto) or jarvis_winget.detectar(texto)
+                        or jarvis_piloto.detectar(texto) or jarvis_control.detectar(texto)
                         or jarvis_screen_actions.detectar_comando(texto)
                         or self._direct_tool_for(texto) or jarvis_routines.buscar_rutina_por_frase(texto))
         except Exception:
@@ -169,6 +178,21 @@ class OrdenesMixin:
         orden_tele = jarvis_tv.detectar(text)  # antes que volumen/multimedia: «… de la tele»
         if orden_tele is not None:
             self._start_direct_tool_action(*orden_tele, text)
+            return
+        ajuste = (jarvis_ajustes.detectar(text)  # «desactivá la luz nocturna», «sacá Discord del inicio»
+                  or jarvis_doctor.detectar(text)  # «¿por qué se colgó la PC?», «¿están sanos los discos?»
+                  or jarvis_gestor_archivos.detectar(text)  # «ordená Descargas», «pegá lo que copié antes»
+                  or jarvis_winget.detectar(text))  # «instalá VLC», «actualizá todos los programas»
+        if ajuste is not None:
+            self._start_direct_tool_action(*ajuste, text)
+            return
+        objetivo = jarvis_piloto.detectar(text)  # «hacelo vos: …»
+        if objetivo is not None:
+            self._start_direct_tool_action("autopilot", {"goal": objetivo[:500]}, text)
+            return
+        teclado = jarvis_control.detectar(text)  # «escribí acá …», «apretá control t»
+        if teclado is not None:
+            self._start_direct_tool_action(*teclado, text)
             return
         apuntado = jarvis_apuntar.detectar(text)  # «¿qué es esto?», «hacé clic acá», «cerrá esto»
         if apuntado is not None:
@@ -344,6 +368,19 @@ class OrdenesMixin:
             if orden_tele is not None:
                 self.events.put(("system_query", *orden_tele, transcript))
                 return
+            ajuste = (jarvis_ajustes.detectar(transcript) or jarvis_doctor.detectar(transcript)
+                      or jarvis_gestor_archivos.detectar(transcript) or jarvis_winget.detectar(transcript))
+            if ajuste is not None:
+                self.events.put(("system_query", *ajuste, transcript))
+                return
+            objetivo = jarvis_piloto.detectar(transcript)
+            if objetivo is not None:
+                self.events.put(("system_query", "autopilot", {"goal": objetivo[:500]}, transcript))
+                return
+            teclado = jarvis_control.detectar(transcript)
+            if teclado is not None:
+                self.events.put(("system_query", *teclado, transcript))
+                return
             apuntado = jarvis_apuntar.detectar(transcript)
             if apuntado is not None:
                 self.events.put(("pointed", apuntado, transcript))
@@ -468,6 +505,34 @@ class OrdenesMixin:
         finally:
             audio_capture.limpiar_audio(audio_path)
 
+    def _delegar_al_piloto(self, pedido: str) -> str | None:
+        """El agente quiere tocar la pantalla: una sola tarjeta (la del piloto) para todo el pedido."""
+        argumentos = {"goal": " ".join(pedido.split())[:500]}
+        if not self._request_tool_confirmation(self.tool_registry.get("autopilot"), argumentos):
+            return None
+        return str(self.tool_registry.execute("autopilot", argumentos, confirmed=True, origin="agente",
+                                              cancel_token=self.cancel_token))
+
+    def _preparar_oferta_piloto(self, text: str, answer: str | None, conversation_id: str) -> None:
+        """Si la respuesta ofrece corregir algo en una ventana, deja lista la tarjeta del piloto
+        (se muestra al terminar la respuesta, en ``_mostrar_oferta_piloto``)."""
+        self._oferta_piloto = None
+        vigilante = getattr(self, "games_watcher", None)
+        if not jarvis_piloto.es_oferta(answer) or (vigilante is not None and vigilante.jugando):
+            return
+        objetivo = jarvis_piloto.objetivo_de_oferta(text, answer)
+        if objetivo:
+            logging.info("Jarvis ofreció manejar una ventana: se propone el piloto.")
+            self._oferta_piloto = (objetivo, text, conversation_id)
+
+    def _mostrar_oferta_piloto(self) -> None:
+        """Hilo principal, tras mostrar la respuesta: la tarjeta de aprobación del piloto."""
+        oferta, self._oferta_piloto = getattr(self, "_oferta_piloto", None), None
+        if oferta is None or self.busy or oferta[2] != self.conversation_id:
+            return
+        objetivo, text, conversation_id = oferta
+        self._start_direct_tool_action("autopilot", {"goal": objetivo}, text, conversation_id=conversation_id)
+
     def _answer_worker(
         self,
         text: str,
@@ -520,8 +585,12 @@ class OrdenesMixin:
                         self.tool_registry,
                     )
                 except ValueError as error:
-                    answer = str(error)
-                else:
+                    # «Cuando abra Spotify, poné el volumen al 20»: los pasos con las órdenes directas;
+                    # si tampoco, que la IA arme la rutina (schedule_routine) en vez de dar el error.
+                    routine_request = self._rutina_de_evento_con_ordenes(text)
+                    if routine_request is None and jarvis_routines.detectar_disparador(text) is None:
+                        answer = str(error)
+                if answer is None:
                     if routine_request is not None:
                         arguments = self.tool_registry.validate_arguments(
                             "schedule_routine",
@@ -556,7 +625,9 @@ class OrdenesMixin:
                             plan_scope=self._plan_display_scope,
                             cancel_token=cancel_token,
                             on_text=self._live_text_callback(hablador),
+                            delegar_pantalla=self._delegar_al_piloto,
                         )
+                        self._preparar_oferta_piloto(text, answer, conversation_id)
             core.guardar_turno(conversation_id, text, answer)
         except Exception:
             core.LATENCY_HIST.labels(estado="error").observe(
@@ -686,6 +757,13 @@ class OrdenesMixin:
 
     _DIRECT_ACTION_BUSY = {
         "set_system_volume": "AJUSTANDO VOLUMEN…",
+        "autopilot": "🧭 MANEJANDO LA PC · ESC O MOVER EL MOUSE LO FRENA",
+        "ask_document": "LEYENDO EL DOCUMENTO…",
+        "install_program": "INSTALANDO CON WINGET…",
+        "update_programs": "ACTUALIZANDO PROGRAMAS…",
+        "pc_doctor": "REVISANDO LOS REGISTROS DE WINDOWS…",
+        "type_text": "ESCRIBIENDO…",
+        "press_keys": "APRETANDO TECLAS…",
         "morning_briefing": "PREPARANDO EL RESUMEN DEL DÍA…",
         "find_files": "BUSCANDO ARCHIVOS…",
         "undo_last_action": "DESHACIENDO…",
@@ -897,6 +975,11 @@ class OrdenesMixin:
         ):
             # Riesgo alto: aunque sea un comando directo, siempre se confirma.
             self.events.put(("direct_action_error", tool_name, "Cancelé la acción; el equipo sigue igual."))
+            return
+        if tool_name == "autopilot" and not self._request_tool_confirmation(
+            self.tool_registry.get(tool_name), arguments
+        ):
+            self.events.put(("direct_action_error", tool_name, "Cancelé: no toqué nada."))
             return
         try:
             result = self.tool_registry.execute(

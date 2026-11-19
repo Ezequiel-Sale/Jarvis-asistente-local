@@ -7,6 +7,8 @@ los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``�
 
 import jarvis_buenos_dias
 import jarvis_buscar_archivos
+import jarvis_documentos
+import jarvis_gestor_archivos
 import jarvis_cleanup
 import jarvis_comandos
 import jarvis_core as core
@@ -54,11 +56,14 @@ class HerramientasMixin:
         deshacer = self.deshacer.sacar()
         if deshacer is None:
             return ("No tengo nada reciente para deshacer (guardo lo que se puede revertir de la "
-                    "última media hora: volumen, salida de audio, pestañas, vídeos, ventanas, tema y monitores).")
+                    "última media hora: volumen, salida de audio, pestañas, vídeos, ventanas, tema, monitores, "
+                    "ajustes de Windows y lo que hizo el piloto).")
         if deshacer.herramienta is not None:
             self.tool_registry.execute(deshacer.herramienta, deshacer.argumentos, confirmed=True, origin="deshacer")
         elif deshacer.accion is not None:
-            deshacer.accion()
+            mensaje = deshacer.accion()
+            if isinstance(mensaje, str):  # la acción explica lo que pasa (p. ej. la tarjeta del piloto)
+                return mensaje
         return f"Listo, deshecho: {deshacer.descripcion[0].lower()}{deshacer.descripcion[1:]}."
 
     _FILE_RESULTS_TTL = 10 * 60  # «abre el segundo» vale durante 10 minutos tras buscar
@@ -84,14 +89,38 @@ class HerramientasMixin:
         return ("Encontré:\n" + jarvis_buscar_archivos.describir(encontrados)
                 + "\nDime «abre el primero», «abre el segundo»… para abrir uno.")
 
+    def _tool_file_action(self, action: str, path: str, destination: str = "", new_name: str = "") -> str:
+        return jarvis_gestor_archivos.accion(action, self._ruta_de_resultado(path), destination, new_name)
+
+    def _ruta_de_resultado(self, path: str) -> str:
+        """«2» o «#2» → la ruta del segundo resultado de la última búsqueda de archivos."""
+        numero = path.strip().lstrip("#")
+        guardado = getattr(self, "_last_file_results", None)
+        if numero.isdigit() and guardado and time.monotonic() - guardado[0] <= self._FILE_RESULTS_TTL:
+            encontrados = guardado[1]
+            if 1 <= int(numero) <= len(encontrados):
+                return encontrados[int(numero) - 1].ruta
+            raise ValueError(f"La última búsqueda tiene {len(encontrados)} resultados.")
+        return path
+
+    def _tool_ask_document(self, path: str, question: str = "Resumilo") -> str:
+        return jarvis_documentos.preguntar(self._ruta_de_resultado(path), question or "Resumilo")
+
+    def _tool_clipboard_history(self, action: str, number: int = 2) -> str:
+        return jarvis_gestor_archivos.usar_historial(self.portapapeles, action, number)
+
     def _tool_open_file(self, path: str) -> str:
         jarvis_buscar_archivos.abrir(path)
         return f"Abrí «{Path(path).name}»."
 
     def _file_choice(self, texto: str) -> tuple[str, dict[str, object]] | None:
         """«Abre el segundo» justo después de buscar archivos → open_file con ese resultado."""
-        numero = jarvis_buscar_archivos.detectar_orden(texto)
+        resumen = jarvis_documentos.detectar_resumen(texto)  # «resumí el segundo»
         guardado = getattr(self, "_last_file_results", None)
+        if resumen is not None and guardado and time.monotonic() - guardado[0] <= self._FILE_RESULTS_TTL \
+                and 1 <= resumen <= len(guardado[1]):
+            return "ask_document", {"path": guardado[1][resumen - 1].ruta, "question": "Resumilo"}
+        numero = jarvis_buscar_archivos.detectar_orden(texto)
         if numero is None or not guardado or time.monotonic() - guardado[0] > self._FILE_RESULTS_TTL:
             return None
         encontrados = guardado[1]

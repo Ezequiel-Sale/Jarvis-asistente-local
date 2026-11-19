@@ -80,6 +80,10 @@ LLM_KEEP_ALIVE = "2h"
 MODEL_DESCRIBIR = MODEL_LLM
 MODEL_VISION = "qwen3-vl:4b-instruct"
 VISION_NUM_CTX = 8192
+# Medido 2026-11-19: con el de visión también cargado, la GPU (16 GB) se llena, Windows pasa ~4 GB de
+# bonsai a la memoria compartida y responde a 6 tok/s en vez de 50. Por eso no se precarga y se
+# descarga al minuto de usarlo.
+VISION_KEEP_ALIVE = "1m"
 MAX_CONTEXT_MESSAGES = 12
 STT_TIMEOUT = 90  # segundos de espera de la transcripción
 TTS_TIMEOUT = 60  # segundos de espera de la síntesis de voz

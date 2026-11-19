@@ -291,7 +291,7 @@ def buscar_por_vision(imagen, monitor, consulta: str, *, escribir: bool = False)
             }],
             "stream": False,
             "think": False,
-            "keep_alive": core.LLM_KEEP_ALIVE,  # convive con el modelo de lenguaje en la GPU
+            "keep_alive": core.VISION_KEEP_ALIVE,  # juntos desbordan la GPU (ver core)
             # Esquema JSON: obliga a devolver números (sin él a veces daba listas).
             "format": {
                 "type": "object",

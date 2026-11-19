@@ -28,3 +28,7 @@ zeroconf==0.154.0
 # Gestos con la mano (cámara): MediaPipe trae OpenCV, matplotlib y sounddevice (2026-11-16).
 mediapipe==1.2.3
 opencv-contrib-python==5.0.0.93
+# Preguntarle a tus documentos: PDF y Word (2026-11-19). python-docx trae lxml.
+pypdf==7.1.1
+python-docx==1.2.0
+lxml==6.1.3

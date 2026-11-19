@@ -170,6 +170,53 @@ class ControlTests(unittest.TestCase):
             _esperar_bucle(self.control)
             self.assertEqual(remoto.apps, ["https://www.netflix.com/title"])
 
+    def test_jarvis_leaves_the_sleeping_tv_alone(self) -> None:
+        """2026-11-18: en reposo no hay consultas, reconexión ni ADB; una orden sí la contacta."""
+        self._vincular()
+        adb = Mock()
+        self.control._adb = adb
+        sondas = []
+        self.control._responde = lambda ip, puerto=6466: sondas.append(puerto) or True
+        reloj = {"t": 1000.0}
+        with patch.object(tv.time, "time", lambda: reloj["t"]):
+            self.remotos[-1].callbacks["on"](False)
+            self.assertEqual(json.loads((self.carpeta / tv.ARCHIVO_CONFIG).read_text(encoding="utf-8"))["reposo_desde"], 1000.0)
+            self.control.intentar_en_segundo_plano()  # todavía en la gracia: se sigue mirando
+            self.assertTrue(sondas)
+            sondas.clear()
+            reloj["t"] += tv.GRACIA_REPOSO + 1
+            cuantos = len(self.remotos)
+            self.assertFalse(self.control.intentar_en_segundo_plano())
+            self.control.intentar_en_segundo_plano()
+            self.assertEqual((sondas, len(self.remotos), self.control.estado.conectada), ([], cuantos, False))
+            adb.olvidar.assert_called_once_with("192.168.1.50")
+            # Otra instancia (reiniciar Jarvis) también la deja tranquila.
+            self.assertTrue(tv.ControlTV(self.carpeta).en_silencio())
+            # Pasado el máximo se vuelve a mirar, por si se prendió con su control.
+            reloj["t"] += tv.SILENCIO_REPOSO
+            self.assertFalse(self.control.en_silencio())
+            self.control.intentar_en_segundo_plano()
+            self.assertTrue(sondas)
+
+    def test_a_connection_with_the_tv_on_ends_the_silence(self) -> None:
+        self._vincular()
+        self.remotos[-1].callbacks["on"](False)
+        self.control._apagada_desde = time.time() - tv.GRACIA_REPOSO - 1
+        self.control.intentar_en_segundo_plano()
+        self.assertTrue(self.control.en_silencio())
+        self.assertTrue(self.control.conectar())  # una orden: el remoto falso está encendido
+        self.assertFalse(self.control.en_silencio())
+
+    def test_detects_a_cold_boot(self) -> None:
+        with self.assertLogs(level="INFO") as registro:
+            self.control._anotar_arranque("2026-11-17 19:51:19")
+            self.control._anotar_arranque("2026-11-17 19:51:21")  # el mismo arranque
+            self.control._anotar_arranque("2026-11-18 20:00:00")
+        texto = " ".join(registro.output)
+        self.assertEqual(texto.count("arrancó de cero"), 2)
+        self.assertIn("no se reinició", texto)
+        self.assertEqual(self.control._config["ultimo_arranque"], "2026-11-18 20:00:00")
+
     def test_learns_apps_opened_on_the_tv(self) -> None:
         """La tele no dice qué apps tiene: Jarvis aprende las que se abren (no las del sistema ni las
         de la lista fija), las guarda y las abre por nombre."""

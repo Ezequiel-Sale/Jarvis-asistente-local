@@ -21,6 +21,7 @@ import socket
 import threading
 import time
 import unicodedata
+from datetime import datetime
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -357,6 +358,13 @@ def responde(ip: str, puerto: int = 6466, segundos: float = 1.5) -> bool:
 
 
 POCO_EN_RED = 0.1  # h: menos de 6 minutos en la red tras apagarla
+# Prueba [2026-11-18]: tras 30–60 min en reposo la tele se apaga de verdad (arranca de cero) y el
+# firmware limita la suspensión a 100 ciclos. ¿Los despertares por el tráfico de Jarvis los gastan?
+# Con la tele en reposo, Jarvis no la toca: sin consultas, sin reconexión y sin ADB. Una orden a la
+# tele sí la contacta. ``GRACIA_REPOSO``: por si se vuelve a prender enseguida.
+GRACIA_REPOSO = 120.0
+SILENCIO_REPOSO = 4 * 3600.0
+MARGEN_ARRANQUE = 120.0  # s: «uptime -s» se recalcula y puede variar un poco
 
 
 def texto_duracion(horas: float) -> str:
@@ -389,6 +397,7 @@ class ControlTV:
         # Cuánto aguanta la «Red en Espera»: cuándo se apagó la pantalla y si sigue en la red.
         self._apagada_desde: float | None = None
         self._en_red: bool | None = None
+        self._callado = False  # ya se cortó todo contacto por el reposo
         self._buscar = buscador  # para los tests; por defecto, buscar() por mDNS
         self._mac_de_ip = None   # para los tests; por defecto, mac_de_ip() (ARP)
         self._responde = None    # para los tests; por defecto, responde() (conexión TCP)
@@ -404,6 +413,7 @@ class ControlTV:
         self.estado = EstadoTV()
         self._config = self._leer_config()
         self._aplicar_config()
+        self._apagada_desde = self._config.get("reposo_desde")  # sobrevive a reiniciar Jarvis
 
     # --- configuración -------------------------------------------------------
     @property
@@ -599,6 +609,7 @@ class ControlTV:
                 self._al_cambiar()
             return False
         self.estado.conectada = True
+        self._anotar_encendida(getattr(self._remoto, "is_on", None))
         self.estado.encendida = getattr(self._remoto, "is_on", None)
         self.estado.app = getattr(self._remoto, "current_app", None) or ""
         self._aprender_app(self.estado.app)
@@ -642,6 +653,49 @@ class ControlTV:
             self._apagada_desde = time.time()
         elif valor:
             self._apagada_desde = None
+            self._callado = False
+        else:
+            return
+        if self._config.get("reposo_desde") != self._apagada_desde:
+            self._config["reposo_desde"] = self._apagada_desde
+            self._guardar_config()
+
+    def en_silencio(self) -> bool:
+        """¿La tele está en reposo y Jarvis no debe contactarla por su cuenta?"""
+        if self._apagada_desde is None:
+            return False
+        return GRACIA_REPOSO <= time.time() - self._apagada_desde < SILENCIO_REPOSO
+
+    def _callar(self) -> None:
+        """Corta todo lo que seguiría tocando a la tele dormida: control remoto y ADB."""
+        if self._callado:
+            return
+        self._callado = True
+        logging.info("Tele en reposo: Jarvis deja de contactarla hasta que le pidas algo (máximo %d h).",
+                     SILENCIO_REPOSO / 3600)
+        self.desconectar()
+        self._en_red = None
+        self._adb_revisado = 0.0  # al volver, se revisa si arrancó de cero
+        if self._adb is not None and self.estado.host:
+            try:
+                self._adb.olvidar(self.estado.host)
+            except Exception as error:
+                logging.info("No se pudo cerrar ADB con la tele (%s).", error)
+        self._al_cambiar()
+
+    def _anotar_arranque(self, arranque: str) -> None:
+        """Compara cuándo arrancó la tele: si cambió, estuvo apagada del todo."""
+        anterior = self._config.get("ultimo_arranque")
+        try:
+            nuevo = datetime.strptime(arranque, "%Y-%m-%d %H:%M:%S")
+            if anterior and abs((nuevo - datetime.strptime(anterior, "%Y-%m-%d %H:%M:%S")).total_seconds()) <= MARGEN_ARRANQUE:
+                logging.info("La tele no se reinició: sigue encendida desde %s.", anterior)
+                return
+        except ValueError:
+            return
+        logging.info("La tele arrancó de cero el %s (antes: %s).", arranque, anterior or "sin dato")
+        self._config["ultimo_arranque"] = arranque
+        self._guardar_config()
 
     def vigilar_red(self) -> bool | None:
         """Cada minuto: ¿la tele sigue en la red? Si en reposo deja de responder (se apagó del
@@ -679,6 +733,10 @@ class ControlTV:
         """Cada minuto (desde la app): si está vinculada y desconectada, prueba conectarse sin
         avisar. Así, al prender la tele con su control, Jarvis se conecta solo y aprende su MAC.
         También anota si la tele sigue en la red (``vigilar_red``)."""
+        if self.estado.vinculada and self.en_silencio():
+            self._callar()
+            return False
+        self._callado = False
         try:
             self.vigilar_red()
         except Exception:
@@ -760,6 +818,10 @@ class ControlTV:
             try:
                 self.estado.adb = self._adb.conectar(host)
                 if self.estado.adb == "conectado":
+                    try:  # es solo una medición: si falla, igual se listan las apps
+                        self._anotar_arranque(self._adb.arranque(host))
+                    except Exception as error:
+                        logging.debug("No se pudo leer cuándo arrancó la tele (%s).", error)
                     instaladas = sorted(p for p in self._adb.apps(host) if es_app_de_usuario(p))
                     if instaladas and instaladas != self._config.get("instaladas"):
                         self._config["instaladas"] = instaladas
@@ -909,6 +971,7 @@ class ControlTV:
         if self._esperar_encendida(TIEMPO_ENCENDER):
             self._volver_al_inicio(sesion)
             self._encendida_en = time.monotonic()
+            self._anotar_encendida(True)
             return "Encendí la tele."
         if self.estado.conectada:
             self.tecla("wakeup")  # por si en otro modo de reposo sí la obedece

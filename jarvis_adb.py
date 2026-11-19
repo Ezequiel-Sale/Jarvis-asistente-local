@@ -98,6 +98,15 @@ class ADB:
         salida = self._shell(host, "monkey", "-p", paquete, "-c", "android.intent.category.LEANBACK_LAUNCHER", "1")
         return "Events injected: 1" in salida
 
+    def arranque(self, host: str) -> str:
+        """Cuándo arrancó la tele («AAAA-MM-DD HH:MM:SS»; no cambia si solo se suspendió)."""
+        return self._shell(host, "uptime", "-s").strip()
+
+    def olvidar(self, host: str) -> None:
+        """Cierra la conexión (si no, el servidor de adb sigue reintentando con la tele dormida)."""
+        self._ejecutar("disconnect", f"{host}:{PUERTO}")
+        self.estado = ""
+
     def detener(self) -> None:
         """Cierra el servidor de adb (si no, adb.exe queda abierto y bloquea la carpeta de Jarvis)."""
         try:

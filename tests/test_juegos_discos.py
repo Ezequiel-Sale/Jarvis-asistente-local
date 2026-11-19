@@ -45,6 +45,21 @@ class FoldersTests(unittest.TestCase):
             self.assertEqual(s.localizar_ejecutable_juego("Luto")[1], segunda / "Luto" / "Luto.exe")
 
 
+    def test_misheard_names_find_the_game_by_sound(self) -> None:
+        """2026-11-17: Whisper escribió «Project Sunboid» y «Project Zone Void» por Project Zomboid."""
+        raiz = Path(tempfile.mkdtemp())
+        zomboid = _exe(raiz / "ProjectZomboid" / "ProjectZomboid64.exe")
+        _exe(raiz / "Pro Evolution Soccer 2018" / "PES2018.exe")
+        _exe(raiz / "Elden Ring" / "eldenring.exe")
+        with patch.object(s, "carpetas_juegos", return_value=[raiz]):
+            for oido in ("Project Sunboid", "Project Zone Void", "Proyecto Zomboid", "Zomboid", "zomboy"):
+                with self.subTest(oido=oido):
+                    self.assertEqual(s.localizar_ejecutable_juego(oido)[1], zomboid)
+            self.assertEqual(s.localizar_ejecutable_juego("Elden Rin")[1].name, "eldenring.exe")
+            with self.assertRaises(FileNotFoundError):
+                s.localizar_ejecutable_juego("peseta")  # nada parecido: no se adivina
+
+
 class ExecutableTests(unittest.TestCase):
     def _elegir(self, carpeta: str, nombres: list[str]) -> str | None:
         elegido = s._ejecutable_principal(carpeta, [Path(f"X:/{carpeta}/{n}") for n in nombres])

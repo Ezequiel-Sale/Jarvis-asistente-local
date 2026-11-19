@@ -58,3 +58,5 @@ movil/.kotlin/
 movil/*.apk
 movil/Jarvis.apk.json
 examen/resultados/
+# Token de la extensión de Brave (lo escribe Jarvis al arrancar).
+brave_extension/config.js

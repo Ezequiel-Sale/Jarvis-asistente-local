@@ -12,6 +12,8 @@ class _AppWorkerHost:
     _new_live_speaker = Mock(return_value=None)  # sin voz en vivo
     _live_text_callback = Mock(return_value=None)
     _plan_display_scope = Mock()
+    _preparar_oferta_piloto = Mock()
+    _delegar_al_piloto = Mock()
 
 
 class AppMemoryRoutingTests(unittest.TestCase):
