@@ -127,6 +127,7 @@ _ROUTINE_ALLOWED_TOOLS = frozenset(
         "windows_setting",
         "open_settings",
         "pc_doctor",
+        "replay_recording",
     }
 )
 _LIST_PATTERN = re.compile(

@@ -9,6 +9,8 @@ import jarvis_clics_aprendidos
 import jarvis_core as core
 import jarvis_deshacer
 import jarvis_piloto
+import jarvis_routines
+import jarvis_grabador
 import jarvis_screen_actions
 import jarvis_vision
 import json
@@ -59,6 +61,108 @@ class PantallaMixin:
 
         historial.anotar(jarvis_deshacer.Deshacer(f"Revertir «{goal[:80]}»", accion=ofrecer,
                                                   momento=time.monotonic()))
+
+    # --- «Mirá cómo lo hago» (jarvis_grabador) ---------------------------------------------
+
+    def _es_orden_de_grabacion(self, texto: str) -> bool:
+        """Se puede llamar desde el hilo de la voz: solo lee el estado."""
+        grabador = getattr(self, "_grabador", None)
+        if grabador is not None and grabador.activo:
+            return jarvis_grabador.detectar_fin(texto) is not None
+        if getattr(self, "_grabacion_sin_nombre", None) is not None:
+            return True  # lo próximo que digas es el nombre
+        return jarvis_grabador.detectar_inicio(texto)
+
+    def _manejar_grabacion(self, texto: str) -> None:
+        """Hilo principal: empezar, terminar o ponerle nombre a una grabación."""
+        # Por voz, Jarvis quedó «ocupado» transcribiendo: si no se libera, la escucha se pausa y el
+        # «listo» nunca llega (2026-11-19).
+        self._set_idle()
+        grabador = getattr(self, "_grabador", None)
+        pendiente = getattr(self, "_grabacion_sin_nombre", None)
+        if grabador is not None and grabador.activo:
+            fin = jarvis_grabador.detectar_fin(texto)
+            if fin is not None:
+                self._terminar_grabacion(*fin)
+            return
+        if pendiente is not None:
+            self._grabacion_sin_nombre = None
+            nombre = " ".join(texto.strip(" .!¡¿?«»\"").split())
+            if jarvis_grabador.detectar_fin(texto) == (False, "") or not nombre:
+                self._add_message("assistant", "Listo, descarté la grabación.")
+                return
+            self._guardar_grabacion(nombre, pendiente)
+            return
+        vigilante = getattr(self, "games_watcher", None)
+        if vigilante is not None and vigilante.jugando:
+            self._add_message("assistant", "Con un juego abierto no grabo el teclado ni el mouse.")
+            return
+        self._grabador = jarvis_grabador.Grabador()
+        self._grabador.iniciar()
+        self._add_message("assistant", "Te miro: hacé la tarea normalmente. Anoto qué botones y campos usás (no las "
+                                       "contraseñas ni bancos). Cuando termines decí «listo, guardalo como …» "
+                                       "o «cancelá la grabación».")
+        self._set_status("🔴 GRABANDO LO QUE HACÉS · «LISTO, GUARDALO COMO …»", ERROR)
+        self.root.after(1000, self._vigilar_grabacion)
+
+    def _vigilar_grabacion(self) -> None:
+        grabador = getattr(self, "_grabador", None)
+        if grabador is None or not grabador.activo:
+            return
+        if grabador.vencida():
+            self._terminar_grabacion(True, "")
+            return
+        if not self.busy:
+            texto = "⏸ GRABACIÓN EN PAUSA: VENTANA PROTEGIDA" if grabador.pausado_por else \
+                f"🔴 GRABANDO · {len(grabador.pasos)} PASOS · «LISTO, GUARDALO COMO …»"
+            self._set_status(texto, ERROR)
+        self.root.after(1000, self._vigilar_grabacion)
+
+    def _terminar_grabacion(self, guardar: bool, nombre: str) -> None:
+        grabador = self._grabador
+
+        def trabajar() -> None:
+            pasos = grabador.detener()  # espera al hilo de accesibilidad: fuera del hilo de Tk
+            self.events.put(("grabacion_lista", guardar, nombre, pasos))
+
+        threading.Thread(target=trabajar, name="JarvisGrabadorFin", daemon=True).start()
+
+    def _grabacion_terminada(self, guardar: bool, nombre: str, pasos: list) -> None:
+        self._set_idle()
+        if not guardar:
+            self._add_message("assistant", "Listo, descarté la grabación.")
+            return
+        if not pasos:
+            self._add_message("assistant", "No vi ningún paso que pueda repetir (clics en botones, campos o atajos).")
+            return
+        if not nombre:
+            self._grabacion_sin_nombre = pasos
+            self._add_message("assistant", f"Anoté {len(pasos)} pasos: {jarvis_grabador.describir(pasos)}. "
+                                           "¿Cómo la llamo? Decime el nombre (o «cancelá la grabación»).")
+            return
+        self._guardar_grabacion(nombre, pasos)
+
+    def _guardar_grabacion(self, nombre: str, pasos: list) -> None:
+        try:
+            jarvis_grabador.guardar(nombre, pasos)
+            jarvis_routines.crear_rutina(
+                nombre[:80], "", "", json.dumps([{"tool": "replay_recording", "arguments": {"name": nombre[:80]}}]),
+                self.tool_registry, trigger="frase", phrases=(nombre[:80],))
+        except (ValueError, OSError) as error:
+            self._add_message("assistant", f"No pude guardarla: {error}")
+            return
+        self._add_message("assistant", f"Guardé «{nombre}» con {len(pasos)} pasos: {jarvis_grabador.describir(pasos)}. "
+                                       f"Cuando quieras, decí «{nombre}» y la repito.")
+
+    def _tool_replay_recording(self, name: str) -> str:
+        """Repite una grabación (el comando por frase o el modelo; corre en un hilo de trabajo)."""
+        vigilante = getattr(self, "games_watcher", None)
+        if vigilante is not None and vigilante.jugando:
+            raise RuntimeError("Con un juego abierto no manejo la PC.")
+        pasos = jarvis_grabador.cargar(name)
+        reproductor = jarvis_grabador.Reproductor(self.tool_registry, self._request_tool_confirmation,
+                                                  piloto=self._tool_autopilot)
+        return reproductor.repetir(pasos, name)
 
     def _start_screen_action(self, pedido: dict, command: str) -> None:
         """«Haz clic en … del monitor N»: captura (sin las ventanas de Jarvis),

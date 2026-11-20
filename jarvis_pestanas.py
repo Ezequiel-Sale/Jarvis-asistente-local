@@ -146,6 +146,33 @@ def pestana(action: str, number: int | None = None, title: str = "") -> str:
     return f"Fui a la pestaña «{titulos[indice]}»."
 
 
+def titulos_actuales() -> list[str]:
+    """Los títulos de las pestañas de la ventana de Brave, en orden (para saber cuál se abrió)."""
+    import ctypes
+
+    import uiautomation as auto
+
+    import jarvis_windows
+
+    ventana = jarvis_windows.ventana_brave(jarvis_windows.listar_ventanas(),
+                                           jarvis_windows._user32().GetForegroundWindow())
+    if ventana is None:
+        return []
+    ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    with auto.UIAutomationInitializerInThread():
+        return [titulo_limpio(p.Name) for p in _pestanas_de(ventana.hwnd, auto)]
+
+
+def pestana_nueva(antes: list[str], despues: list[str]) -> int | None:
+    """Número (desde 1) de la pestaña que apareció entre dos listas de títulos, o None."""
+    if len(despues) <= len(antes):
+        return None
+    for i, titulo in enumerate(despues):
+        if i >= len(antes) or titulo != antes[i]:
+            return i + 1
+    return None
+
+
 def _seleccionada(control) -> bool:
     try:
         return bool(control.GetSelectionItemPattern().IsSelected)

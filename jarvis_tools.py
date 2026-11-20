@@ -60,6 +60,7 @@ class ToolEventHost(Protocol):
     def _tool_file_action(self, action: str, path: str, destination: str = "", new_name: str = "") -> str: ...
     def _tool_clipboard_history(self, action: str, number: int = 2) -> str: ...
     def _tool_ask_document(self, path: str, question: str = "Resumilo") -> str: ...
+    def _tool_replay_recording(self, name: str) -> str: ...
 
 
 def _trim_non_empty_text(value: object) -> str:
@@ -342,6 +343,21 @@ def _registrar_brave(registry: ToolRegistry) -> None:
     )
 
 
+def _registrar_grabaciones(registry: ToolRegistry, host: ToolEventHost) -> None:
+    """«Mirá cómo lo hago» (jarvis_grabador): repetir una tarea grabada."""
+    registry.register(
+        "replay_recording",
+        "Repite una tarea que el usuario grabó con «mirá cómo lo hago» (name: su nombre).",
+        {"type": "object", "properties": {"name": {"type": "string", "minLength": 2, "maxLength": 80}},
+         "required": ["name"], "additionalProperties": False},
+        lambda name: host._tool_replay_recording(name),
+        risk=ToolRisk.MEDIUM,
+        requires_confirmation=True,
+        label="Repetir una tarea grabada",
+        timeout_seconds=600,
+    )
+
+
 def _registrar_control_de_ventanas(registry: ToolRegistry, host: ToolEventHost) -> None:
     """Ver y manejar cualquier ventana (``jarvis_control``) y el modo «hacelo vos»."""
     programa = {"program": {"type": "string", "maxLength": 80}}
@@ -365,12 +381,13 @@ def _registrar_control_de_ventanas(registry: ToolRegistry, host: ToolEventHost) 
     )
     registry.register(
         "window_action",
-        "Usa el control número n de la última read_window: action click lo pulsa; set_text pone text en un campo.",
+        "Usa el control número n de la última read_window: action click lo pulsa; set_text pone text en un campo; "
+        "middle_click hace clic con la rueda (en un enlace o favorito, lo abre en otra pestaña).",
         {
             "type": "object",
             "properties": {
                 "n": {"type": "integer", "minimum": 1, "maximum": jarvis_control.MAX_CONTROLES},
-                "action": {"type": "string", "enum": ["click", "set_text"]},
+                "action": {"type": "string", "enum": ["click", "set_text", "middle_click"]},
                 "text": {"type": "string", "maxLength": 500},
             },
             "required": ["n", "action"],
@@ -1129,6 +1146,7 @@ def crear_registro_herramientas(
     _registrar_winget(registry)
     _registrar_documentos(registry, host)
     _registrar_brave(registry)
+    _registrar_grabaciones(registry, host)
     import jarvis_botones
     import jarvis_modo_juego
 

@@ -118,14 +118,22 @@ def bloquear_equipo(*, bloquear: Callable[[], bool] = _bloquear_ahora) -> str:
     return "Bloqueé el equipo."
 
 
+# Antes de apagar o suspender: la app pone aquí jarvis_red.preparar_sin_fallar (deja la PC por
+# cable para poder encenderla desde el celular). Devuelve una frase para la respuesta, o "".
+antes_de_apagar: Callable[[], str] = lambda: ""
+
+
 def ejecutar_accion_energia(action: str) -> str:
+    if action not in ACCIONES_ENERGIA:
+        raise ValueError(f"Acción de energía no reconocida: {action}")
+    red = antes_de_apagar() if action in ("shutdown", "sleep") else ""
     if action == "shutdown":
-        return programar_apagado(reiniciar=False)
-    if action == "restart":
-        return programar_apagado(reiniciar=True)
-    if action == "sleep":
-        return suspender_equipo()
-    raise ValueError(f"Acción de energía no reconocida: {action}")
+        resultado = programar_apagado(reiniciar=False)
+    elif action == "restart":
+        resultado = programar_apagado(reiniciar=True)
+    else:
+        resultado = suspender_equipo()
+    return f"{red} {resultado}".strip()
 
 
 PREGUNTAS_CONFIRMACION = {

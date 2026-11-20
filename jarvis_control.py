@@ -458,6 +458,11 @@ def actuar(n: int, action: str = "click", text: str = "") -> str:
         if action == "set_text":
             _completar(control, auto, foto, text)
             resultado = f"Escribí en «{elemento.nombre or 'el campo'}»."
+        elif action == "middle_click":
+            _al_frente(foto.ventana)
+            izquierda, arriba, derecha, abajo = elemento.caja
+            pantalla.hacer_clic((izquierda + derecha) // 2, (arriba + abajo) // 2, rueda=True)
+            resultado = f"Abrí «{elemento.nombre}» con la rueda."
         else:
             if not _pulsar(control):
                 _al_frente(foto.ventana)

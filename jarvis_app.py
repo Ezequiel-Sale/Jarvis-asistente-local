@@ -13,6 +13,8 @@ import jarvis_core as core
 import jarvis_health
 import jarvis_ajustes
 import jarvis_brave
+import jarvis_red
+import jarvis_power
 import jarvis_deshacer
 import jarvis_disparadores
 import jarvis_gestor_archivos
@@ -354,6 +356,10 @@ class JarvisApp(
         self.disparadores.start()
         # Control profundo de Brave: puente local para la extensión «Jarvis para Brave».
         self.puente_brave = jarvis_brave.iniciar()
+        # Antes de apagar o suspender (por Jarvis o por Windows), dejar la PC por cable para poder
+        # encenderla desde el celular (pedido del 2026-11-20).
+        jarvis_power.antes_de_apagar = jarvis_red.preparar_sin_fallar
+        jarvis_red.VigilanteApagado().start()
         self.battery_watcher = HeadsetBatteryWatcher(self.events)
         self.battery_watcher.start()
         self.reminder_watcher = jarvis_reminders.VigilanteRecordatorios(self.events)
@@ -1278,6 +1284,10 @@ class JarvisApp(
                         self._show_screen_approval(*event[1:])
                     elif event[0] == "screen_execute":
                         self._execute_screen_action(*event[1:])
+                    elif event[0] == "grabacion":
+                        self._manejar_grabacion(event[1])
+                    elif event[0] == "grabacion_lista":
+                        self._grabacion_terminada(*event[1:])
                     elif event[0] == "autopilot_status":
                         self._set_status(event[1], CYAN)
                     elif event[0] == "screen_finished":

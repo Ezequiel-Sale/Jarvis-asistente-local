@@ -30,7 +30,7 @@ ICONOS = {
     "file_action": "📁", "organize_folder": "🗂", "clipboard_history": "📋",
     "search_programs": "📦", "install_program": "📦", "uninstall_program": "📦", "list_program_updates": "📦",
     "update_programs": "📦", "ask_document": "📄", "search_documents": "📄",
-    "browser_read_page": "🦁", "browser_page_action": "🦁",
+    "browser_read_page": "🦁", "browser_page_action": "🦁", "replay_recording": "🎬",
     "get_weather": "☁", "web_search": "🔎", "get_headset_battery": "🔋", "get_system_status": "📊",
     "list_top_processes": "📊", "list_open_applications": "🗂",
     "get_current_datetime": "🕒", "morning_briefing": "☀", "undo_last_action": "↶",

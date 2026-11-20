@@ -178,6 +178,8 @@ CATALOGO: dict[str, tuple[str, str, str]] = {
     "windows_setting": ("Equipo y energía", "Ajuste de Windows", "Luz nocturna, modo oscuro, Wi-Fi o Bluetooth."),
     "open_settings": ("Equipo y energía", "Abrir Configuración", "Una página de Configuración de Windows."),
     "pc_doctor": ("Equipo y energía", "Revisar la salud de la PC", "Caídas, discos o errores recientes."),
+    "replay_recording": ("Programas, juegos y ventanas", "Repetir una tarea grabada",
+                         "Lo que le mostraste con «mirá cómo lo hago», por su nombre."),
 }
 
 

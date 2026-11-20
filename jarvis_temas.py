@@ -25,11 +25,12 @@ PAGINA = "pagina"
 # ocultan las de pantalla, que son nuevas; antes de sumar otro tema, compáralo con el examen.
 TEMAS: dict[str, tuple[frozenset[str], re.Pattern[str]]] = {
     PANTALLA: (
-        frozenset({"read_window", "read_screen_text", "window_action", "type_text", "press_keys"}),
+        frozenset({"read_window", "read_screen_text", "window_action", "type_text", "press_keys",
+                   "replay_recording"}),
         re.compile(r"\b(?:ventanas?|pantalla|botone?s?|casillas?|menu|campos?|formulario|opcion(?:es)?|"
                    r"clic|click|escrib\w+|tipe\w+|teclea\w*|teclas?|atajos?|apret\w+|apriet\w+|presion\w+|"
                    r"puls\w+|marc[aá]\w*|desmarc\w+|complet\w+|rellen\w+|corrig\w+|correg\w+|"
-                   r"lee(?:me)?|lei|leer|leeme|que\s+dice|que\s+hay\s+en)\b"),
+                   r"lee(?:me)?|lei|leer|leeme|que\s+dice|que\s+hay\s+en|repet\w*|grab\w*|tarea)\b"),
     ),
     AJUSTES: (
         frozenset({"windows_setting", "startup_apps", "open_settings"}),

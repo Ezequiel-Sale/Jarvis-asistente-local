@@ -157,6 +157,11 @@ class OrdenesMixin:
         text = self.input.get("1.0", "end-1c").strip()
         if not text:
             return
+        if self._es_orden_de_grabacion(text) is True:  # «mirá cómo lo hago», «listo, guardalo como …»
+            self.input.delete("1.0", "end")
+            self._add_message("user", text)
+            self._manejar_grabacion(text)
+            return
         partes = self._split_orders(text)
         if partes is not None:
             self.input.delete("1.0", "end")
@@ -347,6 +352,10 @@ class OrdenesMixin:
                 return
             if not transcript:
                 self.events.put(("empty_transcript",))
+                return
+            if self._es_orden_de_grabacion(transcript) is True:
+                self.events.put(("transcript", transcript))
+                self.events.put(("grabacion", transcript))
                 return
             partes = self._split_orders(transcript)
             if partes is not None:  # varias oraciones con alguna orden conocida: de a una
@@ -759,6 +768,7 @@ class OrdenesMixin:
         "set_system_volume": "AJUSTANDO VOLUMEN…",
         "autopilot": "🧭 MANEJANDO LA PC · ESC O MOVER EL MOUSE LO FRENA",
         "ask_document": "LEYENDO EL DOCUMENTO…",
+        "replay_recording": "🎬 REPITIENDO LA TAREA GRABADA…",
         "install_program": "INSTALANDO CON WINGET…",
         "update_programs": "ACTUALIZANDO PROGRAMAS…",
         "pc_doctor": "REVISANDO LOS REGISTROS DE WINDOWS…",

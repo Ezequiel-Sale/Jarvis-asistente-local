@@ -484,13 +484,14 @@ def boton_raton(action: str, x: int, y: int, *, user32=None, pausa: float = 0.03
     return {"click": "Hice clic.", "down": "Apreté el botón.", "up": "Solté el botón."}[action]
 
 
-def hacer_clic(x: int, y: int) -> None:
+def hacer_clic(x: int, y: int, *, rueda: bool = False) -> None:
+    """Clic izquierdo, o con la rueda (``rueda``: en un enlace o favorito, lo abre en otra pestaña)."""
     mover_puntero(x, y)
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     time.sleep(0.05)
-    _enviar_raton(user32, _MOUSEEVENTF_LEFTDOWN)
+    _enviar_raton(user32, 0x0020 if rueda else _MOUSEEVENTF_LEFTDOWN)  # MOUSEEVENTF_MIDDLEDOWN
     time.sleep(0.03)
-    _enviar_raton(user32, _MOUSEEVENTF_LEFTUP)
+    _enviar_raton(user32, 0x0040 if rueda else _MOUSEEVENTF_LEFTUP)  # MOUSEEVENTF_MIDDLEUP
 
 
 # --- Atajos de teclado (gestos propios, fase 5) -----------------------------------------
