@@ -77,6 +77,7 @@ class DateTimeToolTests(unittest.TestCase):
     def test_direct_answer_is_spoken(self) -> None:
         host = Mock()
         host.tool_registry = crear_registro_herramientas(Mock())
+        host._tts_con_espera = lambda texto: JarvisApp._tts_con_espera(host, texto)
         with patch("jarvis_core.guardar_turno"), patch(
             "jarvis_core.generar_audio_tts", return_value="hora.wav"
         ) as tts:

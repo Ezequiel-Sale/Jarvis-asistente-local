@@ -308,9 +308,24 @@ class HerramientasMixin:
         cambiar_volumen_sistema(percentage)
         return f"Volumen del sistema establecido en {percentage}%."
 
-    def _tool_set_output_device(self, device: str) -> str:
-        name = cambiar_dispositivo_salida(device)
-        return f"Salida de audio cambiada a {name}."
+    ESPERAS_SALIDA_AUDIO = (1.5, 3.0)
+
+    def _tool_set_output_device(self, device: str, *, dormir=time.sleep) -> str:
+        """2026-11-23 07:28: al desconectar los auriculares, Windows se quedó un instante sin ninguna
+        salida («Dispositivos de salida disponibles: ninguno») y la rutina falló; a los 4 s ya
+        estaban. Si no hay ninguna salida, se espera y se reintenta."""
+        import jarvis_audio_devices
+
+        for espera in (*self.ESPERAS_SALIDA_AUDIO, None):
+            try:
+                name = cambiar_dispositivo_salida(device)
+                return f"Salida de audio cambiada a {name}."
+            except jarvis_audio_devices.DispositivoNoEncontrado as error:
+                if espera is None or "disponibles: ninguno" not in str(error):
+                    raise
+                logging.info("Windows todavía no tiene salidas de audio; reintento en %.1f s.", espera)
+                dormir(espera)
+        raise AssertionError("inalcanzable")
 
     def _tool_set_theme(self, theme: str) -> str:
         return self._request_tool_ui_action("set_theme", theme)

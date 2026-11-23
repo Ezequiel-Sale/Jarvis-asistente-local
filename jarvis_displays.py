@@ -275,6 +275,12 @@ def listar_pantallas(
     return pantallas, mapa
 
 
+def _modelo_monitor(ruta: str) -> str:
+    """«ACR0E02» de «\\\\?\\DISPLAY#ACR0E02#7&…&UID4352#{…}»: el modelo, igual aunque cambie la instancia."""
+    partes = ruta.split("#")
+    return partes[1].upper() if len(partes) >= 3 and partes[0].upper().endswith("DISPLAY") else ""
+
+
 def asignar_numeros(
     monitores: list[tuple[str, int | None]], mapa: dict[str, int]
 ) -> dict[str, int]:
@@ -293,6 +299,27 @@ def asignar_numeros(
             usados.add(numero)
     nuevos = [(ruta, gdi) for ruta, gdi in monitores if ruta not in resultado]
     nuevos.sort(key=lambda m: (m[1] is None, m[1] or 0))
+    # El mismo monitor con otra ruta de Windows (2026-11-22: la tele, tras apagarse del todo,
+    # volvió con otra instancia y quedó como «monitor 4»; la rutina pedía el 3). Si el modelo
+    # (DISPLAY#<modelo>#…) es el de un monitor recordado que ahora no está, hereda su número.
+    # Si ya se la había guardado con el número nuevo, vuelve al número más bajo (el original).
+    presentes = {ruta for ruta, _gdi in monitores}
+    for ruta, gdi in monitores:
+        modelo = _modelo_monitor(ruta)
+        if not modelo:
+            continue
+        ausentes = [r for r in resultado if r not in presentes and _modelo_monitor(r) == modelo]
+        if len(ausentes) != 1:
+            continue
+        heredado = resultado.pop(ausentes[0])
+        if (ruta, gdi) in nuevos:
+            nuevos.remove((ruta, gdi))
+            resultado[ruta] = heredado
+        elif heredado < resultado[ruta]:
+            usados.discard(resultado[ruta])
+            resultado[ruta] = heredado
+        else:
+            usados.discard(heredado)
     for ruta, gdi in nuevos:
         numero = gdi if gdi and gdi not in usados else next(n for n in range(1, 100) if n not in usados)
         resultado[ruta] = numero
@@ -656,10 +683,23 @@ def aplicar(
             return _aplicar_una_vez(accion, numeros, mapa)
         except ErrorPantalla as error:
             if espera is None or getattr(error, "codigo", None) not in REINTENTABLES:
+                if not isinstance(error, YaEstaAsi):
+                    _registrar_fallo(accion, numeros, mapa, error)
                 raise
             logging.info("Windows no aceptó todavía el cambio de pantallas (%s); reintento en %.0f s.", error, espera)
             dormir(espera)
     raise AssertionError("inalcanzable")
+
+
+def _registrar_fallo(accion: str, numeros: tuple[int, ...], mapa, error: Exception) -> None:
+    """Qué se pidió y cómo estaban los monitores (2026-11-22: cuatro «código 87» seguidos y el log
+    no decía qué orden ni con qué monitores)."""
+    try:
+        pantallas, _ = listar_pantallas(mapa)
+        estado = ", ".join(f"{p.numero}={p.nombre}{'' if p.activa else ' (apagado)'}" for p in pantallas)
+    except Exception:
+        estado = "no se pudo leer"
+    logging.warning("Cambio de pantallas rechazado: %s %s → %s. Monitores: %s.", accion, numeros, error, estado)
 
 
 def _aplicar_una_vez(

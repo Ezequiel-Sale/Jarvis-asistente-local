@@ -1047,13 +1047,35 @@ class OrdenesMixin:
         if tool_name in OrdenesMixin._DIRECT_SPOKEN_TOOLS:
             # Respuestas cortas que se esperan habladas («¿qué hora es?»).
             try:
-                audio = core.generar_audio_tts(response)
+                audio = self._tts_con_espera(response)
             except Exception:
                 logging.exception("No se pudo generar el audio de %s.", tool_name)
                 audio = None
             self.events.put(("answer", response, audio, time.perf_counter() - started))
             return
         self.events.put(("direct_action_done", tool_name, response))
+
+    ESPERA_VOZ_AL_ARRANCAR = 180.0  # s: Docker tarda en levantar el servidor de voz al prender la PC
+
+    def _tts_con_espera(self, texto: str, *, reintento: float = 5.0, intentos: int = 4, dormir=time.sleep) -> str:
+        """Audio de una respuesta directa; si el servidor de voz no contesta (2026-11-21 y 23: el
+        resumen de la mañana se pedía antes de que Docker terminara de arrancar y salía sin voz),
+        espera a que Docker esté listo y reintenta unas veces (el modelo de voz tarda en cargar
+        aunque el contenedor ya esté arriba)."""
+        for intento in range(1, intentos + 1):
+            try:
+                return core.generar_audio_tts(texto)
+            except OSError as error:  # ConnectionError, conexión rechazada…
+                if intento == intentos:
+                    raise
+                listo = getattr(self, "_docker_start_finished", None)
+                if listo is not None and not listo.is_set():
+                    logging.info("La voz todavía no está lista (%s): espero a que Docker termine de arrancar.", error)
+                    listo.wait(self.ESPERA_VOZ_AL_ARRANCAR)
+                else:
+                    logging.info("La voz no respondió (%s): reintento en %.0f s.", error, reintento)
+                    dormir(reintento)
+        raise AssertionError("inalcanzable")
 
     def _new_conversation(self) -> None:
         if self.busy or self.recorder is not None:

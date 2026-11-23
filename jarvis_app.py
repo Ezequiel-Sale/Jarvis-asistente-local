@@ -410,6 +410,9 @@ class JarvisApp(
         self._continuous_enabled = self._continuous_preferred()
         self._init_speaker_filter()
         self._refresh_speaker_buttons()
+        # Antes de los gestos: el puntero elige su monitor al arrancar y sin esto usaba los
+        # DISPLAYN de Windows (2026-11-20: «No existe el monitor 1. Monitores disponibles: 7, 8»).
+        jarvis_vision.configurar_numeracion(_numeracion_fija_monitores)
         self._init_gestures()
         self._refresh_gesture_indicator()
         self._continuous_transcribing = False

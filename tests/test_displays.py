@@ -385,3 +385,32 @@ class VisionNumberingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MismoMonitorOtraRutaTests(unittest.TestCase):
+    """2026-11-22: la tele volvió con otra instancia de Windows y quedó como «monitor 4»."""
+
+    KG = r"\?\DISPLAY#ACR0E02#7&c&0&UID1#{g}"
+    VX = r"\?\DISPLAY#VSC273E#7&d&0&UID2#{g}"
+    TV_VIEJA = r"\?\DISPLAY#XXX8000#7&aaa&0&UID111#{g}"
+    TV_NUEVA = r"\?\DISPLAY#XXX8000#7&bbb&0&UID222#{g}"
+
+    def test_new_instance_keeps_the_number(self):
+        mapa = d.asignar_numeros([(self.KG, 1), (self.VX, 2), (self.TV_NUEVA, 4)],
+                                 {self.KG: 1, self.VX: 2, self.TV_VIEJA: 3})
+        self.assertEqual(mapa, {self.KG: 1, self.VX: 2, self.TV_NUEVA: 3})
+
+    def test_already_saved_as_4_goes_back_to_3(self):
+        mapa = d.asignar_numeros([(self.KG, 1), (self.VX, 2), (self.TV_NUEVA, 4)],
+                                 {self.KG: 1, self.VX: 2, self.TV_VIEJA: 3, self.TV_NUEVA: 4})
+        self.assertEqual(mapa, {self.KG: 1, self.VX: 2, self.TV_NUEVA: 3})
+
+    def test_both_present_are_two_monitors(self):
+        mapa = d.asignar_numeros([(self.KG, 1), (self.TV_VIEJA, 3), (self.TV_NUEVA, 4)],
+                                 {self.KG: 1, self.TV_VIEJA: 3})
+        self.assertEqual(mapa[self.TV_VIEJA], 3)
+        self.assertEqual(mapa[self.TV_NUEVA], 4)
+
+    def test_model_from_path(self):
+        self.assertEqual(d._modelo_monitor(self.KG), "ACR0E02")
+        self.assertEqual(d._modelo_monitor("kg"), "")
