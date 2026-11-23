@@ -1057,8 +1057,11 @@ class DetectorGestos(threading.Thread):
         return cv2.VideoCapture(0, cv2.CAP_MSMF)  # 640x480: lo que da la cámara
 
     def _bucle(self) -> None:
-        import cv2
-        import mediapipe as mp
+        import jarvis_core
+
+        with jarvis_core.CERROJO_CARGA_NATIVA:  # de a una con openwakeword y .NET (ver jarvis_core)
+            import cv2
+            import mediapipe as mp
 
         modelo = self._modelo()
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))

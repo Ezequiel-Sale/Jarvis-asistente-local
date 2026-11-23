@@ -25,7 +25,18 @@ Radmin VPN    Famatech.Radmin  2.0.4899  2.1.4952   winget
 """
 
 
-class TablaTests(unittest.TestCase):
+class SinWingetReal(unittest.TestCase):
+    """2026-11-20: los tests llegaron a correr el winget de verdad (al cambiar la función de instalar).
+    Desde entonces, cualquier intento de lanzar un proceso desde estos tests falla en vez de ejecutarse."""
+
+    def setUp(self):
+        for objetivo in ("Popen", "run"):
+            parche = patch.object(w.subprocess, objetivo, side_effect=AssertionError("un test quiso correr winget"))
+            parche.start()
+            self.addCleanup(parche.stop)
+
+
+class TablaTests(SinWingetReal):
     def test_parse_search_ignoring_progress(self):
         paquetes = w._paquetes(w.tabla(w.limpiar(BUSQUEDA)))
         self.assertEqual([p.id for p in paquetes], ["VideoLAN.VLC", "VideoLAN.VLC.Nightly", "Cimbali.pympress"])
@@ -48,29 +59,32 @@ class TablaTests(unittest.TestCase):
             w.elegir([], "nada")
 
 
-class AccionesTests(unittest.TestCase):
+class AccionesTests(SinWingetReal):
     def test_install_uses_only_the_winget_source(self):
-        with patch.object(w, "_correr", side_effect=[(0, BUSQUEDA), (0, "Instalado correctamente")]) as correr:
+        with patch.object(w, "_correr", return_value=(0, BUSQUEDA)), \
+                patch.object(w, "_correr_con_progreso", return_value=(0, "Instalado correctamente")) as correr:
             self.assertEqual(w.instalar("vlc"), "Instalé VLC media player (3.0.24).")
-        argumentos = correr.call_args_list[1].args[0]
+        argumentos = correr.call_args.args[0]
         self.assertEqual(argumentos[:4], ["install", "--id", "VideoLAN.VLC", "--exact"])
         self.assertIn("winget", argumentos[argumentos.index("--source") + 1])
         self.assertNotIn("msstore", argumentos)
         self.assertNotIn("--accept-source-agreements", argumentos)
 
     def test_install_failure_is_reported(self):
-        with patch.object(w, "_correr", side_effect=[(0, BUSQUEDA), (1, "algo\nEl instalador falló con el código 1603")]):
+        with patch.object(w, "_correr", return_value=(0, BUSQUEDA)), \
+                patch.object(w, "_correr_con_progreso", return_value=(1, "algo\nEl instalador falló con el código 1603")):
             with self.assertRaisesRegex(RuntimeError, "1603"):
                 w.instalar("vlc")
 
     def test_update_all_reports_failures(self):
-        with patch.object(w, "_correr", side_effect=[(0, ACTUALIZACIONES), (0, ""), (1, "")]):
+        with patch.object(w, "_correr", return_value=(0, ACTUALIZACIONES)), \
+                patch.object(w, "_correr_con_progreso", side_effect=[(0, ""), (1, "")]):
             texto = w.actualizar("all")
         self.assertIn("Actualicé 1: Git", texto)
         self.assertIn("Fallaron: Radmin VPN", texto)
 
 
-class FrasesYRegistroTests(unittest.TestCase):
+class FrasesYRegistroTests(SinWingetReal):
     def test_phrases(self):
         casos = {
             "Instalá VLC": ("install_program", {"name": "vlc"}),
@@ -101,3 +115,40 @@ class FrasesYRegistroTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProgresoTests(unittest.TestCase):
+    """2026-11-20: barra de progreso en la vista PROGRAMAS."""
+
+    def test_progress_lines(self):
+        self.assertEqual(w.interpretar_progreso("  ██████▒▒▒▒  12.3 MB / 45.0 MB")[:2], ("descargando", 12.3 / 45.0))
+        self.assertEqual(w.interpretar_progreso("  ██████▒▒▒▒  40%")[:2], ("descargando", 0.4))
+        self.assertEqual(w.interpretar_progreso("Iniciando la instalación del paquete...")[:2], ("instalando", None))
+        self.assertIsNone(w.interpretar_progreso("Encontrado Git [Git.Git] Versión 2.56"))
+
+    def test_streamed_output_reports_progress_once_per_percent(self):
+        salida = ("Encontrado Git\r\nDescargando https://x/git.exe\r\n  ██▒▒  1.0 MB / 4.0 MB\r  ██▒▒  1.0 MB / 4.0 MB"
+                  "\r  ████  4.0 MB / 4.0 MB\r\nIniciando la instalación del paquete...\r\nInstalado correctamente\r\n")
+        proceso = Mock(returncode=0)
+        trozos = [salida[:40].encode(), salida[40:].encode(), b""]
+        proceso.stdout.read1.side_effect = lambda _n: trozos.pop(0)
+        proceso.poll.return_value = 0
+        eventos = []
+        with patch.object(w.subprocess, "Popen", return_value=proceso), patch.object(w, "ruta_winget", return_value="winget"), \
+                patch.object(w, "al_progreso", eventos.append):
+            codigo, texto = w._correr_con_progreso(["upgrade"], 60, "Git", 2, 5)
+        self.assertEqual(codigo, 0)
+        self.assertIn("Instalado correctamente", texto)
+        fases = [(e["fase"], None if e["fraccion"] is None else round(e["fraccion"], 2)) for e in eventos]
+        self.assertEqual(fases, [("preparando", None), ("descargando", 0.0), ("descargando", 0.25),
+                                 ("descargando", 1.0), ("instalando", None), ("terminado", 1.0)])
+        self.assertTrue(all((e["paquete"], e["indice"], e["cantidad"]) == ("Git", 2, 5) for e in eventos))
+
+
+class MotivosTests(unittest.TestCase):
+    def test_installer_technology_mismatch_is_explained(self):
+        texto = w.motivo_fallo("Epic Online Services", 2316632206,
+                               "Se encontró una versión más reciente, pero la tecnología de instalación es distinta")
+        self.assertIn("otro tipo de instalador", texto)
+        self.assertIn("desde su propio programa", texto)
+        self.assertIn("código 5", w.motivo_fallo("X", 5, "algo raro"))

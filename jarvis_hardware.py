@@ -137,16 +137,19 @@ class SensoresHardware:
             if not (carpeta / "LibreHardwareMonitorLib.dll").exists():
                 raise FileNotFoundError(f"falta {carpeta / 'LibreHardwareMonitorLib.dll'}")
             sys.path.append(str(carpeta))
-            from pythonnet import load
+            import jarvis_core
 
-            try:
-                load("netfx")
-            except RuntimeError:
-                pass  # ya cargado
-            import clr
+            with jarvis_core.CERROJO_CARGA_NATIVA:  # de a una con openwakeword y MediaPipe (ver jarvis_core)
+                from pythonnet import load
 
-            clr.AddReference(str(carpeta / "LibreHardwareMonitorLib.dll"))
-            from LibreHardwareMonitor.Hardware import Computer
+                try:
+                    load("netfx")
+                except RuntimeError:
+                    pass  # ya cargado
+                import clr
+
+                clr.AddReference(str(carpeta / "LibreHardwareMonitorLib.dll"))
+                from LibreHardwareMonitor.Hardware import Computer
 
             computer = Computer()
             computer.IsCpuEnabled = True

@@ -9,11 +9,13 @@ no lo trae).
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
 import subprocess
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +42,86 @@ def ruta_winget() -> str:
     if local.exists():
         return str(local)
     raise FileNotFoundError("winget no está instalado en esta PC.")
+
+
+# Progreso de una instalación o actualización (2026-11-20: barra en la vista PROGRAMAS). La app pone
+# aquí una función que recibe {"paquete", "fase", "fraccion", "detalle", "indice", "cantidad"}.
+al_progreso: Callable[[dict], None] = lambda _evento: None
+
+_TAMANO = re.compile(r"([\d.,]+)\s*(B|KB|MB|GB)\s*/\s*([\d.,]+)\s*(B|KB|MB|GB)", re.IGNORECASE)
+_PORCIENTO = re.compile(r"(\d{1,3})\s*%")
+_FACTOR = {"b": 1, "kb": 1024, "mb": 1024**2, "gb": 1024**3}
+
+
+def _numero(texto: str) -> float:
+    return float(texto.replace(",", "."))
+
+
+def interpretar_progreso(linea: str) -> tuple[str, float | None, str] | None:
+    """Una línea de winget → (fase, fracción 0–1 o None, detalle); None si no dice nada del avance."""
+    if (m := _TAMANO.search(linea)) is not None:
+        hecho = _numero(m.group(1)) * _FACTOR[m.group(2).lower()]
+        total = _numero(m.group(3)) * _FACTOR[m.group(4).lower()]
+        if total > 0:
+            return "descargando", min(1.0, hecho / total), f"{m.group(1)} {m.group(2)} de {m.group(3)} {m.group(4)}"
+    if (m := _PORCIENTO.search(linea)) is not None and re.search(r"[█▒░]", linea):
+        return "descargando", min(1.0, int(m.group(1)) / 100), f"{m.group(1)} %"
+    minuscula = linea.lower()
+    if "iniciando la instalación" in minuscula or "starting package install" in minuscula or "instalando" in minuscula:
+        return "instalando", None, "Instalando…"
+    if "hash del instalador" in minuscula or "installer hash" in minuscula:
+        return "verificando", None, "Verificando la descarga…"
+    if "descargando" in minuscula or minuscula.strip().startswith("downloading"):
+        return "descargando", 0.0, "Empezando la descarga…"
+    return None
+
+
+def _correr_con_progreso(argumentos: list[str], tiempo: int, paquete: str, indice: int = 1,
+                         cantidad: int = 1) -> tuple[int, str]:
+    """Como ``_correr``, pero leyendo la salida a medida que llega para avisar el progreso."""
+    import time as _time
+
+    proceso = subprocess.Popen([ruta_winget(), *argumentos], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    limite = _time.monotonic() + tiempo
+    crudo, pendiente = bytearray(), ""
+    ultimo: tuple | None = None
+
+    def avisar(fase: str, fraccion: float | None, detalle: str) -> None:
+        nonlocal ultimo
+        clave = (fase, None if fraccion is None else round(fraccion * 100))
+        if clave == ultimo:
+            return
+        ultimo = clave
+        try:
+            al_progreso({"paquete": paquete, "fase": fase, "fraccion": fraccion, "detalle": detalle,
+                         "indice": indice, "cantidad": cantidad})
+        except Exception:
+            logging.debug("No se pudo avisar el progreso de winget.", exc_info=True)
+
+    avisar("preparando", None, "Preparando…")
+    try:
+        while True:
+            if _time.monotonic() > limite:
+                proceso.kill()
+                raise subprocess.TimeoutExpired(argumentos, tiempo)
+            bloque = proceso.stdout.read1(4096) if hasattr(proceso.stdout, "read1") else proceso.stdout.read(4096)
+            if not bloque:
+                break
+            crudo += bloque
+            pendiente += bloque.decode("utf-8", "replace")
+            *trozos, pendiente = re.split(r"[\r\n]", pendiente)
+            for trozo in trozos:
+                if (progreso := interpretar_progreso(trozo)) is not None:
+                    avisar(*progreso)
+        proceso.wait(timeout=max(1.0, limite - _time.monotonic()))
+    finally:
+        if proceso.poll() is None:
+            proceso.kill()
+    texto = limpiar(crudo.decode("utf-8", "replace"))
+    avisar("terminado" if proceso.returncode == 0 else "error", 1.0 if proceso.returncode == 0 else None,
+           "Listo" if proceso.returncode == 0 else _ultima_linea(texto) or "No se pudo completar.")
+    return proceso.returncode, texto
 
 
 def _correr(argumentos: list[str], tiempo: int) -> tuple[int, str]:
@@ -139,8 +221,8 @@ def buscar_programas(query: str) -> str:
 def instalar(name: str) -> str:
     """Handler de ``install_program``."""
     paquete = elegir(buscar(name), name)
-    codigo, texto = _correr(["install", "--id", paquete.id, "--exact", *ORIGEN, "--silent",
-                             "--accept-package-agreements", *COMUNES], TIEMPO_INSTALAR)
+    codigo, texto = _correr_con_progreso(["install", "--id", paquete.id, "--exact", *ORIGEN, "--silent",
+                                          "--accept-package-agreements", *COMUNES], TIEMPO_INSTALAR, paquete.nombre)
     if codigo == 0 or "instalado correctamente" in texto.lower() or "successfully installed" in texto.lower():
         return f"Instalé {paquete.nombre} ({paquete.version or 'última versión'})."
     if "ya está instalado" in texto.lower() or "already installed" in texto.lower():
@@ -183,22 +265,35 @@ def actualizar(name: str = "all") -> str:
         if not pendientes:
             return "No había nada para actualizar."
         hechos, fallidos = [], []
-        for paquete in pendientes:
-            codigo, _texto = _correr(["upgrade", "--id", paquete.id, "--exact", *ORIGEN, "--silent",
-                                      "--accept-package-agreements", *COMUNES], TIEMPO_INSTALAR)
+        for indice, paquete in enumerate(pendientes, 1):
+            codigo, _texto = _correr_con_progreso(["upgrade", "--id", paquete.id, "--exact", *ORIGEN, "--silent",
+                                                   "--accept-package-agreements", *COMUNES], TIEMPO_INSTALAR,
+                                                  paquete.nombre, indice, len(pendientes))
             (hechos if codigo == 0 else fallidos).append(paquete.nombre)
         texto = f"Actualicé {len(hechos)}: {', '.join(hechos)}." if hechos else "No pude actualizar ninguno."
         if fallidos:
             texto += f" Fallaron: {', '.join(fallidos)} (puede que estén abiertos)."
         return texto
     paquete = elegir(actualizaciones() or instalados(name), name)
-    codigo, texto = _correr(["upgrade", "--id", paquete.id, "--exact", *ORIGEN, "--silent",
-                             "--accept-package-agreements", *COMUNES], TIEMPO_INSTALAR)
+    codigo, texto = _correr_con_progreso(["upgrade", "--id", paquete.id, "--exact", *ORIGEN, "--silent",
+                                          "--accept-package-agreements", *COMUNES], TIEMPO_INSTALAR, paquete.nombre)
     if codigo == 0:
         return f"Actualicé {paquete.nombre}" + (f" a la {paquete.disponible}." if paquete.disponible else ".")
     if "no se encontr" in texto.lower() or "no applicable" in texto.lower() or "no hay" in texto.lower():
         return f"{paquete.nombre} ya está en la última versión."
-    raise RuntimeError(f"winget no pudo actualizar {paquete.nombre} (código {codigo}). {_ultima_linea(texto)}")
+    raise RuntimeError(motivo_fallo(paquete.nombre, codigo, texto))
+
+
+def motivo_fallo(nombre: str, codigo: int, texto: str) -> str:
+    """El error de winget en palabras de cualquiera (y qué hacer)."""
+    minuscula = texto.lower()
+    if "tecnología de instalación" in minuscula or "install technology" in minuscula or codigo == 2316632206:
+        # 2026-11-20: Epic Online Services: la versión nueva usa otro tipo de instalador.
+        return (f"{nombre} no se puede actualizar con winget: la versión nueva usa otro tipo de instalador. "
+                "Actualizalo desde su propio programa (o desinstalalo e instalalo de nuevo).")
+    if "en uso" in minuscula or "in use" in minuscula or "cerr" in minuscula and "aplicaci" in minuscula:
+        return f"No pude actualizar {nombre}: está abierto. Cerralo y probá de nuevo."
+    return f"winget no pudo actualizar {nombre} (código {codigo}). {_ultima_linea(texto)}"
 
 
 def _ultima_linea(texto: str) -> str:

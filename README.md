@@ -20,6 +20,9 @@ Puedes hablarle (diciendo «Hey Jarvis», con F9 o con el botón del micrófono)
 | **Automatización** | «Cuando abra Spotify, poné el volumen al 20», «cuando conecte un pendrive…», «cuando me quede sin internet…»; y «desactivá el modo cine» deshace lo que cambió el modo |
 | **Brave a fondo** | Con la extensión «Jarvis para Brave»: «¿qué dice esta página?», «completá el formulario…», y el piloto usa la página directamente. Nunca bancos ni contraseñas |
 | **Mirá cómo lo hago** | Mostrale una tarea una vez («mirá cómo lo hago» … «listo, guardalo como pedir turno») y después decí «pedir turno» para que la repita |
+| **WhatsApp** | «¿Tengo mensajes de WhatsApp?», «leé lo último que me mandó Juan en WhatsApp», «mandale a Juan que llego tarde» (te muestra el texto y lo envía solo si aprobás) |
+| **Correo y calendario** | Gmail, Google Calendar y Outlook: «¿tengo correos nuevos?», «¿qué tengo hoy?», enviar y agendar con tu aprobación |
+| **Vistas nuevas** | En la barra lateral: 🖥 SISTEMA (ajustes de Windows, red, salud de la PC), 📦 PROGRAMAS (actualizaciones disponibles y programas de inicio), 💬 MENSAJES (correo, agenda y WhatsApp) y 🎬 TAREAS (grabaciones y portapapeles) |
 | **Conversación con memoria** | «Recuerda que prefiero Brave», «¿qué recuerdas sobre mi navegador?». Busca recuerdos por significado y **aprende solo** de las conversaciones («¿qué aprendiste de mí?», «desactiva el aprendizaje automático») |
 | **Control del equipo** | «Sube el volumen al 30 %», «cambia la salida a auriculares», «abre una pestaña», «busca en YouTube…», «abre Sekiro» |
 | **Consultas del sistema** (solo lectura) | «¿Qué hora es?», «¿qué día es hoy?», «¿Qué aplicaciones tengo abiertas?», «¿qué consume más memoria?», «¿cómo está el equipo?» (incluye temperaturas de la GPU y la CPU; avisa solo si algo se calienta demasiado) |
@@ -192,6 +195,25 @@ La app guarda los datos de tu PC mientras está encendida y, con la PC apagada o
 2. **Por Wi-Fi:** solo despierta desde **suspender**, no desde apagado (el Wi-Fi se apaga del todo). Dile a Jarvis «suspende el equipo» en vez de «apágalo».
 3. **Con cable de red** también enciende desde apagado: activa en la BIOS «Wake on LAN» (o «Power On by PCI-E») y desactiva el **inicio rápido** de Windows (Panel de control → Opciones de energía → Elegir el comportamiento de los botones de inicio/apagado → quitar «Activar inicio rápido»).
 4. **Antes de apagar o suspender**, Jarvis revisa la red: si estás por Wi-Fi y el cable está enchufado, desconecta el Wi-Fi para que la PC quede por cable (también cuando apagás desde el menú Inicio). Si el cable no está enchufado, te avisa.
+
+### Conectar Gmail, Google Calendar y Outlook (una sola vez)
+
+Jarvis nunca ve tu contraseña: autorizás en el navegador y las llaves quedan en la carpeta `cuentas\` de Jarvis (no se suben a GitHub).
+
+**Google (Gmail y Calendar):**
+1. Entrá a https://console.cloud.google.com/ y creá un proyecto (por ejemplo «Jarvis»).
+2. En «APIs y servicios → Biblioteca», habilitá **Gmail API** y **Google Calendar API**.
+3. En «Pantalla de consentimiento de OAuth»: tipo **Externo**, completá el nombre y tu correo, y en «Usuarios de prueba» agregá tu propia cuenta de Gmail.
+4. En «Credenciales → Crear credenciales → ID de cliente de OAuth», tipo **App de escritorio**. Descargá el JSON y guardalo como `cuentas\google_cliente.json` dentro de la carpeta de Jarvis.
+5. Decile a Jarvis «conectá mi cuenta de Google» y aceptá en el navegador.
+
+**Outlook (cuenta personal):**
+1. Entrá a https://entra.microsoft.com/ con tu cuenta de Microsoft → «Registros de aplicaciones → Nuevo registro».
+2. Nombre «Jarvis»; tipos de cuenta: **«Solo cuentas personales de Microsoft»** (o «cualquier directorio y cuentas personales»).
+3. En «Autenticación», activá **«Permitir flujos de clientes públicos»**.
+4. En «Permisos de API → Microsoft Graph → Permisos delegados», agregá `Mail.Read`, `Mail.Send` y `Calendars.ReadWrite`.
+5. Copiá el **Id. de aplicación (cliente)** y guardalo solo, en una línea, en `cuentas\outlook_cliente.txt` dentro de la carpeta de Jarvis.
+6. Decile a Jarvis «conectá mi cuenta de Outlook»: te da un código para ingresar en microsoft.com/devicelogin.
 
 ## Tests y compilación
 

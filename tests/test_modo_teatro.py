@@ -52,12 +52,13 @@ class PhraseTests(unittest.TestCase):
 
 
 class ActionTests(unittest.TestCase):
-    def _ejecutar(self, enabled, lecturas, *, pulsa=True, ventana=True):
+    def _ejecutar(self, enabled, lecturas, *, pulsa=True, ventana=True, ocultos=(None,)):
         """``lecturas``: lo que ve cada consulta de botones, en orden."""
         auto = Mock()
         auto.UIAutomationInitializerInThread.return_value.__enter__ = Mock()
         auto.UIAutomationInitializerInThread.return_value.__exit__ = Mock(return_value=False)
         lecturas = iter(lecturas)
+        ocultos = list(ocultos)
         usados = []
 
         def leer(*_args):
@@ -76,6 +77,8 @@ class ActionTests(unittest.TestCase):
                 patch.object(m, "_pulsar", side_effect=via("botón")), \
                 patch.object(m, "_clic_real", side_effect=via("clic")), \
                 patch.object(m, "_tecla_en", side_effect=via("tecla")), \
+                patch.object(m, "_reproductor_sin_controles",
+                             side_effect=lambda _z: ocultos.pop(0) if len(ocultos) > 1 else ocultos[0]), \
                 patch("ctypes.windll", create=True):
             try:
                 texto = m.modo_teatro(enabled, espera=0, esperar_cambio=0)
@@ -124,6 +127,19 @@ class ActionTests(unittest.TestCase):
         texto, usados = self._ejecutar(True, [[], []])
         self.assertIn("ERROR No encontré ningún reproductor", texto)
         self.assertEqual(usados, [])
+
+    def test_twitch_with_hidden_controls_uses_alt_t(self) -> None:
+        """2026-11-20: con el ratón fuera del vídeo, Twitch no expone sus botones."""
+        normal = ((240, 165, 2545, 1282), 0)
+        teatro = ((0, 115, 2545, 1392), 0)
+        texto, usados = self._ejecutar(True, [[], []], ocultos=[normal, teatro])
+        self.assertEqual((texto, usados), ("Puse el vídeo en modo teatro.", [("tecla", m.VK_T, True)]))
+        texto, usados = self._ejecutar(True, [[], []], ocultos=[teatro])
+        self.assertEqual((texto, usados), ("El vídeo ya está en modo teatro.", []))
+        texto, _ = self._ejecutar(False, [[], []], ocultos=[teatro, normal])
+        self.assertEqual(texto, "Quité el modo teatro del vídeo.")
+        texto, _ = self._ejecutar(True, [[], []], ocultos=[normal])
+        self.assertIn("ERROR No pude activar el modo teatro: Twitch no respondió", texto)
 
 
 if __name__ == "__main__":

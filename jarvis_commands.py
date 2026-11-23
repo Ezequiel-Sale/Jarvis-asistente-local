@@ -85,6 +85,17 @@ BROWSER_NEW_TAB_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# 2026-11-20: «abrí una ventana nueva de Brave», «abro una nueva ventana» (así lo transcribe la voz),
+# «ventana de incógnito». Hace falta «nueva», «otra», «brave» o «incógnito/privada»: «ventana» sola no.
+BROWSER_NEW_WINDOW_PATTERN = re.compile(
+    r"^(?:a[\s,]+)?(?:(?:jarvis|por favor|puedes|podrias|quiero)[,\s]+)*"
+    r"(?:(?:abre|abri|abrime|abro|abrir|crea|crear)\s+)?"
+    r"(?:(?:una|la|otra)\s+)?(?:nueva\s+)?ventana(?:\s+nueva)?"
+    r"(?:\s+(?:de|en)\s+brave)?(?:\s+(?:de\s+|en\s+(?:modo\s+)?)?(?P<privada>incognito|privada))?"
+    r"(?:\s+(?:de|en)\s+brave)?(?:\s+por favor)?$",
+    re.IGNORECASE,
+)
+
 BROWSER_NAVIGATION_PATTERN = re.compile(
     r"^(?:(?:jarvis|por favor|puedes|podr[ií]as|quiero)[,\s]+)*"
     r"(?:ir|ve|anda|navega|dir[ií]gete|dirigirme)\s+a\s+(.+?)\s*$",
@@ -314,6 +325,17 @@ def detectar_comando_nueva_pestana(texto: str) -> bool:
     normalizado = normalizado.encode("ascii", "ignore").decode("ascii").lower()
     normalizado = re.sub(r"[.!?¿¡]+$", "", normalizado).strip()
     return BROWSER_NEW_TAB_PATTERN.fullmatch(normalizado) is not None
+
+def detectar_comando_nueva_ventana(texto: str) -> dict | None:
+    """Argumentos de ``open_new_browser_tab`` para una ventana nueva de Brave, o None."""
+    normalizado = unicodedata.normalize("NFKD", texto.strip())
+    normalizado = normalizado.encode("ascii", "ignore").decode("ascii").lower()
+    normalizado = " ".join(re.sub(r"[.!?¿¡,]+", " ", normalizado).split())
+    coincidencia = BROWSER_NEW_WINDOW_PATTERN.fullmatch(normalizado)
+    if coincidencia is None or not re.search(r"\b(?:nueva|otra|brave|incognito|privada)\b", normalizado):
+        return None
+    return {"window": True, "private": True} if coincidencia.group("privada") else {"window": True}
+
 
 def detectar_comando_navegacion_web(texto: str) -> str | None:
     coincidencia = BROWSER_NAVIGATION_PATTERN.fullmatch(texto.strip())
@@ -872,7 +894,10 @@ _FIX_ESCALADO = re.compile(
 
 _PANTALLA_TV = r"(?:la\s+|el\s+)?(?:smart\s+)?(?:tv|tele|televisor|television)"
 _MOVER_VENTANA = re.compile(
-    r"^(?:manda|mandame|mueve|muevelo|movela|pasa|pasame|lleva|llevame|pon|ponme|envia|tira|trae|traeme)\s+"
+    # 2026-11-23: también en infinitivo («Mover Brave al monitor 1» iba a la IA, que tardó 52 s y
+    # contestó sin mover nada).
+    r"^(?:manda|mandame|mueve|muevelo|movela|move|pasa|pasame|lleva|llevame|pon|ponme|envia|tira|trae|traeme"
+    r"|mover|mandar|pasar|llevar|poner|enviar|tirar|traer)\s+"
     r"(?:a\s+)?(?:(?:el|la|los|las)\s+)?(?:ventanas?\s+(?:de\s+(?:la\s+|el\s+)?)?)?(?P<app>.+?)\s+"
     r"(?:al|a\s+la|a\s+el|en\s+el|en\s+la|hacia\s+el|hacia\s+la|a|para\s+el|para\s+la)\s+"
     r"(?:(?P<tv>" + _PANTALLA_TV + r")|(?:monitor|pantalla)\s+(?:numero\s+)?" + _NUM_MONITOR + r")$"
@@ -1310,6 +1335,10 @@ SECCIONES = {
     "juegos": ("juegos", "biblioteca de juegos", "mis juegos"),
     "tele": ("tele", "television", "televisor", "tv", "control de la tele", "control remoto"),
     "ajustes": ("ajustes", "configuracion", "opciones", "preferencias", "settings"),
+    "sistema": ("sistema", "salud de la pc", "estado de la pc", "doctor", "ajustes de windows"),
+    "programas": ("programas", "actualizaciones", "aplicaciones", "programas de inicio"),
+    "mensajeria": ("correo", "correos", "bandeja", "mensajeria", "agenda", "calendario", "correo y calendario"),
+    "tareas": ("tareas", "tareas grabadas", "grabaciones", "portapapeles"),
     "comandos": ("comandos", "lista de comandos", "comandos de voz", "ayuda", "guia de comandos"),
 }
 _NOMBRE_SECCION = {nombre: clave for clave, nombres in SECCIONES.items() for nombre in nombres}

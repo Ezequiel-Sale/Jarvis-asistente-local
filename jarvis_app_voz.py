@@ -161,12 +161,15 @@ class VozMixin:
 
         return recibir
 
+    INTERVALO_EN_VIVO_MS = 120  # redibujar el formato como mucho ~8 veces por segundo
+
     def _show_live_answer(self, trozo: str | None) -> None:
-        """Burbuja provisional que crece mientras el modelo escribe."""
+        """Burbuja provisional que crece mientras el modelo escribe, ya con formato (2026-11-20, pedido
+        del usuario: antes se veía el markdown crudo, con ** y #, hasta que terminaba de hablar)."""
         if trozo is None:  # nueva ronda del modelo: empezar de cero
             self._live_text = ""
-            if self._live_label is not None:
-                self._live_label.configure(text="…")
+            if self._live_row is not None and self._live_row.winfo_exists():
+                self._pintar_en_vivo()
             self._notify_mobile_live("")
             return
         self._live_text += trozo
@@ -182,20 +185,37 @@ class VozMixin:
             burbuja = tk.Frame(fila, bg=PANEL_LIGHT, padx=14, pady=10)
             burbuja.pack(side="left", anchor="w")
             self._bubble_header(burbuja, "JARVIS", PANEL_LIGHT, VIOLET, jarvis_cards.hora_mensaje())
-            self._live_label = tk.Label(
-                burbuja, text="", bg=PANEL_LIGHT, fg=TEXT, justify="left", anchor="w",
-                wraplength=650, font=("Segoe UI", 11),
-            )
-            self._live_label.pack(anchor="w")
-        self._live_label.configure(text=self._live_text.strip() or "…")
-        self._scroll_chat_to_bottom()
+            self._live_bubble = burbuja
+            self._pintar_en_vivo()
+        elif not getattr(self, "_live_pendiente", False):
+            self._live_pendiente = True
+            self.root.after(self.INTERVALO_EN_VIVO_MS, self._pintar_en_vivo)
         self._notify_mobile_live(self._live_text)
+
+    def _pintar_en_vivo(self) -> None:
+        """Reescribe el texto con formato de la burbuja en vivo, en la misma caja (crear una nueva
+        en cada trozo la hacía saltar de alto)."""
+        import jarvis_markdown
+
+        self._live_pendiente = False
+        burbuja = getattr(self, "_live_bubble", None)
+        if self._live_row is None or burbuja is None or not burbuja.winfo_exists():
+            return
+        texto = jarvis_markdown.cerrar_parcial(self._live_text.strip()) or "…"
+        caja = self._live_label if self._live_label is not None and self._live_label.winfo_exists() else None
+        if caja is None:
+            self._live_label = self._rich_text(burbuja, texto, PANEL_LIGHT)
+            self._live_label.pack(anchor="w")
+        else:
+            self._rich_text(burbuja, texto, PANEL_LIGHT, caja=caja)
+        self._scroll_chat_to_bottom()  # solo si estabas al final (``_chat_following``)
 
     def _clear_live_answer(self, *, keep_text: bool = False) -> None:
         if self._live_row is not None and self._live_row.winfo_exists():
             self._live_row.destroy()
         self._live_row = None
         self._live_label = None
+        self._live_bubble = None
         if not keep_text:
             self._live_text = ""
             self._notify_mobile_live(None)
@@ -439,8 +459,12 @@ class VozMixin:
             return "F9 PARA HABLAR"
         return "TE ESCUCHO SIEMPRE" if self._continuous_listening() else "ESCUCHANDO «HEY JARVIS»"
 
-    def _on_continuous_utterance(self, audio_path: str) -> None:
-        """Una frase de la escucha continua: se transcribe aparte, sin «ocupar» a Jarvis."""
+    def _on_continuous_utterance(self, audio_path: str, cortada: bool = False) -> None:
+        """Una frase de la escucha continua: se transcribe aparte, sin «ocupar» a Jarvis.
+
+        ``cortada``: la grabación llegó al tope con la voz todavía sonando; lo que se transcriba
+        queda en espera y se une al trozo siguiente, que no pasa por «solo mi voz» (es la misma
+        frase, sin silencio en el medio; 2026-11-20 se descartaba como «voz ajena»)."""
         hablando = self._jarvis_speaking()
         if (self._closing or self.recorder is not None or self._pending_plan_reply is not None
                 or getattr(self, "_continuous_transcribing", False)
@@ -448,11 +472,13 @@ class VozMixin:
             audio_capture.limpiar_audio(audio_path)
             return
         self._continuous_transcribing = True
+        confiar = bool(getattr(self, "_continuous_partial", None)) and getattr(self, "_continuous_partial_cut", False) is True
+        self._continuous_cut = cortada
         self._preload_llm("escucha continua")
-        threading.Thread(target=self._continuous_worker, args=(audio_path, hablando),
+        threading.Thread(target=self._continuous_worker, args=(audio_path, hablando, confiar),
                          name="JarvisEscuchaContinua", daemon=True).start()
 
-    def _continuous_worker(self, audio_path: str, hablando: bool) -> None:
+    def _continuous_worker(self, audio_path: str, hablando: bool, confiar: bool = False) -> None:
         from jarvis_actions import ejecutar_con_limites
         from jarvis_commands import frase_continua, limpiar_transcripcion_voz
 
@@ -461,7 +487,7 @@ class VozMixin:
         try:
             # «Solo mi voz»: si no es tu voz, ni se transcribe (decision queda en None). En un trozo
             # largo con la tele de fondo se busca el tramo con tu voz y se transcribe solo ese.
-            recorte = self._speaker_clip(audio_path)
+            recorte = audio_path if confiar else self._speaker_clip(audio_path)
             if recorte is not None:
                 audio_path_original, audio_path = audio_path, recorte
                 try:  # cuánta voz hubo de verdad: con 0,4 s no caben 456 caracteres
@@ -545,10 +571,23 @@ class VozMixin:
             # La continuación de una frase cortada por una pausa: «… de» + «fútbol».
             texto = f"{anterior} {texto}"
             self._continuous_partial = None
+            self._continuous_partial_cut = False
         elif palabra_suelta_desconocida(texto, self._direct_tool_for):
             # «Yerda» (2026-11-16): una palabra suelta que no es ninguna orden no va a la IA.
             logging.info("Escucha continua: palabra suelta que no es una orden; se ignora.")
             return
+        if getattr(self, "_continuous_cut", False) is True:
+            # Cortada por el tope de la grabación: el resto ya se está grabando; se espera hasta otro tope.
+            self._continuous_cut = False
+            self._continuous_partial = texto
+            self._continuous_partial_cut = True
+            self._continuous_partial_token = token = object()
+            self._set_status("TE ESCUCHO…", CYAN)
+            espera = self.ESPERA_CONTINUACION + jarvis_wakeword.MAXIMO_FRASE
+            self.root.after(int(espera * 1000), lambda: self._flush_continuous_partial(token))
+            return
+        if anterior:
+            pass
         elif frase_incompleta(texto):
             # Termina en «de», «la», «que»…: seguramente hiciste una pausa; espero el resto.
             self._continuous_partial = texto
@@ -565,6 +604,7 @@ class VozMixin:
         if getattr(self, "_continuous_partial_token", None) is not token or not getattr(self, "_continuous_partial", None):
             return
         texto, self._continuous_partial = self._continuous_partial, None
+        self._continuous_partial_cut = False
         self._run_continuous_command(texto)
 
     def _run_continuous_command(self, texto: str) -> None:

@@ -87,3 +87,66 @@ class EnergiaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VigiaArranqueTests(unittest.TestCase):
+    def test_watchdog_writes_stacks_only_if_startup_hangs(self):
+        import faulthandler
+        import tempfile
+        import time
+
+        from jarvis_app import _vigia_de_arranque
+
+        with tempfile.TemporaryDirectory() as carpeta:
+            destino = Path(carpeta) / "logs" / "arranque_trabado.txt"
+            apagar = _vigia_de_arranque(destino, segundos=0.2)
+            time.sleep(0.6)  # «se trabó»: escribe las pilas
+            apagar()
+            self.assertIn("Thread 0x", destino.read_text(encoding="utf-8"))
+            apagar = _vigia_de_arranque(destino, segundos=30)
+            apagar()  # arrancó bien: no escribe nada más que la cabecera
+            self.assertNotIn("Thread 0x", destino.read_text(encoding="utf-8"))
+        faulthandler.cancel_dump_traceback_later()
+
+
+class CargaNativaTests(unittest.TestCase):
+    def test_the_three_native_loads_take_turns(self):
+        """2026-11-20 (pilas del vigía): openwakeword, MediaPipe y .NET cargándose a la vez trababan el arranque."""
+        import jarvis_core
+
+        self.assertTrue(hasattr(jarvis_core.CERROJO_CARGA_NATIVA, "acquire"))
+        raiz = Path(__file__).resolve().parent.parent
+        for modulo in ("jarvis_hardware.py", "jarvis_gestos.py", "jarvis_wakeword.py"):
+            self.assertIn("CERROJO_CARGA_NATIVA", (raiz / modulo).read_text("utf-8"), modulo)
+
+
+class PlacaTests(unittest.TestCase):
+    """2026-11-20: habilitar o deshabilitar la placa de cable desde la vista SISTEMA."""
+
+    def test_disable_and_enable(self):
+        estado = {"Ethernet": True}
+        leer = lambda: [r.Interfaz("Ethernet", estado["Ethernet"], estado["Ethernet"]), r.Interfaz("Wi-Fi", True, False)]  # noqa: E731
+
+        def netsh(*argumentos):
+            estado["Ethernet"] = argumentos[-1] == "admin=enabled"
+            return Mock(stdout="")
+
+        self.assertEqual(r.cambiar_placa("ethernet", "off", leer=leer, netsh=netsh, dormir=lambda _s: None),
+                         "Listo: deshabilité la placa «Ethernet».")
+        self.assertFalse(r.placa_habilitada("Ethernet", leer=leer))
+        self.assertIn("ya estaba deshabilitada", r.cambiar_placa("Ethernet", "off", leer=leer, netsh=netsh))
+        self.assertIn("habilité", r.cambiar_placa("Ethernet", "on", leer=leer, netsh=netsh, dormir=lambda _s: None))
+        with self.assertRaisesRegex(ValueError, "No encontré"):
+            r.cambiar_placa("Radmin VPN", "off", leer=leer, netsh=netsh)
+
+    def test_undo_and_risk(self):
+        import jarvis_deshacer
+        from jarvis_tool_registry import ToolRisk
+        from jarvis_tools import crear_registro_herramientas
+
+        historial = jarvis_deshacer.Historial({"placa": lambda _n: True})
+        historial.anotar(historial.capturar("network_adapter", {"name": "Ethernet", "state": "off"}, "directo"))
+        self.assertEqual(historial.sacar().argumentos, {"name": "Ethernet", "state": "on"})
+        self.assertIs(crear_registro_herramientas(Mock()).get("network_adapter").risk, ToolRisk.HIGH)
+        fuente = (Path(__file__).resolve().parent.parent / "jarvis_app_ordenes.py").read_text("utf-8")
+        self.assertIn('"network_adapter")', fuente)  # por botón o por voz, siempre pregunta

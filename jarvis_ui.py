@@ -7,6 +7,7 @@ from tkinter import ttk
 import jarvis_gestos
 import jarvis_theme
 from jarvis_actions import CancellationToken
+from jarvis_ui_vistas import BOTONES as BOTONES_VISTAS, TITULOS as TITULOS_VISTAS, VISTAS
 from jarvis_theme import (
     ACCENT_ACTIVE, BG, BORDER, BORDER_STRONG, CYAN, CYAN_DARK, ERROR, HOVER, MUTED, ORB_ARC_B, ORB_ARC_C, ORB_ARC_IDLE, ORB_BRIGHT, ORB_BRIGHT_ALT, ORB_CORE, ORB_CORE_LINE, ORB_IDLE, ORB_RING_A, ORB_RING_B, ORB_RING_C, ORB_RING_D, ORB_TICK, PANEL, PANEL_LIGHT, TEXT, VIOLET,
 )
@@ -87,7 +88,7 @@ class JarvisUIMixin:
             pages.grid_rowconfigure(0, weight=1)
             pages.grid_columnconfigure(0, weight=1)
             self._pages: dict[str, tk.Frame] = {}
-            for nombre in ("inicio", "chat", "rutinas", "juegos", "tele", "ajustes"):
+            for nombre in ("inicio", "chat", "rutinas", "juegos", "tele", *VISTAS, "ajustes"):
                 pagina = tk.Frame(pages, bg=BG)
                 pagina.grid(row=0, column=0, sticky="nsew")
                 self._pages[nombre] = pagina
@@ -96,6 +97,7 @@ class JarvisUIMixin:
             self._build_home_page(self._pages["inicio"])
             self._build_games_page(self._pages["juegos"])
             self._build_tv_page(self._pages["tele"])
+            self._build_vistas(self._pages)  # sistema, programas, mensajes y tareas (jarvis_ui_vistas)
             self._current_page = ""
             self._show_page("inicio")  # el panel de inicio es la primera página
             self._draw_orb()
@@ -235,11 +237,12 @@ class JarvisUIMixin:
 
             self._nav_buttons: dict[str, tk.Button] = {}
             for nombre, texto in (("inicio", "⌂   INICIO"), ("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"),
-                                  ("juegos", "🎮   JUEGOS"), ("tele", "📺   TELE"), ("ajustes", "⚙   AJUSTES")):
+                                  ("juegos", "🎮   JUEGOS"), ("tele", "📺   TELE"), *BOTONES_VISTAS,
+                                  ("ajustes", "⚙   AJUSTES")):
                 boton = tk.Button(
                     sidebar, text=texto, anchor="w", command=lambda n=nombre: self._show_page(n),
                     bg=PANEL, fg=MUTED, activebackground=HOVER, activeforeground=TEXT,
-                    relief="flat", padx=16, pady=9, font=("Consolas", 10, "bold"), cursor="hand2",
+                    relief="flat", padx=16, pady=6, font=("Consolas", 10, "bold"), cursor="hand2",
                 )
                 boton.pack(fill="x", padx=12, pady=2)
                 self._nav_buttons[nombre] = boton
@@ -251,7 +254,7 @@ class JarvisUIMixin:
             ).pack(side="bottom", anchor="w", padx=22, pady=18)
 
         _PAGE_TITLES = {"inicio": "INICIO", "chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES",
-                        "juegos": "JUEGOS", "tele": "TELEVISOR", "ajustes": "AJUSTES"}
+                        "juegos": "JUEGOS", "tele": "TELEVISOR", "ajustes": "AJUSTES", **TITULOS_VISTAS}
 
         def _navigate_by_voice(self, seccion: str, command: str) -> None:
             """«Jarvis rutinas», «ve a ajustes»: muestra la ventana (aunque esté en la bandeja) y
@@ -295,6 +298,8 @@ class JarvisUIMixin:
                 self._refresh_tv_views()
             if nombre == "juegos" and getattr(self, "_games", None) is None:
                 self._load_games_page()
+            if nombre in VISTAS:
+                self._cargar_vista(nombre)
 
         def _build_chat_page(self, page: tk.Frame) -> None:
             content = tk.Frame(page, bg=BG, padx=28, pady=16)
@@ -1721,8 +1726,22 @@ class JarvisUIMixin:
             self.chat_canvas.yview(*args)
             self._update_chat_following()
 
+        DISTANCIA_SEGUIR_PX = 40
+
         def _update_chat_following(self) -> None:
-            self._chat_following = self.chat_canvas.yview()[1] >= 0.99
+            """Sigue el final solo si estás a menos de ~40 px de él. Antes era «≥ 99 %» y en un chat
+            largo ese 1 % eran cientos de píxeles: al subir con la rueda mientras Jarvis escribía,
+            la respuesta en vivo te volvía a bajar (2026-11-20)."""
+            arriba, abajo = self.chat_canvas.yview()
+            try:
+                region = [float(v) for v in str(self.chat_canvas.cget("scrollregion")).split()]
+                total = region[3] - region[1] if len(region) == 4 else 0.0
+            except (tk.TclError, ValueError):
+                total = 0.0
+            if total <= 0:
+                self._chat_following = abajo >= 0.99
+                return
+            self._chat_following = (1.0 - abajo) * total <= self.DISTANCIA_SEGUIR_PX
 
         def _scroll_chat_to_bottom(self) -> None:
             if self._chat_following and self.chat_canvas.winfo_exists():
@@ -1935,6 +1954,7 @@ class JarvisUIMixin:
             necesita_ventana: bool = False,
             imagen=None,
             alto_riesgo: bool | None = None,
+            pasos=(),
         ) -> tuple[tk.Frame, tk.Frame]:
             """Confirmación como tarjeta dentro del chat (antes eran ventanas aparte).
 
@@ -1957,7 +1977,8 @@ class JarvisUIMixin:
             en_aviso = self._floating_active() and not necesita_ventana
             if en_aviso:
                 # En la bandeja: la pregunta va al aviso flotante y no se roba el foco.
-                self.floating.pregunta(resumen or titulo.capitalize(), aprobar_cb, rechazar_cb)
+                self.floating.pregunta(resumen or titulo.capitalize(), aprobar_cb, rechazar_cb,
+                                       pasos=pasos, si=aprobar, no=rechazar)
             else:
                 self._bring_chat_forward()
             fila = tk.Frame(self.messages, bg=PANEL)
@@ -2110,8 +2131,11 @@ class JarvisUIMixin:
 
         _ANCHO_BURBUJA = 650
 
-        def _rich_text(self, parent: tk.Misc, texto: str, bg: str) -> tk.Text:
-            """Texto con formato (negritas, listas, código, tablas, enlaces) del tamaño justo."""
+        def _rich_text(self, parent: tk.Misc, texto: str, bg: str, caja: tk.Text | None = None) -> tk.Text:
+            """Texto con formato (negritas, listas, código, tablas, enlaces) del tamaño justo.
+
+            Con ``caja`` se reescribe esa misma (la respuesta en vivo, 2026-11-20): sin crear un
+            widget nuevo en cada trozo, y sin achicarse mientras crece, para que no salte."""
             import webbrowser
             from tkinter import font as tkfont
 
@@ -2134,6 +2158,18 @@ class JarvisUIMixin:
                     else:
                         lineas[-1] = (prop + normal.measure(parte), fija)
             ancho_px = min(self._ANCHO_BURBUJA, max(24, max(p + f for p, f in lineas) + 6))
+            if caja is not None and caja.winfo_exists():
+                ancho_px = max(ancho_px, getattr(caja, "_jarvis_ancho_px", 0))
+                columnas = max(2, -(-ancho_px // normal.measure("0")))
+                if int(caja.cget("width")) < columnas:
+                    caja.configure(width=columnas)
+                caja.configure(state="normal")
+                caja.delete("1.0", "end")
+                self._insertar_tramos(caja, tramos)
+                caja.configure(state="disabled")
+                caja._jarvis_ancho_px = ancho_px
+                caja._jarvis_ajustar_alto(solo_crecer=True)
+                return caja
             caja = tk.Text(
                 parent, bg=bg, fg=TEXT, font=normal, relief="flat", bd=0, highlightthickness=0,
                 wrap="word", padx=0, pady=0, cursor="arrow", insertwidth=0,
@@ -2152,6 +2188,30 @@ class JarvisUIMixin:
             caja.tag_configure("link", foreground=CYAN, underline=True)
             caja.tag_raise("b")
             caja.tag_raise("link")
+            self._insertar_tramos(caja, tramos)
+            caja.configure(state="disabled", height=max(1, len(lineas)))
+
+            def ajustar_alto(_event=None, solo_crecer: bool = False) -> None:
+                # Solo con el ancho real se sabe cuántas líneas ocupa al ajustar palabras.
+                try:
+                    vistas = caja.count("1.0", "end-1c", "update", "displaylines")
+                except tk.TclError:
+                    return
+                alto = (vistas[0] if isinstance(vistas, tuple) else vistas) or 0
+                alto = max(1, alto + 1 if caja.get("end-2c") != "\n" else alto)
+                actual = int(caja.cget("height"))
+                if actual != alto and not (solo_crecer and alto < actual):
+                    caja.configure(height=alto)
+
+            caja.bind("<Configure>", ajustar_alto, add="+")
+            caja._jarvis_ajustar_alto = ajustar_alto
+            caja._jarvis_ancho_px, caja._jarvis_px_letra = ancho_px, max(1, normal.measure("0"))  # _fit_chat_text
+            return caja
+
+        @staticmethod
+        def _insertar_tramos(caja: tk.Text, tramos) -> None:
+            import webbrowser
+
             for n, (contenido, etiquetas, url) in enumerate(tramos):
                 if url and url.startswith(("http://", "https://")):
                     propia = f"url{n}"
@@ -2161,22 +2221,6 @@ class JarvisUIMixin:
                     caja.tag_bind(propia, "<Leave>", lambda _e: caja.configure(cursor="arrow"))
                 else:
                     caja.insert("end", contenido, etiquetas)
-            caja.configure(state="disabled", height=max(1, len(lineas)))
-
-            def ajustar_alto(_event=None) -> None:
-                # Solo con el ancho real se sabe cuántas líneas ocupa al ajustar palabras.
-                try:
-                    vistas = caja.count("1.0", "end-1c", "update", "displaylines")
-                except tk.TclError:
-                    return
-                alto = (vistas[0] if isinstance(vistas, tuple) else vistas) or 0
-                alto = max(1, alto + 1 if caja.get("end-2c") != "\n" else alto)
-                if int(caja.cget("height")) != alto:
-                    caja.configure(height=alto)
-
-            caja.bind("<Configure>", ajustar_alto, add="+")
-            caja._jarvis_ancho_px, caja._jarvis_px_letra = ancho_px, max(1, normal.measure("0"))  # _fit_chat_text
-            return caja
 
         def _on_enter(self, event):
             if event.keysym != "Return":

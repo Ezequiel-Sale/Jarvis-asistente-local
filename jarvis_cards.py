@@ -31,6 +31,9 @@ ICONOS = {
     "search_programs": "📦", "install_program": "📦", "uninstall_program": "📦", "list_program_updates": "📦",
     "update_programs": "📦", "ask_document": "📄", "search_documents": "📄",
     "browser_read_page": "🦁", "browser_page_action": "🦁", "replay_recording": "🎬",
+    "whatsapp_unread": "💬", "whatsapp_read": "💬", "whatsapp_send": "💬",
+    "email_unread": "✉", "email_read": "✉", "email_send": "✉", "calendar_events": "📅", "calendar_create": "📅",
+    "connect_account": "🔑", "network_adapter": "🔌",
     "get_weather": "☁", "web_search": "🔎", "get_headset_battery": "🔋", "get_system_status": "📊",
     "list_top_processes": "📊", "list_open_applications": "🗂",
     "get_current_datetime": "🕒", "morning_briefing": "☀", "undo_last_action": "↶",
@@ -167,7 +170,9 @@ def _frase_especifica(herramienta: str, a: dict) -> str | None:
     if herramienta == "navigate_browser" and a.get("url"):
         return f"Abrir la página {a['url']}"
     if herramienta == "open_new_browser_tab":
-        return "Abrir una pestaña nueva en el navegador"
+        if a.get("private"):
+            return "Abrir una ventana de incógnito en Brave"
+        return "Abrir una ventana nueva de Brave" if a.get("window") else "Abrir una pestaña nueva en el navegador"
     if herramienta == "browser_history" and accion:
         return {"back": "Volver a la página anterior", "forward": "Ir a la página siguiente",
                 "reload": "Recargar la página (F5)"}.get(accion)
@@ -213,6 +218,14 @@ def _frase_especifica(herramienta: str, a: dict) -> str | None:
         return f"Apretar {a['keys']} en la ventana activa"
     if herramienta == "autopilot" and a.get("goal"):
         return f"Manejar la PC para: {a['goal']}"
+    if herramienta == "network_adapter" and a.get("name"):
+        return f"{'Habilitar' if a.get('state') == 'on' else 'Deshabilitar'} la placa de red «{a['name']}»"
+    if herramienta == "email_send" and a.get("to"):
+        return f"Enviar un correo a {a['to']} — Asunto: «{a.get('subject', '')}» — «{a.get('body', '')}»"
+    if herramienta == "calendar_create" and a.get("title"):
+        return f"Agendar «{a['title']}» el {a.get('start', '')} ({a.get('minutes', 60)} min)"
+    if herramienta == "whatsapp_send" and a.get("text"):
+        return f"Mandarle a «{a.get('chat')}» por WhatsApp: «{a['text']}»"
     if herramienta == "browser_page_action":
         import jarvis_brave
 
@@ -264,6 +277,10 @@ _AVISOS = {
                  "Esc o mover el mouse lo frenan.",
     "mobile_remote_control": "El celular podrá mover el mouse y escribir en esta PC.",
     "run_powershell": "Leé el script antes de aprobarlo: corre con los permisos de Jarvis (administrador).",
+    "network_adapter": "Si deshabilitás la placa por la que tenés internet, te quedás sin conexión (y sin la app "
+                       "del celular) hasta habilitarla de nuevo desde esta PC.",
+    "email_send": "Se envía desde tu cuenta; revisá la dirección y el texto antes de aprobar.",
+    "whatsapp_send": "Se envía con tu cuenta de WhatsApp; revisá el chat y el texto antes de aprobar.",
     "browser_page_action": "Jarvis usará la página abierta en Brave por ti (con tu sesión iniciada).",
     "install_program": "Se descarga del repositorio de winget y, al instalarlo, aceptás la licencia del programa.",
     "update_programs": "Se descargan las versiones nuevas de winget y aceptás sus licencias; cerrá esos programas antes.",

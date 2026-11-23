@@ -300,6 +300,49 @@ def asignar_numeros(
     return resultado
 
 
+ESPERA_MONITOR = 20.0  # s: una tele recién prendida o cambiada de entrada tarda en aparecer
+
+
+def esperar_monitores(
+    numeros: tuple[int, ...],
+    mapa: dict[str, int] | None = None,
+    *,
+    espera: float = ESPERA_MONITOR,
+    listar=None,
+    dormir=None,
+    reloj=None,
+) -> bool:
+    """Espera a que Windows vea los monitores ``numeros`` (activos o no).
+
+    2026-11-23, «modo gaming 4K»: la rutina prende la tele, la pasa a HDMI 2 y enseguida pide
+    ponerla como principal; la tele todavía no se había anunciado a la placa de video y fallaba
+    con «No conozco el monitor 3». Solo se espera por monitores que Jarvis ya conoce (están en
+    el mapa): un número que nunca existió falla enseguida. Devuelve si están todos."""
+    import time
+
+    listar = listar or listar_pantallas
+    dormir = dormir or time.sleep
+    reloj = reloj or time.monotonic
+    conocidos = set((mapa or {}).values())
+    fin = reloj() + espera
+    primera = True
+    while True:
+        pantallas, _ = listar(mapa)
+        presentes = {p.numero for p in pantallas}
+        faltan = [n for n in numeros if n not in presentes]
+        if not faltan:
+            if not primera:
+                logging.info("El monitor %s apareció; sigo.", ", ".join(map(str, numeros)))
+            return True
+        if any(n not in conocidos for n in faltan) or reloj() >= fin:
+            return False
+        if primera:
+            logging.info("Espero a que Windows vea el monitor %s (recién prendido o cambiado de entrada).",
+                         ", ".join(map(str, faltan)))
+            primera = False
+        dormir(1.0)
+
+
 def numeros_por_gdi(mapa: dict[str, int] | None = None) -> tuple[dict[int, int], dict[str, int]]:
     """{DISPLAYN: número fijo} de los monitores activos, y el mapa actualizado."""
     pantallas, mapa = listar_pantallas(mapa)
@@ -331,6 +374,12 @@ def restaurar_configuracion(guardada: ConfiguracionGuardada, solo_validar: bool 
         # Último recurso: dejar que Windows restaure la última configuración extendida conocida.
         logging.error("No se pudo restaurar la configuración exacta (error %s).", resultado)
         raise ErrorPantalla(_mensaje_error(resultado))
+
+
+def _error_de(codigo: int) -> "ErrorPantalla":
+    error = ErrorPantalla(_mensaje_error(codigo))
+    error.codigo = codigo
+    return error
 
 
 def _mensaje_error(codigo: int) -> str:
@@ -506,7 +555,7 @@ def _aplicar_explicito(
         flags_para(FLAGS_EXPLICITO, solo_validar),
     )
     if resultado != ERROR_SUCCESS:
-        raise ErrorPantalla(_mensaje_error(resultado))
+        raise _error_de(resultado)
 
 
 def _aplicar(deseado, solo_validar: bool = False) -> None:
@@ -517,7 +566,7 @@ def _aplicar(deseado, solo_validar: bool = False) -> None:
         len(paths), arreglo, 0, None, flags_para(FLAGS_TOPOLOGIA, solo_validar)
     )
     if resultado != ERROR_SUCCESS:
-        raise ErrorPantalla(_mensaje_error(resultado))
+        raise _error_de(resultado)
 
 
 MODE_INFO_TYPE_SOURCE = 1
@@ -583,12 +632,41 @@ def validar(accion: str, numeros: tuple[int, ...], mapa: dict[str, int] | None =
     return descripcion
 
 
+# 2026-11-23, «salir de modo gaming 4K»: desactivar la tele 0,3 s después de cambiar el monitor
+# principal dio el código 31 («el dispositivo no respondió»): Windows todavía estaba acomodando
+# la configuración anterior. Ese error es pasajero; se vuelve a intentar desde cero.
+REINTENTABLES = frozenset({31})
+ESPERAS_REINTENTO = (1.0, 2.0, 3.0)
+
+
 def aplicar(
     accion: str,
     numeros: tuple[int, ...],
     mapa: dict[str, int] | None = None,
+    *,
+    dormir=None,
 ) -> tuple[str, ConfiguracionGuardada, dict[str, int]]:
-    """Aplica el cambio y devuelve (descripción, configuración previa, mapa actualizado)."""
+    """Aplica el cambio y devuelve (descripción, configuración previa, mapa actualizado).
+    Si Windows responde con un error pasajero (``REINTENTABLES``), espera y reintenta."""
+    import time
+
+    dormir = dormir or time.sleep
+    for espera in (*ESPERAS_REINTENTO, None):
+        try:
+            return _aplicar_una_vez(accion, numeros, mapa)
+        except ErrorPantalla as error:
+            if espera is None or getattr(error, "codigo", None) not in REINTENTABLES:
+                raise
+            logging.info("Windows no aceptó todavía el cambio de pantallas (%s); reintento en %.0f s.", error, espera)
+            dormir(espera)
+    raise AssertionError("inalcanzable")
+
+
+def _aplicar_una_vez(
+    accion: str,
+    numeros: tuple[int, ...],
+    mapa: dict[str, int] | None = None,
+) -> tuple[str, ConfiguracionGuardada, dict[str, int]]:
     pantallas, mapa = listar_pantallas(mapa)
     deseado, descripcion = planificar(accion, numeros, pantallas)
     validar(accion, numeros, mapa)

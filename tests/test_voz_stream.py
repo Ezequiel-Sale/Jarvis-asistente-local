@@ -153,11 +153,17 @@ class LiveBubbleTests(unittest.TestCase):
             _clear_live_answer = JarvisApp._clear_live_answer
             _notify_mobile_live = JarvisApp._notify_mobile_live
             _bubble_header = JarvisApp._bubble_header
+            _pintar_en_vivo = JarvisApp._pintar_en_vivo
+            _rich_text = JarvisApp._rich_text
+            _insertar_tramos = staticmethod(JarvisApp._insertar_tramos)
+            _ANCHO_BURBUJA = JarvisApp._ANCHO_BURBUJA
+            INTERVALO_EN_VIVO_MS = JarvisApp.INTERVALO_EN_VIVO_MS
 
             def _scroll_chat_to_bottom(self) -> None:
                 pass
 
         self.host = Host()
+        self.host.root = self.root
         self.host.messages = tk.Frame(self.root)
         self.host._live_row = None
         self.host._live_label = None
@@ -168,16 +174,23 @@ class LiveBubbleTests(unittest.TestCase):
     def test_grows_and_clears(self) -> None:
         self.host._show_live_answer(None)
         self.host._show_live_answer("Hola")
-        self.host._show_live_answer(", ¿qué tal?")
-        self.assertEqual(self.host._live_label.cget("text"), "Hola, ¿qué tal?")
+        self.host._show_live_answer(", **¿qué")
+        self.host._pintar_en_vivo()  # lo que haría el temporizador
+        # Con formato desde el principio: la negrita a medio escribir no muestra los asteriscos.
+        self.assertEqual(self.host._live_label.get("1.0", "end-1c"), "Hola, ¿qué")
+        caja = self.host._live_label
+        self.host._show_live_answer(" tal?** Bien.")
+        self.host._pintar_en_vivo()
+        self.assertIs(self.host._live_label, caja)  # la misma caja: no salta de alto
+        self.assertEqual(caja.get("1.0", "end-1c"), "Hola, ¿qué tal? Bien.")
         self.host._show_live_answer(None)  # nueva ronda
-        self.assertEqual(self.host._live_label.cget("text"), "…")
+        self.assertEqual(self.host._live_label.get("1.0", "end-1c"), "…")
         self.host._clear_live_answer()
         self.assertIsNone(self.host._live_row)
         self.assertEqual(self.host.messages.winfo_children(), [])
         # El celular recibe el texto acumulado (sin markdown) y el aviso de descarte.
         movil = self.host.mobile
-        self.assertEqual([c.args[0] for c in movil.en_vivo.call_args_list], ["", "Hola", "Hola, ¿qué tal?", ""])
+        self.assertEqual([c.args[0] for c in movil.en_vivo.call_args_list], ["", "Hola", "Hola, **¿qué", "Hola, ¿qué tal? Bien.", ""])
         movil.fin_en_vivo.assert_called_once()
 
 

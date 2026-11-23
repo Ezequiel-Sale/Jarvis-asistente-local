@@ -624,6 +624,55 @@ def _firma_teatro(botones: dict) -> tuple:
     return "exit_theater" in botones, lados
 
 
+def _reproductor_sin_controles(zona) -> tuple[tuple, int | None] | None:
+    """El reproductor de Twitch aunque tenga los controles escondidos: (lados, borde izquierdo de la página).
+
+    2026-11-20: Twitch quita sus botones de la accesibilidad mientras el ratón no está sobre el
+    vídeo, así que «modo teatro» no encontraba nada. El grupo «Twitch video player» sí queda."""
+    import uiautomation as auto
+
+    for ventana in auto.GetRootControl().GetChildren():
+        if ventana.ClassName != "Chrome_WidgetWin_1":
+            continue
+        if zona is not None and not _en_zona(ventana.BoundingRectangle, zona):
+            continue
+        izquierda = None
+        for control, _ in auto.WalkControl(ventana, maxDepth=40):
+            if control.ControlTypeName == "DocumentControl" and control.AutomationId == "RootWebArea":
+                izquierda = control.BoundingRectangle.left
+            elif control.ControlTypeName == "GroupControl" and _normal(control.Name) == "twitch video player":
+                r = control.BoundingRectangle
+                return (r.left, r.top, r.right, r.bottom), izquierda
+    return None
+
+
+def _teatro_sin_controles(enabled: bool, zona, donde: str, esperar_cambio: float) -> str:
+    """Modo teatro de Twitch con su atajo (Alt+T); en modo teatro el vídeo llega al borde izquierdo
+    de la página (se esconde la lista de canales), y así se sabe el estado y si cambió."""
+    reproductor = _reproductor_sin_controles(zona)
+    if reproductor is None:
+        raise LookupError(f"No encontré ningún reproductor{donde} con modo teatro (modo cine).")
+    lados, izquierda = reproductor
+    activo = izquierda is not None and lados[0] <= izquierda + 2
+    if activo == enabled:
+        return f"El vídeo{donde} ya está en modo teatro." if enabled else f"El vídeo{donde} no está en modo teatro."
+    ventana = _ventana_navegador(zona)
+    if ventana is not None and _tecla_en(ventana.hwnd, VK_T, True):
+        fin = time.monotonic() + esperar_cambio
+        while True:
+            ahora = _reproductor_sin_controles(zona)
+            if ahora is not None and ahora[0] != lados:
+                logging.info("Modo teatro %s con: Alt+T (controles escondidos).", "activado" if enabled else "quitado")
+                return f"Puse el vídeo{donde} en modo teatro." if enabled else f"Quité el modo teatro del vídeo{donde}."
+            if time.monotonic() >= fin:
+                break
+            time.sleep(0.15)
+    raise LookupError(
+        f"No pude {'activar' if enabled else 'quitar'} el modo teatro{donde}: Twitch no respondió a Alt+T. "
+        "Pasá el ratón por el vídeo y vuelve a pedírmelo."
+    )
+
+
 def modo_teatro(enabled: bool, monitor: int | None = None, *, espera: float = 1.5,
                 esperar_cambio: float = ESPERA_CAMBIO) -> str:
     """Activa o quita el modo teatro (modo cine) del reproductor de la pestaña activa.
@@ -646,7 +695,7 @@ def modo_teatro(enabled: bool, monitor: int | None = None, *, espera: float = 1.
             time.sleep(max(0.0, espera))
             reproductores = _botones_reproductor(zona, claves)
         if not reproductores:
-            raise LookupError(f"No encontré ningún reproductor{donde} con modo teatro (modo cine).")
+            return _teatro_sin_controles(enabled, zona, donde, esperar_cambio)
         botones = reproductores[0]
         activo = "exit_theater" in botones
         if activo == enabled:

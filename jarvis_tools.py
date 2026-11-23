@@ -9,10 +9,13 @@ from jarvis_windows import POSICIONES as POSICIONES_VENTANA
 import jarvis_ajustes
 import jarvis_brave
 import jarvis_control
+import jarvis_correo
 import jarvis_doctor
 import jarvis_documentos
 import jarvis_gestor_archivos
+import jarvis_red
 import jarvis_scripts
+import jarvis_whatsapp
 import jarvis_winget
 import jarvis_health
 import jarvis_headset
@@ -45,7 +48,7 @@ class ToolEventHost(Protocol):
     def _tool_arrange_windows(
         self, windows: list, monitor: int | None = None, screen_name: str | None = None
     ) -> str: ...
-    def _tool_open_new_browser_tab(self) -> str: ...
+    def _tool_open_new_browser_tab(self, window: bool = False, private: bool = False) -> str: ...
     def _tool_navigate_browser(self, url: str) -> str: ...
     def _tool_launch_game(self, name: str) -> str: ...
     def _tool_manage_window(self, action: str) -> str: ...
@@ -61,6 +64,7 @@ class ToolEventHost(Protocol):
     def _tool_clipboard_history(self, action: str, number: int = 2) -> str: ...
     def _tool_ask_document(self, path: str, question: str = "Resumilo") -> str: ...
     def _tool_replay_recording(self, name: str) -> str: ...
+    def _tool_connect_account(self, account: str) -> str: ...
 
 
 def _trim_non_empty_text(value: object) -> str:
@@ -123,6 +127,19 @@ def _registrar_ajustes(registry: ToolRegistry, verificadores: Mapping[str, Verif
         jarvis_ajustes.abrir_pagina,
         label="Abrir Configuración",
         timeout_seconds=10,
+    )
+
+
+def _registrar_red(registry: ToolRegistry) -> None:
+    """Habilitar o deshabilitar una placa de red (jarvis_red): puede dejarte sin internet, siempre pregunta."""
+    registry.register(
+        "network_adapter",
+        "Habilita (on) o deshabilita (off) una placa de red física: name «Ethernet» o «Wi-Fi».",
+        {"type": "object", "properties": {"name": {"type": "string", "minLength": 2, "maxLength": 60},
+                                          "state": {"type": "string", "enum": ["on", "off"]}},
+         "required": ["name", "state"], "additionalProperties": False},
+        jarvis_red.cambiar_placa, risk=ToolRisk.HIGH, requires_confirmation=True, label="Placa de red",
+        timeout_seconds=30,
     )
 
 
@@ -355,6 +372,80 @@ def _registrar_grabaciones(registry: ToolRegistry, host: ToolEventHost) -> None:
         requires_confirmation=True,
         label="Repetir una tarea grabada",
         timeout_seconds=600,
+    )
+
+
+def _registrar_whatsapp(registry: ToolRegistry) -> None:
+    """WhatsApp de escritorio (jarvis_whatsapp): leer es consulta; enviar siempre pregunta."""
+    registry.register(
+        "whatsapp_unread", "Dice qué chats de WhatsApp tienen mensajes sin leer y cuántos.",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        jarvis_whatsapp.no_leidos, label="Ver WhatsApp sin leer", timeout_seconds=40, record_result=False,
+    )
+    registry.register(
+        "whatsapp_read", "Lee los últimos mensajes (count, hasta 15) del chat de WhatsApp chat (nombre del contacto o grupo).",
+        {"type": "object", "properties": {"chat": {"type": "string", "minLength": 1, "maxLength": 60},
+                                          "count": {"type": "integer", "minimum": 1, "maximum": 15}},
+         "required": ["chat"], "additionalProperties": False},
+        jarvis_whatsapp.leer_chat, label="Leer un chat de WhatsApp", timeout_seconds=60, record_result=False,
+    )
+    registry.register(
+        "whatsapp_send", "Manda por WhatsApp el mensaje text al chat chat (contacto o grupo). El usuario lo aprueba antes.",
+        {"type": "object", "properties": {"chat": {"type": "string", "minLength": 1, "maxLength": 60},
+                                          "text": {"type": "string", "minLength": 1, "maxLength": 1000}},
+         "required": ["chat", "text"], "additionalProperties": False},
+        jarvis_whatsapp.enviar, risk=ToolRisk.HIGH, requires_confirmation=True, label="Mandar un WhatsApp",
+        timeout_seconds=60, record_result=False,
+    )
+
+
+def _registrar_correo(registry: ToolRegistry, host: ToolEventHost) -> None:
+    """Gmail, Google Calendar y Outlook (jarvis_correo): leer es consulta; enviar y agendar preguntan."""
+    cuenta = {"type": "string", "enum": ["", *jarvis_correo.CUENTAS]}
+    registry.register(
+        "email_unread", "Lista los correos sin leer (Gmail y/o Outlook, según las cuentas conectadas).",
+        {"type": "object", "properties": {"account": cuenta, "count": {"type": "integer", "minimum": 1, "maximum": 10}},
+         "required": [], "additionalProperties": False},
+        jarvis_correo.correos_no_leidos, label="Ver correos sin leer", timeout_seconds=60, record_result=False,
+    )
+    registry.register(
+        "email_read", "Lee el correo número number de la última lista de email_unread.",
+        {"type": "object", "properties": {"number": {"type": "integer", "minimum": 1, "maximum": 10}},
+         "required": ["number"], "additionalProperties": False},
+        jarvis_correo.leer_correo, label="Leer un correo", timeout_seconds=60, record_result=False,
+    )
+    registry.register(
+        "email_send", "Envía un correo a to (dirección) con subject y body. El usuario lo aprueba antes.",
+        {"type": "object", "properties": {"to": {"type": "string", "minLength": 3, "maxLength": 200},
+                                          "subject": {"type": "string", "maxLength": 200},
+                                          "body": {"type": "string", "minLength": 1, "maxLength": 5000},
+                                          "account": cuenta},
+         "required": ["to", "subject", "body"], "additionalProperties": False},
+        jarvis_correo.enviar_correo, risk=ToolRisk.HIGH, requires_confirmation=True, label="Enviar un correo",
+        timeout_seconds=60, record_result=False,
+    )
+    registry.register(
+        "calendar_events", "Dice los eventos del calendario desde hoy hasta days días (1 = hoy, 2 = hoy y mañana).",
+        {"type": "object", "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 31}, "account": cuenta},
+         "required": [], "additionalProperties": False},
+        jarvis_correo.proximos_eventos, label="Ver el calendario", timeout_seconds=60, record_result=False,
+    )
+    registry.register(
+        "calendar_create", "Agenda un evento: title, start («AAAA-MM-DD HH:MM», hora local) y minutes de duración.",
+        {"type": "object", "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 200},
+                                          "start": {"type": "string", "minLength": 16, "maxLength": 19},
+                                          "minutes": {"type": "integer", "minimum": 5, "maximum": 1440},
+                                          "account": cuenta},
+         "required": ["title", "start"], "additionalProperties": False},
+        jarvis_correo.crear_evento, risk=ToolRisk.MEDIUM, requires_confirmation=True, label="Agendar un evento",
+        timeout_seconds=60,
+    )
+    registry.register(
+        "connect_account", "Conecta la cuenta de Google (Gmail y Calendar) o de Outlook: abre el navegador para autorizar.",
+        {"type": "object", "properties": {"account": {"type": "string", "enum": list(jarvis_correo.CUENTAS)}},
+         "required": ["account"], "additionalProperties": False},
+        lambda account: host._tool_connect_account(account), risk=ToolRisk.MEDIUM, label="Conectar una cuenta",
+        timeout_seconds=15,
     )
 
 
@@ -596,10 +687,10 @@ def crear_registro_herramientas(
     )
     registry.register(
         "open_new_browser_tab",
-        "Abre una pestaña nueva en Brave.",
+        "Abre una pestaña nueva en Brave; con window=true, una ventana nueva (private=true: de incógnito).",
         {
             "type": "object",
-            "properties": {},
+            "properties": {"window": {"type": "boolean"}, "private": {"type": "boolean"}},
             "required": [],
             "additionalProperties": False,
         },
@@ -1141,12 +1232,15 @@ def crear_registro_herramientas(
     _registrar_control_de_ventanas(registry, host)
     _registrar_ajustes(registry, verificadores)
     _registrar_doctor(registry)
+    _registrar_red(registry)
     _registrar_scripts(registry)
     _registrar_archivos(registry, host)
     _registrar_winget(registry)
     _registrar_documentos(registry, host)
     _registrar_brave(registry)
     _registrar_grabaciones(registry, host)
+    _registrar_whatsapp(registry)
+    _registrar_correo(registry, host)
     import jarvis_botones
     import jarvis_modo_juego
 

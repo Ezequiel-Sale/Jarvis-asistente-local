@@ -26,6 +26,8 @@ ALIAS = {
     "visual studio code": ("code",), "vscode": ("code",), "code": ("code",),
     "obs": ("obs64", "obs"), "terminal": ("windowsterminal",), "notepad": ("notepad",),
     "bloc de notas": ("notepad",),
+    # 2026-11-20: la app de escritorio de Claude (con Claude Code adentro) es claude.exe.
+    "claude": ("claude",), "claude code": ("claude",), "claude desktop": ("claude",),
 }
 TODO = {"todo", "todas", "todas las ventanas", "todo lo abierto"}
 # «esto / eso»: la ventana bajo el puntero si se apuntó con el dedo hace poco (fase 7 de gestos,
@@ -279,6 +281,78 @@ def listar_ventanas() -> list[Ventana]:
     return encontradas
 
 
+WS_CAPTION = 0x00C00000
+SW_SHOW_OCULTA = 5
+
+
+def listar_ocultas() -> list[Ventana]:
+    """Ventanas principales ocultas con su ícono en la bandeja (WhatsApp, Discord, Steam… al tocar la X).
+
+    Solo las que tienen barra de título, nombre y un tamaño de ventana real: las ocultas sin título
+    son ventanas internas de los programas."""
+    user32 = _user32()
+    encontradas: list[Ventana] = []
+    callback_t = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def recolectar(hwnd, _lparam):
+        try:
+            if user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, 4):  # GW_OWNER
+                return True
+            if user32.GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW:
+                return True
+            if (user32.GetWindowLongW(hwnd, -16) & WS_CAPTION) != WS_CAPTION:  # GWL_STYLE
+                return True
+            r = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+            if r.right - r.left < 200 or r.bottom - r.top < 150:
+                return True
+            largo = user32.GetWindowTextLengthW(hwnd)
+            if not largo:
+                return True
+            titulo = ctypes.create_unicode_buffer(largo + 1)
+            user32.GetWindowTextW(hwnd, titulo, largo + 1)
+            if titulo.value.lower().endswith(".exe"):  # consolas ocultas (ollama, wslhost…)
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            encontradas.append(Ventana(int(hwnd), titulo.value, _programa(pid.value), pid.value))
+        except Exception:
+            logging.debug("No se pudo leer una ventana oculta.", exc_info=True)
+        return True
+
+    user32.EnumWindows(callback_t(recolectar), 0)
+    return encontradas
+
+
+def sacar_de_la_bandeja(app: str, *, ocultas=None, mostrar=None) -> list[Ventana]:
+    """Si ``app`` no tiene ventana a la vista pero sí una oculta en la bandeja, la muestra.
+
+    2026-11-20: «traé WhatsApp al frente» decía «No encontré ninguna ventana abierta» porque
+    WhatsApp estaba en la bandeja (oculto). Devuelve las ventanas que mostró."""
+    if nombre_app(app) in ACTIVA:
+        return []
+    elegidas = elegir(listar_ocultas() if ocultas is None else ocultas, app, os.getpid())[:1]
+    mostrar = mostrar or (lambda hwnd: _user32().ShowWindow(hwnd, SW_SHOW_OCULTA))
+    for ventana in elegidas:
+        mostrar(ventana.hwnd)
+        logging.info("Saqué de la bandeja la ventana de %s.", ventana.programa or ventana.titulo)
+    return elegidas
+
+
+def _elegir_o_de_la_bandeja(app: str) -> tuple[list[Ventana], list[Ventana]]:
+    """(ventanas, elegidas) de ``app``; si no hay ninguna a la vista, la busca en la bandeja."""
+    import time
+
+    ventanas = listar_ventanas()
+    propio = os.getpid()
+    elegidas = ventana_activa(ventanas, propio) if nombre_app(app) in ACTIVA else elegir(ventanas, app, propio)
+    if not elegidas and sacar_de_la_bandeja(app):
+        time.sleep(0.3)
+        ventanas = listar_ventanas()
+        elegidas = elegir(ventanas, app, propio)
+    return ventanas, elegidas
+
+
 def ventana_activa(ventanas: list[Ventana], propio_pid: int) -> list[Ventana]:
     """La ventana bajo el dedo si se apuntó hace poco (también Jarvis, si se lo señala); si no, la
     de primer plano y, si es Jarvis, la siguiente (EnumWindows va en orden Z)."""
@@ -379,9 +453,7 @@ def colocar(ventana: Ventana, posicion: str, monitor=None) -> bool:
 
 def colocar_ventana(app: str, posicion: str, monitor=None) -> str:
     """La primera ventana de ``app`` (la de más arriba) en ``posicion``; devuelve su programa."""
-    ventanas = listar_ventanas()
-    propio = os.getpid()
-    elegidas = ventana_activa(ventanas, propio) if nombre_app(app) in ACTIVA else elegir(ventanas, app, propio)
+    _ventanas, elegidas = _elegir_o_de_la_bandeja(app)
     if not elegidas:
         raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
     ventana = elegidas[0]
@@ -392,9 +464,7 @@ def colocar_ventana(app: str, posicion: str, monitor=None) -> str:
 
 def mover_ventanas(app: str, monitor) -> tuple[int, int, list[str]]:
     """(movidas, total, programas) de las ventanas de ``app`` hacia ``monitor``."""
-    ventanas = listar_ventanas()
-    propio = os.getpid()
-    elegidas = ventana_activa(ventanas, propio) if nombre_app(app) in ACTIVA else elegir(ventanas, app, propio)
+    _ventanas, elegidas = _elegir_o_de_la_bandeja(app)
     if not elegidas:
         raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
     movidas = 0
@@ -463,6 +533,7 @@ def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = No
     """
     if accion not in ACCIONES_ESTADO:
         raise ErrorVentana(f"Acción de ventana no válida: {accion}.")
+    reales = ventanas is None  # las pruebas pasan sus ventanas: ahí no se mira la bandeja
     ventanas = listar_ventanas() if ventanas is None else ventanas
     propio = os.getpid() if propio_pid is None else propio_pid
     clave = nombre_app(app)
@@ -470,6 +541,13 @@ def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = No
         elegidas = ventana_activa(ventanas, propio)
     else:
         elegidas = elegir(ventanas, app, propio)
+    if not elegidas and accion in ("window_focus", "window_restore", "window_maximize") and reales:
+        # Oculta en la bandeja (WhatsApp, Discord… al tocar la X): se muestra y sigue la acción.
+        if sacar_de_la_bandeja(app):
+            import time
+
+            time.sleep(0.3)
+            elegidas = elegir(listar_ventanas(), app, propio)
     if not elegidas:
         raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
     if accion == "window_focus":
@@ -543,3 +621,30 @@ def navegar_historial(accion: str, *, enviar=None, esperar: float = 0.25) -> str
     return {"back": "Volví a la página anterior en Brave.",
             "forward": "Fui a la página siguiente en Brave.",
             "reload": "Recargué la página en Brave (F5)."}[accion]
+
+
+WM_CLOSE = 0x0010
+
+
+def ocultar_docker_desktop(*, esperar: float = 25.0, listar=None, cerrar=None, dormir=None) -> int:
+    """Cierra la ventana de Docker Desktop (sigue corriendo en la bandeja, como al tocar la X).
+
+    2026-11-20, pedido del usuario: cuando Docker arranca y los contenedores de Jarvis están
+    listos, que la ventana no quede abierta. La ventana puede aparecer un poco después de que los
+    contenedores respondan, así que se espera hasta ``esperar`` segundos. Devuelve cuántas cerró."""
+    import time
+
+    listar = listar or listar_ventanas
+    cerrar = cerrar or (lambda hwnd: ctypes.windll.user32.PostMessageW(hwnd, WM_CLOSE, 0, 0))
+    dormir = dormir or time.sleep
+    fin = time.monotonic() + esperar
+    while True:
+        ventanas = [v for v in listar() if v.programa == "docker desktop"]
+        for ventana in ventanas:
+            cerrar(ventana.hwnd)
+        if ventanas:
+            logging.info("Cerré la ventana de Docker Desktop: queda en la bandeja.")
+            return len(ventanas)
+        if time.monotonic() >= fin:
+            return 0
+        dormir(1.0)

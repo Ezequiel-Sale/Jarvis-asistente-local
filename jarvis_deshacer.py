@@ -89,6 +89,13 @@ def inverso(herramienta: str, args: Mapping[str, object], leer: Lectores) -> Des
         nombre = jarvis_ajustes.NOMBRES.get(ajuste, ajuste)
         return Deshacer(f"Volver a {'activar' if previo else 'desactivar'} {nombre}", "windows_setting",
                         {"setting": ajuste, "state": "on" if previo else "off"})
+    if herramienta == "network_adapter":
+        nombre = str(args.get("name", ""))
+        previo = bool(leer["placa"](nombre))
+        if previo == (args.get("state") == "on"):
+            return None
+        return Deshacer(f"Volver a {'habilitar' if previo else 'deshabilitar'} la placa «{nombre}»", "network_adapter",
+                        {"name": nombre, "state": "on" if previo else "off"})
     if herramienta == "startup_apps":
         if args.get("action") not in ("enable", "disable"):
             return None
@@ -119,7 +126,7 @@ def inverso(herramienta: str, args: Mapping[str, object], leer: Lectores) -> Des
 REVERSIBLES = frozenset({
     "set_system_volume", "set_app_volume", "set_output_device", "mute_browser_tab", "media_control",
     "video_fullscreen", "video_theater", "set_theme", "window_control", "configure_display",
-    "windows_setting", "startup_apps",
+    "windows_setting", "startup_apps", "network_adapter",
 })
 
 

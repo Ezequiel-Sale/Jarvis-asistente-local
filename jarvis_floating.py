@@ -18,6 +18,8 @@ import tkinter as tk
 import jarvis_theme
 
 ANCHO = 380
+ANCHO_CON_PASOS = 440
+MAX_PASOS = 8
 MARGEN = 16
 FUNDIDO_PASOS = 8
 FUNDIDO_MS = 20
@@ -71,6 +73,8 @@ class AvisoFlotante:
         self._usuario = ""
         self._respuesta = ""
         self._pregunta: tuple[str, object, object] | None = None
+        self._pasos: list[tuple[str, str, str]] = []  # (texto, riesgo, color del tema)
+        self._botones = ("SÍ", "NO")
 
     # --- API -------------------------------------------------------------------
 
@@ -88,9 +92,14 @@ class AvisoFlotante:
         self._estado = ""
         self._mostrar(fijo=False, segundos=segundos_visible(self._respuesta))
 
-    def pregunta(self, texto: str, al_si, al_no) -> None:
-        """Confirmación pendiente: queda visible hasta que se responda."""
+    def pregunta(self, texto: str, al_si, al_no, *, pasos=(), si: str = "SÍ", no: str = "NO") -> None:
+        """Confirmación pendiente: queda visible hasta que se responda.
+
+        ``pasos``: (texto, riesgo, color) de cada paso de un plan, para aprobarlo o cancelarlo sin
+        abrir Jarvis (2026-11-20, pedido del usuario: con Jarvis minimizado solo se veía la pregunta)."""
         self._pregunta = (recortar(texto, 160), al_si, al_no)
+        self._pasos = [(recortar(p[0], 120), p[1], p[2]) for p in pasos]
+        self._botones = (si, no)
         self._respuesta = ""  # la respuesta anterior ya no viene al caso
         self._mostrar(fijo=True)
 
@@ -98,6 +107,8 @@ class AvisoFlotante:
         if self._pregunta is None:
             return
         self._pregunta = None
+        self._pasos = []
+        self._botones = ("SÍ", "NO")
         if resultado:
             self._respuesta = resultado
         self._mostrar(fijo=False, segundos=3.0)
@@ -162,26 +173,44 @@ class AvisoFlotante:
             textos.append((self._respuesta, t.TEXT, ("Segoe UI", 10)))
         if self._pregunta:
             textos.append((self._pregunta[0], t.TEXT, ("Segoe UI", 10, "bold")))
+        ancho = ANCHO_CON_PASOS if self._pregunta and self._pasos else ANCHO
         for texto, fg, fuente in textos:
             etiqueta = tk.Label(marco, text=texto, bg=t.PANEL, fg=fg, font=fuente, justify="left",
-                                anchor="w", wraplength=ANCHO - 30, cursor="hand2")
+                                anchor="w", wraplength=ancho - 30, cursor="hand2")
             etiqueta.pack(fill="x", pady=(6, 0))
             etiqueta.bind("<Button-1>", lambda _e: self.al_abrir())
+        if self._pregunta and self._pasos:
+            lista = tk.Frame(marco, bg=t.PANEL_LIGHT, padx=8, pady=6)
+            lista.pack(fill="x", pady=(6, 0))
+            for n, (texto, riesgo, color) in enumerate(self._pasos[:MAX_PASOS], start=1):
+                fila = tk.Frame(lista, bg=t.PANEL_LIGHT)
+                fila.pack(fill="x", pady=1)
+                tk.Label(fila, text=f"{n}", bg=t.PANEL_LIGHT, fg=t.CYAN, font=("Consolas", 9, "bold"),
+                         width=2, anchor="nw").pack(side="left", anchor="n")
+                if riesgo:
+                    tk.Label(fila, text=riesgo, bg=t.PANEL_LIGHT, fg=getattr(t, color, t.MUTED),
+                             font=("Consolas", 7, "bold")).pack(side="right", anchor="n", padx=(6, 0))
+                tk.Label(fila, text=texto, bg=t.PANEL_LIGHT, fg=t.TEXT, font=("Segoe UI", 9), justify="left",
+                         anchor="w", wraplength=ancho - 150).pack(side="left", fill="x")
+            if len(self._pasos) > MAX_PASOS:
+                tk.Label(lista, text=f"… y {len(self._pasos) - MAX_PASOS} pasos más (abrí Jarvis para verlos)",
+                         bg=t.PANEL_LIGHT, fg=t.MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
         if self._pregunta:
             _texto, al_si, al_no = self._pregunta
             botones = tk.Frame(marco, bg=t.PANEL)
             botones.pack(fill="x", pady=(8, 0))
             estilo = dict(relief="flat", padx=12, pady=5, font=("Consolas", 9, "bold"), cursor="hand2",
                           takefocus=0)
-            tk.Button(botones, text="SÍ", command=al_si, bg=t.CYAN, fg=t.BG, **estilo).pack(side="left")
-            tk.Button(botones, text="NO", command=al_no, bg=t.PANEL_LIGHT, fg=t.TEXT, **estilo).pack(
+            si, no = self._botones
+            tk.Button(botones, text=si, command=al_si, bg=t.CYAN, fg=t.BG, **estilo).pack(side="left")
+            tk.Button(botones, text=no, command=al_no, bg=t.PANEL_LIGHT, fg=t.TEXT, **estilo).pack(
                 side="left", padx=(6, 0))
             tk.Label(botones, text="o di «sí» / «no»", bg=t.PANEL, fg=t.MUTED,
                      font=("Segoe UI", 8)).pack(side="left", padx=(10, 0))
         ventana.update_idletasks()
         alto = ventana.winfo_reqheight()
         izq, arr, der, abj = area_de_trabajo(self.root)
-        ventana.geometry(f"{ANCHO}x{alto}+{der - ANCHO - MARGEN}+{abj - alto - MARGEN}")
+        ventana.geometry(f"{ancho}x{alto}+{der - ancho - MARGEN}+{abj - alto - MARGEN}")
         nueva = ventana.state() == "withdrawn"
         if nueva:
             ventana.deiconify()

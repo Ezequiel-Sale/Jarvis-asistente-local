@@ -132,7 +132,9 @@ MAXIMO_VOZ_RESPUESTA = 2.5
 # Escucha continua: frases sin «Hey Jarvis».
 PREVIO_FRASE = 5  # bloques (~0,4 s) antes de que la energía suba: el inicio de la palabra
 SILENCIO_FRASE = 1.3  # como en las órdenes tras «Hey Jarvis»
-MAXIMO_FRASE = 12.0  # las órdenes duran mucho menos; más es sonido de fondo (antes 20 s)
+# 2026-11-20: 12 s cortaba las órdenes de varios pasos («traé Jarvis al frente, después…»); si aun
+# así se corta, la app une el trozo siguiente (``continuous_utterance`` con cortada=True).
+MAXIMO_FRASE = 25.0
 MINIMO_VOZ_FRASE = 0.35  # menos es un golpe, una tos o un clic
 
 
@@ -189,8 +191,11 @@ def reproducir_pitido() -> None:
 
 
 def disponible() -> bool:
+    import jarvis_core
+
     try:
-        import openwakeword  # noqa: F401
+        with jarvis_core.CERROJO_CARGA_NATIVA:  # de a una con MediaPipe y .NET (ver jarvis_core)
+            import openwakeword  # noqa: F401
     except ImportError:
         return False
     return True
@@ -227,12 +232,36 @@ class DetectorPalabraActivacion(threading.Thread):
     def stop(self) -> None:
         self._stop_event.set()
 
+    REINTENTOS_MICROFONO = 30  # seguidos sin lograr escuchar (~1 min): ahí sí se avisa del error
+    ESPERA_REINTENTO = 2.0
+    ESTABLE_DESDE = 30.0  # s escuchando bien para volver a contar los fallos desde cero
+
     def run(self) -> None:
-        try:
-            self._escuchar()
-        except Exception as error:
-            logging.exception("La palabra de activación dejó de funcionar.")
-            self.events.put(("wakeword_error", str(error)))
+        """Escucha; si el micrófono se cae (2026-11-23: al conectar los auriculares Windows cerró el
+        stream, «Stream not open», y la escucha quedaba muerta hasta reiniciar Jarvis) lo vuelve a
+        abrir, con PyAudio nuevo para que vea los dispositivos de ahora."""
+        fallos = 0
+        while not self._stop_event.is_set():
+            self._escuchando_desde = None
+            try:
+                self._escuchar()
+                return
+            except OSError as error:
+                desde = getattr(self, "_escuchando_desde", None)
+                if desde is not None and time.monotonic() - desde >= self.ESTABLE_DESDE:
+                    fallos = 0
+                fallos += 1
+                if fallos >= self.REINTENTOS_MICROFONO:
+                    logging.exception("La palabra de activación dejó de funcionar.")
+                    self.events.put(("wakeword_error", str(error)))
+                    return
+                logging.warning("Se perdió el micrófono (%s); lo vuelvo a abrir en %.0f s (intento %s).",
+                                error, self.ESPERA_REINTENTO, fallos)
+                self._stop_event.wait(self.ESPERA_REINTENTO)
+            except Exception as error:
+                logging.exception("La palabra de activación dejó de funcionar.")
+                self.events.put(("wakeword_error", str(error)))
+                return
 
     def _escuchar(self) -> None:
         import numpy as np
@@ -241,13 +270,18 @@ class DetectorPalabraActivacion(threading.Thread):
 
         modelo = Model(wakeword_models=[MODELO], inference_framework="onnx")
         audio = pyaudio.PyAudio()
-        stream = audio.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=RATE,
-            input=True,
-            frames_per_buffer=BLOQUE,
-        )
+        try:
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=RATE,
+                input=True,
+                frames_per_buffer=BLOQUE,
+            )
+        except Exception:
+            audio.terminate()
+            raise
+        self._escuchando_desde = time.monotonic()
         logging.info("Palabra de activación «Hey Jarvis» lista.")
         self.events.put(("wakeword_ready",))
         energias: deque[float] = deque(maxlen=int(5 / SEGUNDOS_POR_BLOQUE))
@@ -286,7 +320,8 @@ class DetectorPalabraActivacion(threading.Thread):
                     ruta = self._grabar_frase(stream, ruido, [*previos, bloque])
                     previos.clear()
                     if ruta is not None:
-                        self.events.put(("continuous_utterance", ruta))
+                        self.events.put(("continuous_utterance", ruta, True) if getattr(self, "ultima_cortada", False)
+                                        else ("continuous_utterance", ruta))
                     continue
                 previos.clear()
                 energias.append(energia)
@@ -308,9 +343,11 @@ class DetectorPalabraActivacion(threading.Thread):
                 else:
                     self.events.put(("wakeword_command", ruta))
         finally:
-            stream.stop_stream()
-            stream.close()
-            audio.terminate()
+            for cerrar in (stream.stop_stream, stream.close, audio.terminate):
+                try:  # con el micrófono ya caído, stop_stream también falla («Stream not open»)
+                    cerrar()
+                except Exception:
+                    logging.debug("No se pudo cerrar el micrófono caído.", exc_info=True)
 
     def _grabar_respuesta(self, stream, ruido: float, previos: list[bytes]) -> str | None:
         """Graba una respuesta corta hasta 0,8 s de silencio (máx. 4 s).
@@ -340,7 +377,7 @@ class DetectorPalabraActivacion(threading.Thread):
         return guardar_wav(bloques)
 
     def _grabar_frase(self, stream, ruido: float, previos: list[bytes]) -> str | None:
-        """Escucha continua: graba la frase hasta 1,1 s de silencio (máx. 20 s).
+        """Escucha continua: graba la frase hasta el silencio (máx. ``MAXIMO_FRASE``).
 
         Se descarta si la voz dura menos de 0,35 s (un golpe, una tos, un clic).
         """
@@ -355,9 +392,13 @@ class DetectorPalabraActivacion(threading.Thread):
             bloques.append(bloque)
             terminado = segmentador.agregar(rms(bloque))
         voz = len(segmentador._voz) * SEGUNDOS_POR_BLOQUE
+        # Se cortó por el tope mientras seguías hablando (no por un silencio): el resto viene después.
+        self.ultima_cortada = (segmentador.duracion >= MAXIMO_FRASE - _EPS
+                               and segmentador._silencio < SILENCIO_FRASE - _EPS)
         if voz < MINIMO_VOZ_FRASE - _EPS:
             return None
-        logging.info("Frase grabada (escucha continua): %.1f s, voz %.1f s.", segmentador.duracion, voz)
+        logging.info("Frase grabada (escucha continua): %.1f s, voz %.1f s%s.", segmentador.duracion, voz,
+                     " (cortada por el tope: sigue en la próxima)" if self.ultima_cortada else "")
         return guardar_wav(bloques)
 
     def _grabar_orden(self, stream, ruido: float) -> str | None:

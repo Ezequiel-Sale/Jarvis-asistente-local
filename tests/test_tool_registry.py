@@ -29,7 +29,7 @@ class _TestHost:
     def _tool_set_jarvis_audio(self, enabled: bool) -> str:
         return self._record(("audio", enabled), "audio set")
 
-    def _tool_open_new_browser_tab(self) -> str:
+    def _tool_open_new_browser_tab(self, window: bool = False, private: bool = False) -> str:
         return self._record(("new_tab",), "tab opened")
 
     def _tool_navigate_browser(self, url: str) -> str:
@@ -137,7 +137,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 78)
+        self.assertEqual(len(tools), 88)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -152,6 +152,7 @@ class ToolRegistryTests(unittest.TestCase):
                 "startup_apps",
                 "open_settings",
                 "pc_doctor",
+                "network_adapter",
                 "run_powershell",
                 "file_action",
                 "organize_folder",
@@ -166,6 +167,15 @@ class ToolRegistryTests(unittest.TestCase):
                 "browser_read_page",
                 "browser_page_action",
                 "replay_recording",
+                "whatsapp_unread",
+                "whatsapp_read",
+                "whatsapp_send",
+                "email_unread",
+                "email_read",
+                "email_send",
+                "calendar_events",
+                "calendar_create",
+                "connect_account",
                 "power_control",
                 "get_current_datetime",
                 "morning_briefing",

@@ -22,6 +22,8 @@ import jarvis_control
 import jarvis_ajustes
 import jarvis_doctor
 import jarvis_gestor_archivos
+import jarvis_correo
+import jarvis_whatsapp
 import jarvis_winget
 import jarvis_piloto
 import jarvis_screen_actions
@@ -62,6 +64,7 @@ from jarvis_commands import (
     detectar_comando_multimedia,
     detectar_comando_navegacion_web,
     detectar_comando_nueva_pestana,
+    detectar_comando_nueva_ventana,
     detectar_comando_tema,
     detectar_comando_ventanas,
     detectar_comando_volumen,
@@ -98,8 +101,10 @@ class OrdenesMixin:
                         or jarvis_tv.detectar(texto) or jarvis_apuntar.detectar(texto)
                         or jarvis_ajustes.detectar(texto) or jarvis_doctor.detectar(texto)
                         or jarvis_gestor_archivos.detectar(texto) or jarvis_winget.detectar(texto)
+                        or jarvis_whatsapp.detectar(texto) or jarvis_correo.detectar(texto)
                         or jarvis_piloto.detectar(texto) or jarvis_control.detectar(texto)
                         or jarvis_screen_actions.detectar_comando(texto)
+                        or detectar_comando_nueva_ventana(texto) is not None
                         or self._direct_tool_for(texto) or jarvis_routines.buscar_rutina_por_frase(texto))
         except Exception:
             logging.debug("No se pudo revisar si «…» es una orden conocida.", exc_info=True)
@@ -187,7 +192,9 @@ class OrdenesMixin:
         ajuste = (jarvis_ajustes.detectar(text)  # «desactivá la luz nocturna», «sacá Discord del inicio»
                   or jarvis_doctor.detectar(text)  # «¿por qué se colgó la PC?», «¿están sanos los discos?»
                   or jarvis_gestor_archivos.detectar(text)  # «ordená Descargas», «pegá lo que copié antes»
-                  or jarvis_winget.detectar(text))  # «instalá VLC», «actualizá todos los programas»
+                  or jarvis_winget.detectar(text)  # «instalá VLC», «actualizá todos los programas»
+                  or jarvis_whatsapp.detectar(text)  # «¿tengo mensajes de WhatsApp?», «mandale a Juan que…»
+                  or jarvis_correo.detectar(text))  # «¿tengo correos nuevos?», «¿qué tengo hoy?»
         if ajuste is not None:
             self._start_direct_tool_action(*ajuste, text)
             return
@@ -295,6 +302,10 @@ class OrdenesMixin:
         if detectar_comando_nueva_pestana(text):
             self._start_browser_action("new_tab", "", text)
             return
+        ventana_nueva = detectar_comando_nueva_ventana(text)
+        if ventana_nueva is not None:
+            self._start_direct_tool_action("open_new_browser_tab", ventana_nueva, text)
+            return
         destination = detectar_comando_navegacion_web(text)
         if destination is not None:
             self._start_browser_action("navigate", destination, text)
@@ -378,7 +389,8 @@ class OrdenesMixin:
                 self.events.put(("system_query", *orden_tele, transcript))
                 return
             ajuste = (jarvis_ajustes.detectar(transcript) or jarvis_doctor.detectar(transcript)
-                      or jarvis_gestor_archivos.detectar(transcript) or jarvis_winget.detectar(transcript))
+                      or jarvis_gestor_archivos.detectar(transcript) or jarvis_winget.detectar(transcript)
+                      or jarvis_whatsapp.detectar(transcript) or jarvis_correo.detectar(transcript))
             if ajuste is not None:
                 self.events.put(("system_query", *ajuste, transcript))
                 return
@@ -471,6 +483,10 @@ class OrdenesMixin:
                 return
             if detectar_comando_nueva_pestana(transcript):
                 self.events.put(("browser_action", "new_tab", "", transcript))
+                return
+            ventana_nueva = detectar_comando_nueva_ventana(transcript)
+            if ventana_nueva is not None:
+                self.events.put(("system_query", "open_new_browser_tab", ventana_nueva, transcript))
                 return
             destination = detectar_comando_navegacion_web(transcript)
             if destination is not None:
@@ -768,6 +784,12 @@ class OrdenesMixin:
         "set_system_volume": "AJUSTANDO VOLUMEN…",
         "autopilot": "🧭 MANEJANDO LA PC · ESC O MOVER EL MOUSE LO FRENA",
         "ask_document": "LEYENDO EL DOCUMENTO…",
+        "whatsapp_unread": "MIRANDO WHATSAPP…",
+        "email_unread": "REVISANDO EL CORREO…",
+        "email_read": "LEYENDO EL CORREO…",
+        "calendar_events": "MIRANDO EL CALENDARIO…",
+        "whatsapp_read": "LEYENDO EL CHAT…",
+        "whatsapp_send": "MANDANDO EL WHATSAPP…",
         "replay_recording": "🎬 REPITIENDO LA TAREA GRABADA…",
         "install_program": "INSTALANDO CON WINGET…",
         "update_programs": "ACTUALIZANDO PROGRAMAS…",
@@ -986,7 +1008,9 @@ class OrdenesMixin:
             # Riesgo alto: aunque sea un comando directo, siempre se confirma.
             self.events.put(("direct_action_error", tool_name, "Cancelé la acción; el equipo sigue igual."))
             return
-        if tool_name == "autopilot" and not self._request_tool_confirmation(
+        if tool_name in ("autopilot", "whatsapp_send", "install_program", "uninstall_program", "update_programs",
+                         "network_adapter") \
+                and not self._request_tool_confirmation(
             self.tool_registry.get(tool_name), arguments
         ):
             self.events.put(("direct_action_error", tool_name, "Cancelé: no toqué nada."))

@@ -72,9 +72,16 @@ class ConfirmacionesMixin:
             daemon=True,
         ).start()
 
+    # Confirmaciones donde «solo mi voz» no se aplica. «¿Mantener esta configuración de
+    # pantallas?» (2026-11-23): un «sí» dura ~0,3 s y con tan poco audio la huella no se
+    # parece (0,15): hubo que decirlo tres veces. Ese cambio lo pidió el usuario y, sin
+    # respuesta, se deshace solo: que otra voz diga «sí» no hace daño.
+    SIN_FILTRO_DE_VOZ = frozenset({"display"})
+
     def _free_approval_worker(self, audio_path: str, kind: str, reply) -> None:
         try:
-            if self._speaker_rejected(audio_path, corta_pasa=True):  # «Solo mi voz»: otra persona no confirma
+            if kind not in ConfirmacionesMixin.SIN_FILTRO_DE_VOZ and self._speaker_rejected(audio_path, corta_pasa=True):
+                # «Solo mi voz»: otra persona no confirma
                 self.events.put(("free_approval_result", None, "", reply))
                 return
             transcript = limpiar_transcripcion_voz(core.procesar_stt(audio_path))
@@ -241,6 +248,7 @@ class ConfirmacionesMixin:
                 else "Di «sí» / «ejecutar plan» o «no», sin «Hey Jarvis». "
                 "Las acciones de riesgo alto pueden pedir confirmación adicional."
             ),
+            pasos=() if is_routine_save else [self._plan_step_summary(action) for action in actions],
         )
         self._plan_dialog = tarjeta
         tk.Label(cuerpo, text=f"Objetivo: {goal}", bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10),
@@ -286,6 +294,15 @@ class ConfirmacionesMixin:
                 justify="left", wraplength=660, anchor="w",
             ).pack(fill="x", pady=3)
         self._set_plan_voice_controls(recording=False)
+
+    @staticmethod
+    def _plan_step_summary(action: PlannedAction) -> tuple[str, str, str]:
+        """(texto, riesgo, color) de un paso para el aviso flotante: «🖥 Configurar monitores:
+        Desactivar el monitor 3», «RIESGO ALTO», «ERROR»."""
+        detalle = jarvis_cards.describir_paso(action.tool.name, dict(action.arguments))
+        texto = f"{jarvis_cards.icono(action.tool.name)} {action.tool.display_name}"
+        texto_riesgo, color = jarvis_cards.riesgo(action.tool.risk.value)
+        return (f"{texto}: {detalle}" if detalle else texto), texto_riesgo, color
 
     def _plan_step_row(self, cuerpo: tk.Widget, index: int | None, action: PlannedAction) -> None:
         """Un paso del plan en lenguaje llano: «2  🖥 Configurar monitores · RIESGO ALTO»

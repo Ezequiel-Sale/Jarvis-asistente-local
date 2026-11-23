@@ -129,7 +129,7 @@ class AppRoutingTests(unittest.TestCase):
         JarvisApp._on_continuous_utterance(host, "frase.wav")
         host._start_busy.assert_not_called()
         self.assertTrue(host._continuous_transcribing)
-        self.assertEqual(thread.call_args.kwargs["args"], ("frase.wav", False))
+        self.assertEqual(thread.call_args.kwargs["args"], ("frase.wav", False, False))
 
     @patch("audio_capture.limpiar_audio")
     @patch("threading.Thread")
@@ -319,3 +319,79 @@ class PausedPhraseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FraseCortadaTests(unittest.TestCase):
+    """2026-11-20: una orden larga se cortaba a los 12 s y el resto se descartaba como «voz ajena»."""
+
+    @patch("jarvis_wakeword.guardar_wav", return_value="larga.wav")
+    def test_recording_knows_it_was_cut(self, _guardar: Mock) -> None:
+        detector = ww.DetectorPalabraActivacion(queue.Queue(), lambda: True, continua=lambda: True)
+        self.assertGreaterEqual(ww.MAXIMO_FRASE, 25.0)
+        detector._grabar_frase(_MicrofonoFalso([_bloque(3000)] * 1000), 0.0, [_bloque(3000)])
+        self.assertTrue(detector.ultima_cortada)
+        detector._grabar_frase(_MicrofonoFalso([_bloque(3000)] * 10 + [_bloque(0)] * 40), 0.0, [_bloque(3000)])
+        self.assertFalse(detector.ultima_cortada)
+
+    @patch("threading.Thread")
+    def test_cut_phrase_waits_and_joins_the_rest_without_the_voice_filter(self, thread: Mock) -> None:
+        host = _host(_continuous_cut=False, _continuous_partial_cut=False, ESPERA_CONTINUACION=4.0)
+        host._run_continuous_command = Mock()
+        JarvisApp._on_continuous_utterance(host, "parte1.wav", cortada=True)
+        self.assertEqual(thread.call_args.kwargs["args"], ("parte1.wav", False, False))
+        JarvisApp._on_continuous_result(host, ("orden", "trae Jarvis al frente, después abre Brave y"))
+        host._run_continuous_command.assert_not_called()  # espera el resto
+        self.assertEqual(host._continuous_partial, "trae Jarvis al frente, después abre Brave y")
+        JarvisApp._on_continuous_utterance(host, "parte2.wav")
+        self.assertEqual(thread.call_args.kwargs["args"], ("parte2.wav", False, True))  # sin «solo mi voz»
+        JarvisApp._on_continuous_result(host, ("orden", "ponelo a la derecha del monitor 2"))
+        host._run_continuous_command.assert_called_once_with(
+            "trae Jarvis al frente, después abre Brave y ponelo a la derecha del monitor 2")
+
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="ponelo a la derecha")
+    def test_trusted_continuation_skips_the_speaker_check(self, _stt: Mock, _limpiar: Mock) -> None:
+        host = _host(events=queue.Queue())
+        host._speaker_clip = Mock(return_value=None)  # «no es tu voz»
+        JarvisApp._continuous_worker(host, "parte2.wav", False, True)
+        host._speaker_clip.assert_not_called()
+        self.assertEqual(host.events.get_nowait(), ("continuous_result", ("orden", "ponelo a la derecha")))
+
+
+class MicrofonoCaidoTests(unittest.TestCase):
+    """2026-11-23: al conectar los auriculares, «Stream not open» dejaba la escucha muerta."""
+
+    def detector(self):
+        eventos = queue.Queue()
+        detector = ww.DetectorPalabraActivacion(eventos, lambda: True)
+        detector.ESPERA_REINTENTO = 0
+        return detector, eventos
+
+    def test_reopens_the_microphone_after_it_drops(self) -> None:
+        detector, eventos = self.detector()
+        intentos = []
+
+        def escuchar():
+            intentos.append(1)
+            if len(intentos) < 3:
+                raise OSError("Stream not open")
+
+        detector._escuchar = escuchar
+        detector.run()
+        self.assertEqual(len(intentos), 3)
+        self.assertTrue(eventos.empty())  # sin «dejó de funcionar»
+
+    def test_gives_up_and_warns_after_many_failures(self) -> None:
+        detector, eventos = self.detector()
+        detector.REINTENTOS_MICROFONO = 3
+        detector._escuchar = Mock(side_effect=OSError("Invalid input device"))
+        detector.run()
+        self.assertEqual(detector._escuchar.call_count, 3)
+        self.assertEqual(eventos.get_nowait()[0], "wakeword_error")
+
+    def test_other_errors_still_stop(self) -> None:
+        detector, eventos = self.detector()
+        detector._escuchar = Mock(side_effect=RuntimeError("modelo roto"))
+        detector.run()
+        self.assertEqual(detector._escuchar.call_count, 1)
+        self.assertEqual(eventos.get_nowait(), ("wakeword_error", "modelo roto"))

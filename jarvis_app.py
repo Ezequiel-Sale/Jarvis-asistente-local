@@ -14,6 +14,8 @@ import jarvis_health
 import jarvis_ajustes
 import jarvis_brave
 import jarvis_red
+import jarvis_windows
+import jarvis_winget
 import jarvis_power
 import jarvis_deshacer
 import jarvis_disparadores
@@ -66,6 +68,7 @@ from jarvis_logging import capturar_errores_tk, configurar_registro
 from jarvis_single_instance import SingleInstance
 from jarvis_theme import BG, CYAN, ERROR, MUTED
 from jarvis_ui import JarvisUIMixin
+from jarvis_ui_vistas import VistasMixin
 from jarvis_app_ordenes import OrdenesMixin
 from jarvis_app_voz import VozMixin
 from jarvis_app_confirmaciones import ConfirmacionesMixin
@@ -106,6 +109,7 @@ class JarvisApp(
     TvMixin,
     HerramientasMixin,
     GestosMixin,
+    VistasMixin,
     JarvisUIMixin,
     AudioPlayerMixin,
 ):
@@ -286,6 +290,7 @@ class JarvisApp(
             "restaurar_monitores": jarvis_displays.restaurar_configuracion,
             "ajuste": jarvis_ajustes.estado,
             "inicio": jarvis_ajustes.inicio_activo,
+            "placa": jarvis_red.placa_habilitada,
         })
         self.tool_registry.antes_de_ejecutar = self.deshacer.capturar
         self.tool_registry.tras_exito = self.deshacer.anotar
@@ -359,6 +364,8 @@ class JarvisApp(
         # Antes de apagar o suspender (por Jarvis o por Windows), dejar la PC por cable para poder
         # encenderla desde el celular (pedido del 2026-11-20).
         jarvis_power.antes_de_apagar = jarvis_red.preparar_sin_fallar
+        # Barras de progreso de winget en la vista PROGRAMAS.
+        jarvis_winget.al_progreso = lambda evento: self.events.put(("winget_progreso", evento))
         jarvis_red.VigilanteApagado().start()
         self.battery_watcher = HeadsetBatteryWatcher(self.events)
         self.battery_watcher.start()
@@ -650,6 +657,10 @@ class JarvisApp(
             self.events.put(("docker_services_error", str(error)))
         else:
             self.events.put(("docker_services_ready",))
+            try:
+                jarvis_windows.ocultar_docker_desktop()  # pedido del usuario: Docker a la bandeja
+            except Exception:
+                logging.exception("No se pudo cerrar la ventana de Docker Desktop.")
             core.precalentar_stt()  # respaldo si la voz en la GPU no está disponible
         finally:
             self._docker_start_finished.set()
@@ -1233,7 +1244,7 @@ class JarvisApp(
                     elif event[0] == "speaker_rejected":
                         self._on_speaker_rejected(event[1])
                     elif event[0] == "continuous_utterance":
-                        self._on_continuous_utterance(event[1])
+                        self._on_continuous_utterance(event[1], cortada=len(event) > 2 and bool(event[2]))
                     elif event[0] == "speaker_unsure":
                         self._set_status("NO RECONOCÍ TU VOZ: REPETILO O APRETÁ F9", ERROR)
                     elif event[0] == "continuous_result":
@@ -1284,6 +1295,10 @@ class JarvisApp(
                         self._show_screen_approval(*event[1:])
                     elif event[0] == "screen_execute":
                         self._execute_screen_action(*event[1:])
+                    elif event[0] == "vista":
+                        self._render_vista(event[1], event[2])
+                    elif event[0] == "winget_progreso":
+                        self._progreso_winget(event[1])
                     elif event[0] == "grabacion":
                         self._manejar_grabacion(event[1])
                     elif event[0] == "grabacion_lista":
@@ -1306,6 +1321,7 @@ class JarvisApp(
                         self._show_direct_response(_tool_name, response)
                         self._set_idle()
                         self._mostrar_oferta_piloto()  # «control z» tras el piloto: tarjeta para revertir
+                        self._refrescar_tras_accion()  # si el botón era de una vista, se vuelve a leer
                         if _tool_name in ("configure_display", "fix_display_scaling") \
                                 and self._current_page == "ajustes":
                             self._refresh_monitor_map()
@@ -1317,6 +1333,7 @@ class JarvisApp(
                         else:
                             self._set_status("ACCIÓN CANCELADA", MUTED)
                         self._set_idle()
+                        self._refrescar_tras_accion()
                     elif event[0] == "action_result":
                         if event[1].origen in ("celular", "gestos") and event[1].exitosa:
                             # Deslizadores y botones de la pestaña Música (celular) o el scroll con
@@ -1520,6 +1537,28 @@ class JarvisApp(
             logging.exception("Tampoco se pudo recuperar del error del evento.")
 
 
+def _vigia_de_arranque(destino: Path, segundos: float = 90.0):
+    """Si el arranque no termina en ``segundos``, ``faulthandler`` escribe en ``destino`` dónde estaba
+    cada hilo. Devuelve la función que lo apaga (se llama cuando la ventana ya respondió)."""
+    import faulthandler
+
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        archivo = destino.open("w", encoding="utf-8")
+        archivo.write(f"Arranque del {time.strftime('%Y-%m-%d %H:%M:%S')}: si hay pilas abajo, se trabó.\n")
+        archivo.flush()
+        faulthandler.dump_traceback_later(segundos, exit=False, file=archivo)
+    except (OSError, RuntimeError, ValueError):
+        logging.debug("No se pudo poner el vigía del arranque.", exc_info=True)
+        return lambda: None
+
+    def apagar() -> None:
+        faulthandler.cancel_dump_traceback_later()
+        archivo.close()
+
+    return apagar
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -1559,6 +1598,9 @@ def main() -> None:
         if not instance.acquire():
             return  # otra copia se abrió mientras tanto
 
+    # 2026-11-20: dos veces Jarvis quedó trabado al arrancar (sin CPU, el registro cortado tras el puente
+    # de Brave). Si en 90 s no termina de armarse, se escriben las pilas de todos los hilos para ver dónde.
+    vigia = _vigia_de_arranque(core.APP_DIR / "logs" / "arranque_trabado.txt")
     root = tk.Tk()
     capturar_errores_tk(root)
     resource_dir = Path(
@@ -1567,6 +1609,7 @@ def main() -> None:
     icon_path = resource_dir / "assets" / "icon.ico"
     root.iconbitmap(str(icon_path))
     app = JarvisApp(root, icon_path)
+    root.after(2000, vigia)  # ya arrancó: se apaga el vigía
     instance.start_listener(lambda: app.events.put(("tray_show",)))
     try:
         root.mainloop()

@@ -62,3 +62,5 @@ examen/resultados/
 brave_extension/config.js
 # Tareas grabadas con «mirá cómo lo hago» (pueden tener textos personales).
 grabaciones/
+# Credenciales y tokens de Google y Outlook (jarvis_correo).
+cuentas/

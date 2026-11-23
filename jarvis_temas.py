@@ -19,6 +19,8 @@ ARCHIVOS = "archivos"
 PROGRAMAS = "programas"
 DOCUMENTOS = "documentos"
 PAGINA = "pagina"
+WHATSAPP = "whatsapp"
+CORREO = "correo"
 
 # Medido 2026-11-19 (bonsai-2:27b): ocultar las de tele, GPU, monitores y rutinas empeoró casos ajenos
 # («Abrí una pestaña nueva y andá a github.com»: 3/3 bien con todas, 0/3 sin ellas). Por eso solo se
@@ -33,9 +35,9 @@ TEMAS: dict[str, tuple[frozenset[str], re.Pattern[str]]] = {
                    r"lee(?:me)?|lei|leer|leeme|que\s+dice|que\s+hay\s+en|repet\w*|grab\w*|tarea)\b"),
     ),
     AJUSTES: (
-        frozenset({"windows_setting", "startup_apps", "open_settings"}),
+        frozenset({"windows_setting", "startup_apps", "open_settings", "network_adapter"}),
         re.compile(r"\b(?:luz\s+nocturna|modo\s+(?:oscuro|claro)|tema\s+(?:oscuro|claro)|wi\s*fi|bluetooth|"
-                   r"inicio|arranqu\w*|arranca\w*|configuracion|ajustes?|windows|notificaciones|"
+                   r"inicio|arranqu\w*|arranca\w*|configuracion|ajustes?|windows|notificaciones|ethernet|cable|placa|red|"
                    r"predeterminad\w*|impresora\w*|actualizacion\w*|energia|bateria)\b"),
     ),
     DOCTOR: (
@@ -67,6 +69,16 @@ TEMAS: dict[str, tuple[frozenset[str], re.Pattern[str]]] = {
         frozenset({"browser_read_page", "browser_page_action"}),
         re.compile(r"\b(?:pagina|paginas|web|sitio|formulario|enlaces?|links?|botone?s?|brave|pestana|"
                    r"navegador|campos?|complet\w*|rellen\w*|articulo|noticia|precio|resultados?)\b"),
+    ),
+    WHATSAPP: (
+        frozenset({"whatsapp_unread", "whatsapp_read", "whatsapp_send"}),
+        re.compile(r"\b(?:whats\s*app|wasap|guasap|mensajes?|chats?|escribio|escribieron|mandale|enviale|escribile|"
+                   r"decile|contesta\w*|responde\w*)\b"),
+    ),
+    CORREO: (
+        frozenset({"email_unread", "email_read", "email_send", "calendar_events", "calendar_create", "connect_account"}),
+        re.compile(r"\b(?:correos?|mails?|emails?|gmail|outlook|hotmail|google|calendario|agenda\w*|eventos?|"
+                   r"reunion(?:es)?|turnos?|citas?|cumpleanos|que\s+tengo)\b"),
     ),
 }
 

@@ -33,6 +33,10 @@ class MonitoresMixin:
         if lote is not None and lote["previa"] is None:
             lote["antes"] = self._estado_monitores(mapa)
         try:
+            jarvis_displays.esperar_monitores(numeros, mapa)  # la tele tarda en aparecer tras prenderla
+        except Exception:
+            logging.debug("No se pudo esperar a los monitores.", exc_info=True)
+        try:
             descripcion, previa, mapa = jarvis_displays.aplicar(action, numeros, mapa)
         except jarvis_displays.YaEstaAsi as ya:
             return str(ya)  # «El monitor 2 ya está desactivado.»: nada que confirmar

@@ -89,6 +89,34 @@ def preparar_para_encender(*, leer=interfaces, netsh=_netsh, dormir=time.sleep, 
     return "Ya estaba conectada por cable: la vas a poder encender desde el celular."
 
 
+def placa_habilitada(name: str, *, leer=interfaces) -> bool:
+    for placa in leer():
+        if placa.nombre.casefold() == (name or "").casefold():
+            return placa.habilitada
+    raise ValueError(f"No encontré la placa de red «{name}».")
+
+
+def cambiar_placa(name: str, state: str, *, leer=interfaces, netsh=_netsh, dormir=time.sleep) -> str:
+    """Handler de ``network_adapter``: habilita (on) o deshabilita (off) una placa física (2026-11-20)."""
+    if state not in ("on", "off"):
+        raise ValueError("state debe ser on u off.")
+    placa = next((p for p in leer() if p.nombre.casefold() == (name or "").casefold()), None)
+    if placa is None:
+        raise ValueError(f"No encontré la placa de red «{name}» (solo las físicas: Ethernet, Wi-Fi).")
+    activar = state == "on"
+    if placa.habilitada == activar:
+        return f"La placa «{placa.nombre}» ya estaba {'habilitada' if activar else 'deshabilitada'}."
+    resultado = netsh("interface", "set", "interface", f"name={placa.nombre}", f"admin={'enabled' if activar else 'disabled'}")
+    for _ in range(10):
+        dormir(0.5)
+        ahora = next((p for p in leer() if p.nombre == placa.nombre), placa)
+        if ahora.habilitada == activar:
+            logging.info("Placa de red %s %s.", placa.nombre, "habilitada" if activar else "deshabilitada")
+            return f"Listo: {'habilité' if activar else 'deshabilité'} la placa «{placa.nombre}»."
+    detalle = (getattr(resultado, "stdout", "") or getattr(resultado, "stderr", "") or "").strip()
+    raise RuntimeError(f"Windows no cambió la placa «{placa.nombre}». {detalle[:200]}")
+
+
 def preparar_sin_fallar() -> str:
     try:
         return preparar_para_encender()

@@ -374,3 +374,26 @@ class RealModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MantenerPantallasTests(unittest.TestCase):
+    """2026-11-23: «¿Mantener esta configuración de pantallas?» pedía decir «sí» tres veces."""
+
+    @patch("audio_capture.limpiar_audio")
+    @patch("jarvis_core.procesar_stt", return_value="Sí")
+    def test_display_keep_does_not_check_the_voice(self, _stt: Mock, _limpiar: Mock) -> None:
+        host = Mock()
+        host._speaker_rejected = Mock(return_value=True)  # un «sí» de 0,3 s no se parece a la huella
+        host._approval_decision = Mock(return_value=True)
+        reply = object()
+        JarvisApp._free_approval_worker(host, "si.wav", "display", reply)
+        host._speaker_rejected.assert_not_called()
+        host.events.put.assert_called_once_with(("free_approval_result", True, "Sí", reply))
+
+    @patch("audio_capture.limpiar_audio")
+    def test_plans_still_check_the_voice(self, _limpiar: Mock) -> None:
+        host = Mock()
+        host._speaker_rejected = Mock(return_value=True)
+        reply = object()
+        JarvisApp._free_approval_worker(host, "si.wav", "plan", reply)
+        host.events.put.assert_called_once_with(("free_approval_result", None, "", reply))

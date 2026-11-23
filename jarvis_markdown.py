@@ -122,3 +122,17 @@ def analizar(texto: str) -> list[Tramo]:
 def texto_plano(texto: str) -> str:
     """Lo que se verá, sin marcas (para medir el ancho de la burbuja)."""
     return "".join(t for t, _e, _u in analizar(texto))
+
+
+def cerrar_parcial(texto: str) -> str:
+    """Cierra lo que quedó abierto en una respuesta a medio escribir (2026-11-20): un bloque de
+    código, una negrita «**…» o un «`…» sin cerrar se verían con los símbolos hasta que llega el cierre."""
+    if texto.count("```") % 2:
+        return texto + "\n```"
+    sin_bloques = texto.replace("```", "")
+    if sin_bloques.count("**") % 2:
+        texto += "**"
+        sin_bloques += "**"
+    if sin_bloques.replace("**", "").count("`") % 2:
+        texto += "`"
+    return texto

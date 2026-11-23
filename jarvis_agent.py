@@ -43,7 +43,8 @@ PlanScope = Callable[[Sequence["PlannedAction"]], Any]
 # Al aprobar un plan completo (con cada paso a la vista), los pasos de riesgo alto no
 # vuelven a preguntar uno por uno, salvo estos, que siempre piden su propia confirmación.
 CONFIRMACION_PROPIA = frozenset({"power_control", "clean_disk", "mobile_remote_control", "screen_click",
-                                 "window_action", "run_powershell", "browser_page_action"})
+                                 "window_action", "run_powershell", "browser_page_action",
+                                 "whatsapp_send", "email_send"})
 
 
 # 2026-11-19: «Desactivá» (la frase se cortó) se volvía un plan para apagar el resumen de la mañana.
@@ -203,7 +204,9 @@ def _es_comentario(texto: str) -> bool:
 
 def _solo_consulta(nombre: str) -> bool:
     return nombre.startswith(("get_", "list_", "read_")) or nombre in {"tv_status", "web_search", "get_weather",
-                                                                             "browser_read_page", "pc_doctor", "search_documents", "search_programs"}
+                                                                             "browser_read_page", "pc_doctor", "search_documents", "search_programs",
+                                                                             "whatsapp_unread", "whatsapp_read",
+                                                                             "email_unread", "email_read", "calendar_events"}
 
 
 def _requested_action_count(text: str) -> int:

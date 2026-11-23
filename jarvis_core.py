@@ -35,6 +35,12 @@ STT_PROMPT = (
     "en Brave, monitor 1, monitor 2, haz clic, volumen, Spotify. Maximiza, agranda, minimiza, restaura, "
     "recarga la página."
 )
+# 2026-11-20: tres hilos cargaban librerías nativas a la vez al arrancar (openwakeword/scipy en el hilo
+# principal, MediaPipe/matplotlib en el de gestos y .NET para los sensores) y a veces se trababan para
+# siempre: el cerrojo del cargador de Windows y el GIL de Python esperándose (visto con el vigía del
+# arranque). Esas tres cargas se hacen de a una con este cerrojo.
+CERROJO_CARGA_NATIVA = threading.RLock()
+
 LLM_URL = "http://127.0.0.1:11434/api/generate"
 TTS_HOST = "127.0.0.1"
 TTS_PORT = 5555

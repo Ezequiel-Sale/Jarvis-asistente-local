@@ -7,6 +7,7 @@ los atributos de la app (``self.root``, ``self.events``, ``self.tool_registry``�
 
 import jarvis_buenos_dias
 import jarvis_buscar_archivos
+import jarvis_correo
 import jarvis_documentos
 import jarvis_gestor_archivos
 import jarvis_cleanup
@@ -105,6 +106,13 @@ class HerramientasMixin:
 
     def _tool_ask_document(self, path: str, question: str = "Resumilo") -> str:
         return jarvis_documentos.preguntar(self._ruta_de_resultado(path), question or "Resumilo")
+
+    def _tool_connect_account(self, account: str) -> str:
+        """Conecta Google u Outlook en segundo plano: el navegador pide la autorización."""
+        jarvis_correo.conectar(account, lambda texto: self.events.put(("answer", texto, None, 0.0)))
+        if account == "google":
+            return "Abro el navegador para que autorices tu cuenta de Google (Gmail y Calendar)."
+        return "Pido el código para conectar Outlook…"
 
     def _tool_clipboard_history(self, action: str, number: int = 2) -> str:
         return jarvis_gestor_archivos.usar_historial(self.portapapeles, action, number)
@@ -324,12 +332,15 @@ class HerramientasMixin:
         logging.info("Tema cambiado a %s (%s colores de widgets).", nombre, len(mapa))
         return f"Tema cambiado a {jarvis_theme.ETIQUETAS[nombre]}."
 
-    def _tool_open_new_browser_tab(self) -> str:
+    def _tool_open_new_browser_tab(self, window: bool = False, private: bool = False) -> str:
         brave = encontrar_brave()
         if brave is None:
             raise FileNotFoundError(
                 "No encontré Brave. Instálalo o agrega brave.exe al PATH."
             )
+        if window or private:  # 2026-11-20: ventana nueva (o de incógnito) en la sesión abierta
+            subprocess.Popen([str(brave), "--incognito" if private else "--new-window"], shell=False)
+            return "Abrí una ventana de incógnito en Brave." if private else "Abrí una ventana nueva en Brave."
         if not abrir_nueva_pestana_brave(brave):
             subprocess.Popen([str(brave), "about:blank"], shell=False)
         return "Abrí una pestaña nueva en Brave."

@@ -137,3 +137,11 @@ class ClickTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MoverEnInfinitivoTests(unittest.TestCase):
+    def test_infinitive_verbs(self):
+        """2026-11-23: «Mover Brave al monitor 1» iba a la IA y no movía nada."""
+        self.assertEqual(detectar_mover_ventana("Mover Brave al monitor 1."), ("move_window", {"app": "brave", "monitor": 1}))
+        self.assertEqual(detectar_mover_ventana("Pasar Discord a la tele"), ("move_window", {"app": "discord", "screen_name": "tv"}))
+        self.assertIsNone(detectar_mover_ventana("Poner el volumen al 30"))
