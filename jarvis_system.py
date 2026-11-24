@@ -1,8 +1,10 @@
+import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -469,7 +471,21 @@ def localizar_ejecutable_juego(nombre: str) -> tuple[str, Path]:
         raise ValueError(f"El nombre «{nombre}» coincide con varios juegos: {opciones}.")
 
     carpeta = coincidencias[0]
-    return carpeta.name, _elegir_ejecutable_juego(carpeta)
+    return carpeta.name, _ejecutable_con_cache(carpeta)
+
+
+def _ejecutable_con_cache(carpeta: Path) -> Path:
+    """El .exe de la lista de juegos guardada (``juegos_cache.json``) si la carpeta no cambió y sigue
+    ahí; si no, se busca como siempre (2026-11-23: «abrí Hookshot» recorría la carpeta cada vez)."""
+    try:
+        with _cerrojo_cache_juegos:
+            dato = _leer_cache_juegos().get("carpetas", {}).get(str(carpeta).lower())
+        guardado = _desde_cache(carpeta, dato)
+    except Exception:
+        guardado = None
+    if guardado is not None and guardado.ejecutable is not None:
+        return guardado.ejecutable
+    return _elegir_ejecutable_juego(carpeta)
 
 # Por cómo suena [2026-11-17]: Whisper escribe en español lo que oye de un nombre en inglés
 # («Project Sunboid» por Project Zomboid: 0,86 de parecido, el siguiente juego 0,48).
@@ -620,23 +636,62 @@ def _leer_apps_inicio() -> list[tuple[str, str]]:
     return [(str(d.get("Name") or ""), str(d.get("AppID") or "")) for d in datos]
 
 
-def apps_instaladas(*, leer=None, ahora: float | None = None) -> list[tuple[str, str]]:
-    """Apps del menú Inicio (se guardan 10 minutos; sin enlaces web ni desinstaladores)."""
-    global _cache_apps
-    import time as _time
+def ruta_cache_apps() -> Path:
+    import jarvis_core
 
-    ahora = _time.monotonic() if ahora is None else ahora
-    if leer is None and _cache_apps is not None and ahora - _cache_apps[0] < CACHE_APPS:
-        return _cache_apps[1]
+    return Path(jarvis_core.APP_DIR) / "apps_inicio.json"
+
+
+def _apps_en_disco() -> tuple[float, list[tuple[str, str]]] | None:
+    """(cuándo se leyó, apps) de la última lectura guardada, o None."""
+    try:
+        datos = json.loads(ruta_cache_apps().read_text(encoding="utf-8"))
+        return float(datos["cuando"]), [(str(n), str(i)) for n, i in datos["apps"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _leer_y_guardar_apps(leer=None) -> list[tuple[str, str]]:
+    global _cache_apps
     try:
         apps = (leer or _leer_apps_inicio)()
     except Exception:
         logging.warning("No se pudo leer la lista de aplicaciones del menú Inicio.", exc_info=True)
-        apps = []
+        return []
     apps = [(n, i) for n, i in apps if n and i and "://" not in i and not _NO_APPS.search(n)]
-    if leer is None:
-        _cache_apps = (ahora, apps)
+    _cache_apps = (time.monotonic(), apps)
+    if apps:
+        destino = ruta_cache_apps()
+        try:
+            temporal = destino.with_suffix(".tmp")
+            temporal.write_text(json.dumps({"cuando": time.time(), "apps": apps}, ensure_ascii=False),
+                                encoding="utf-8")
+            temporal.replace(destino)
+        except OSError:
+            logging.debug("No se pudo guardar la lista de apps del menú Inicio.", exc_info=True)
     return apps
+
+
+def apps_instaladas(*, leer=None, ahora: float | None = None, refrescar: bool = False) -> list[tuple[str, str]]:
+    """Apps del menú Inicio (sin enlaces web ni desinstaladores).
+
+    Se guardan 10 minutos en memoria y, desde 2026-11-23, también en ``apps_inicio.json``: después
+    de arrancar Jarvis se usa la lista del disco al instante (``Get-StartApps`` tarda 0,6 s o más
+    en frío) y, si tiene más de 10 minutos, se actualiza en otro hilo. ``refrescar`` la lee ya."""
+    global _cache_apps
+
+    if leer is not None:  # tests: sin cachés
+        return [(n, i) for n, i in leer() if n and i and "://" not in i and not _NO_APPS.search(n)]
+    ahora = time.monotonic() if ahora is None else ahora
+    if not refrescar and _cache_apps is not None and ahora - _cache_apps[0] < CACHE_APPS:
+        return _cache_apps[1]
+    if not refrescar and _cache_apps is None and (guardadas := _apps_en_disco()) is not None:
+        cuando, apps = guardadas
+        _cache_apps = (ahora, apps)
+        if time.time() - cuando > CACHE_APPS:
+            threading.Thread(target=_leer_y_guardar_apps, name="JarvisAppsInicio", daemon=True).start()
+        return apps
+    return _leer_y_guardar_apps()
 
 
 def buscar_app(nombre: str, apps: list[tuple[str, str]]) -> tuple[str, str] | None:
@@ -675,6 +730,8 @@ def buscar_app(nombre: str, apps: list[tuple[str, str]]) -> tuple[str, str] | No
 def abrir_app(name: str) -> str:
     """Abre una app instalada por su nombre del menú Inicio (Tienda o escritorio)."""
     encontrada = buscar_app(name, apps_instaladas())
+    if encontrada is None:  # quizá se instaló después de la lista guardada
+        encontrada = buscar_app(name, apps_instaladas(refrescar=True))
     if encontrada is None:
         raise FileNotFoundError(f"No encontré la aplicación «{name}» en el menú Inicio.")
     nombre, app_id = encontrada
@@ -698,12 +755,12 @@ class JuegoEncontrado:
     problema: str | None = None  # por qué no se puede abrir (sin .exe, varios posibles…)
 
 
-def listar_juegos(raices: list[Path] | None = None) -> list[JuegoEncontrado]:
-    """Juegos de ``carpetas_juegos()`` con el .exe que se abriría, en el mismo orden de
-    prioridad que el lanzador (un juego repetido en otro disco aparece una vez)."""
+def _candidatas_juegos(raices: list[Path]) -> list[Path]:
+    """Las carpetas de juego de cada raíz, en orden de prioridad y sin repetir un juego que esté
+    en dos discos. Solo lista las raíces (rápido); no entra en cada juego."""
     vistos: set[str] = set()
-    juegos: list[JuegoEncontrado] = []
-    for raiz in carpetas_juegos() if raices is None else raices:
+    candidatas: list[Path] = []
+    for raiz in raices:
         try:
             carpetas = sorted((c for c in raiz.iterdir() if c.is_dir()), key=lambda c: c.name.casefold())
         except OSError:
@@ -713,8 +770,123 @@ def listar_juegos(raices: list[Path] | None = None) -> list[JuegoEncontrado]:
             if carpeta.name.lower() in CARPETAS_NO_JUEGO or clave in vistos:
                 continue
             vistos.add(clave)
-            try:
-                juegos.append(JuegoEncontrado(carpeta.name, carpeta, _elegir_ejecutable_juego(carpeta)))
-            except (OSError, ValueError) as error:
-                juegos.append(JuegoEncontrado(carpeta.name, carpeta, None, str(error)))
+            candidatas.append(carpeta)
+    return candidatas
+
+
+def _resolver_juego(carpeta: Path) -> JuegoEncontrado:
+    try:
+        return JuegoEncontrado(carpeta.name, carpeta, _elegir_ejecutable_juego(carpeta))
+    except (OSError, ValueError) as error:
+        return JuegoEncontrado(carpeta.name, carpeta, None, str(error))
+
+
+def _ordenar_juegos(juegos: list[JuegoEncontrado]) -> list[JuegoEncontrado]:
     return sorted(juegos, key=lambda j: (j.ejecutable is None, j.nombre.casefold()))
+
+
+# --- Caché de la lista de juegos (2026-11-23, pedido del usuario: tardaba al arrancar Jarvis) ---
+# Elegir el .exe recorre toda la carpeta de cada juego (``os.walk``); con los discos fríos al
+# encender la PC eso tarda. Se guarda lo encontrado por carpeta con la fecha de modificación
+# de la carpeta: si no cambió y el .exe sigue ahí, no se vuelve a recorrer. Lo que sí cambió se
+# recorre en paralelo (un hilo por carpeta). ⟳ ACTUALIZAR (``usar_cache=False``) recorre todo.
+_cerrojo_cache_juegos = threading.Lock()
+
+
+def ruta_cache_juegos() -> Path:
+    import jarvis_core
+
+    return Path(jarvis_core.APP_DIR) / "juegos_cache.json"
+
+
+def _leer_cache_juegos() -> dict:
+    try:
+        datos = json.loads(ruta_cache_juegos().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return datos if isinstance(datos, dict) and isinstance(datos.get("carpetas"), dict) else {}
+
+
+def _guardar_cache_juegos(entradas: dict[str, dict], orden: list[str]) -> None:
+    destino = ruta_cache_juegos()
+    temporal = destino.with_suffix(".tmp")
+    try:
+        temporal.write_text(json.dumps({"orden": orden, "carpetas": entradas}, ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+        temporal.replace(destino)
+    except OSError:
+        logging.debug("No se pudo guardar la caché de juegos.", exc_info=True)
+
+
+def _desde_cache(carpeta: Path, dato: dict | None) -> JuegoEncontrado | None:
+    """El juego guardado, si la carpeta no cambió y su .exe sigue existiendo; si no, None."""
+    if not isinstance(dato, dict):
+        return None
+    try:
+        if carpeta.stat().st_mtime != dato.get("mtime"):
+            return None
+    except OSError:
+        return None
+    ejecutable = Path(dato["ejecutable"]) if dato.get("ejecutable") else None
+    if ejecutable is not None and not ejecutable.is_file():
+        return None
+    return JuegoEncontrado(carpeta.name, carpeta, ejecutable, dato.get("problema"))
+
+
+def juegos_guardados() -> list[JuegoEncontrado] | None:
+    """La última lista guardada, sin tocar los discos (para mostrar algo al instante); None si no hay."""
+    with _cerrojo_cache_juegos:
+        datos = _leer_cache_juegos()
+    if not datos:
+        return None
+    juegos = []
+    for clave in datos.get("orden", []):
+        dato = datos["carpetas"].get(clave)
+        if not isinstance(dato, dict) or not dato.get("carpeta"):
+            continue
+        carpeta = Path(dato["carpeta"])
+        ejecutable = Path(dato["ejecutable"]) if dato.get("ejecutable") else None
+        juegos.append(JuegoEncontrado(carpeta.name, carpeta, ejecutable, dato.get("problema")))
+    return _ordenar_juegos(juegos) if juegos else None
+
+
+def listar_juegos(raices: list[Path] | None = None, *, usar_cache: bool = True,
+                  hilos: int = 6) -> list[JuegoEncontrado]:
+    """Juegos de ``carpetas_juegos()`` con el .exe que se abriría, en el mismo orden de
+    prioridad que el lanzador (un juego repetido en otro disco aparece una vez).
+
+    Con ``raices`` explícitas no se usa ni se guarda la caché (los tests y búsquedas puntuales)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    inicio = time.monotonic()
+    con_cache = raices is None
+    candidatas = _candidatas_juegos(carpetas_juegos() if raices is None else raices)
+    guardadas = {}
+    if con_cache and usar_cache:
+        with _cerrojo_cache_juegos:
+            guardadas = _leer_cache_juegos().get("carpetas", {})
+    resultados: list[JuegoEncontrado | None] = [_desde_cache(c, guardadas.get(str(c).lower())) for c in candidatas]
+    pendientes = [i for i, juego in enumerate(resultados) if juego is None]
+    if pendientes:
+        with ThreadPoolExecutor(max_workers=max(1, min(hilos, len(pendientes))),
+                                thread_name_prefix="JarvisJuegosBusca") as grupo:
+            for i, juego in zip(pendientes, grupo.map(_resolver_juego, [candidatas[i] for i in pendientes])):
+                resultados[i] = juego
+    juegos = [j for j in resultados if j is not None]
+    if con_cache:
+        entradas, orden = {}, []
+        for juego in juegos:
+            try:
+                mtime = juego.carpeta.stat().st_mtime
+            except OSError:
+                continue
+            clave = str(juego.carpeta).lower()
+            orden.append(clave)
+            entradas[clave] = {"carpeta": str(juego.carpeta), "mtime": mtime,
+                               "ejecutable": str(juego.ejecutable) if juego.ejecutable else None,
+                               "problema": juego.problema}
+        with _cerrojo_cache_juegos:
+            _guardar_cache_juegos(entradas, orden)
+        logging.info("Lista de juegos: %d (%d desde la caché, %d recorridos) en %.1f s.", len(juegos),
+                     len(juegos) - len(pendientes), len(pendientes), time.monotonic() - inicio)
+    return _ordenar_juegos(juegos)

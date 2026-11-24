@@ -97,6 +97,9 @@ class _TestHost:
     def _tool_set_compact_mode(self, enabled: bool) -> str:
         return self._record(("compact", enabled), "compact")
 
+    def _tool_games_widget(self, visible: bool) -> str:
+        return self._record(("games_widget", visible), "widget")
+
     def _tool_clean_disk(self, categories: list) -> str:
         return self._record(("clean", tuple(categories)), "cleaned")
 
@@ -137,7 +140,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_registered_tools_export_ollama_schemas_without_handlers(self) -> None:
         tools = self.registry.ollama_tools()
-        self.assertEqual(len(tools), 88)
+        self.assertEqual(len(tools), 89)
         self.assertTrue(all(tool["type"] == "function" for tool in tools))
         self.assertEqual(
             {tool["function"]["name"] for tool in tools},
@@ -225,6 +228,7 @@ class ToolRegistryTests(unittest.TestCase):
                 "set_theme",
                 "move_window",
                 "set_compact_mode",
+                "games_widget",
                 "set_voice",
                 "video_fullscreen",
                 "video_theater",

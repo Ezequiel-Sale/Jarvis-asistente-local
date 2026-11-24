@@ -93,14 +93,14 @@ class VozMixin:
         plan_approval = self._recording_for_plan_approval
         approval_kind = self._pending_approval_kind or "plan"
         self._recording_for_plan_approval = False
-        self.mic_button.configure(text="🎙  MIC", fg=CYAN)
+        self.mic_button.configure(text=self._texto_mic(), fg=CYAN)
         try:
             audio_path = recorder.detener()
         except Exception as error:
             logging.exception("Falló la captura del micrófono.")
             if plan_approval and self._pending_plan_reply is not None:
                 self._set_plan_voice_controls(recording=False)
-                self.mic_button.configure(state="normal", text="🎙  MIC", fg=CYAN)
+                self.mic_button.configure(state="normal", text=self._texto_mic(), fg=CYAN)
                 self._set_status("ERROR DE CAPTURA; USA LOS BOTONES", ERROR)
                 self._add_message("assistant", f"No pude capturar la confirmación: {error}")
             else:

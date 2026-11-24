@@ -50,9 +50,34 @@ TEMAS: dict[str, dict[str, str]] = {
         "ORB_ARC_B": "#2A9FA5", "ORB_ARC_C": "#13B2AC", "ORB_ARC_IDLE": "#6DA8B1",
         "ORB_CORE": "#F7FAFC", "ORB_CORE_LINE": "#BCD1DF",
     },
+    # 2026-11-23, pedido del usuario: futurista, negro, azul eléctrico y magenta neón (diseño en el
+    # lienzo «Tema futurista de Jarvis»). Además de los colores cambia íconos, botones y núcleo
+    # (``ESTILOS``).
+    "nebula": {
+        "BG": "#05070C", "PANEL": "#0A0F1A", "PANEL_LIGHT": "#0D1526", "CYAN": "#3D8BFF",
+        "CYAN_DARK": "#0F2447", "VIOLET": "#C25BFF", "TEXT": "#E6EDFA", "MUTED": "#8A97B0",
+        "ERROR": "#FF5C7A", "HOVER": "#15223D", "BORDER": "#16213A", "BORDER_STRONG": "#2A4A8A",
+        "ACCENT_ACTIVE": "#1A3A72", "ORB_IDLE": "#2B4F8F", "ORB_BRIGHT": "#A9CBFF",
+        "ORB_BRIGHT_ALT": "#E3B5FF", "ORB_RING_A": "#111A2E", "ORB_RING_B": "#1C2C4D",
+        "ORB_RING_C": "#0E1628", "ORB_RING_D": "#13203A", "ORB_TICK": "#243457",
+        "ORB_ARC_B": "#6FA8FF", "ORB_ARC_C": "#9A6BFF", "ORB_ARC_IDLE": "#34528A",
+        "ORB_CORE": "#0C1426", "ORB_CORE_LINE": "#2A3F6B",
+    },
 }
 
-ETIQUETAS = {"cian": "Cian", "mark": "Mark (rojo y dorado)", "claro": "Claro"}
+ETIQUETAS = {"cian": "Cian", "mark": "Mark (rojo y dorado)", "claro": "Claro", "nebula": "Nébula (futurista)"}
+
+# Lo que un tema cambia además de los colores. Sin entrada: lo de siempre (símbolos de texto en la
+# barra lateral, la letra de siempre en los botones, núcleo redondo).
+ESTILOS: dict[str, dict[str, object]] = {
+    "nebula": {"iconos": True, "fuente_botones": "Bahnschrift SemiBold", "nucleo": "hexagonal"},
+}
+ESTILO_POR_DEFECTO = {"iconos": False, "fuente_botones": "", "nucleo": "redondo"}
+
+
+def estilo(clave: str, tema: str | None = None) -> object:
+    """Una opción de estilo del tema actual (o de ``tema``)."""
+    return ESTILOS.get(tema or _actual, {}).get(clave, ESTILO_POR_DEFECTO[clave])
 TEMA_POR_DEFECTO = "cian"
 PREFERENCIA = "tema"
 

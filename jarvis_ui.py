@@ -236,9 +236,11 @@ class JarvisUIMixin:
             tk.Frame(sidebar, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 10))
 
             self._nav_buttons: dict[str, tk.Button] = {}
+            self._nav_textos: dict[str, str] = {}  # con su símbolo; el tema «Nébula» usa íconos de línea
             for nombre, texto in (("inicio", "⌂   INICIO"), ("chat", "▤   CHAT"), ("rutinas", "⏱   RUTINAS"),
                                   ("juegos", "🎮   JUEGOS"), ("tele", "📺   TELE"), *BOTONES_VISTAS,
                                   ("ajustes", "⚙   AJUSTES")):
+                self._nav_textos[nombre] = texto
                 boton = tk.Button(
                     sidebar, text=texto, anchor="w", command=lambda n=nombre: self._show_page(n),
                     bg=PANEL, fg=MUTED, activebackground=HOVER, activeforeground=TEXT,
@@ -281,6 +283,8 @@ class JarvisUIMixin:
             for clave, boton in self._nav_buttons.items():
                 activo = clave == nombre
                 boton.configure(bg=PANEL_LIGHT if activo else PANEL, fg=CYAN if activo else MUTED)
+            self._iconos_barra()
+            self._contornear(self._pages[nombre])
             if nombre == "chat":
                 self.new_chat_button.pack(side="right")
                 self.input.focus_set()
@@ -691,7 +695,7 @@ class JarvisUIMixin:
             botones = tk.Frame(marco, bg=PANEL)
             botones.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
             self._theme_buttons: dict[str, tk.Button] = {}
-            for nombre, etiqueta in (("cian", "CIAN"), ("mark", "MARK"), ("claro", "CLARO")):
+            for nombre, etiqueta in (("cian", "CIAN"), ("mark", "MARK"), ("claro", "CLARO"), ("nebula", "NÉBULA")):
                 boton = self._ui_button(botones, etiqueta, lambda n=nombre: self._set_theme(n), fg=MUTED)
                 boton.configure(width=9)
                 boton.pack(side="left", padx=(6, 0))
@@ -776,94 +780,57 @@ class JarvisUIMixin:
         # --- Juegos que reconoce Jarvis --------------------------------------------------------
 
         def _build_games_page(self, page: tk.Frame) -> None:
-            """Lista de juegos (los de ``jarvis_system.listar_juegos``) con ▶ JUGAR."""
-            self._games = None
-            cabecera = tk.Frame(page, bg=BG, padx=28, pady=(14))
-            cabecera.pack(fill="x")
-            self.games_summary = tk.Label(cabecera, text="Buscando juegos…", bg=BG, fg=MUTED,
-                                          font=("Segoe UI", 10), anchor="w", justify="left")
-            self.games_summary.pack(side="left")
-            self._ui_button(cabecera, "⟳  ACTUALIZAR", self._load_games_page, fg=MUTED).pack(side="right")
-            self.games_filter = tk.StringVar()
-            buscador = tk.Entry(cabecera, textvariable=self.games_filter, bg=PANEL_LIGHT, fg=TEXT,
-                                insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), width=26)
-            buscador.pack(side="right", padx=(0, 10), ipady=6)
-            self.games_filter.trace_add("write", lambda *_: self._render_games())
-            tk.Label(cabecera, text="Buscar:", bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(side="right", padx=(0, 6))
+            """Juegos en tarjetas con portada (2026-11-23): ``jarvis_ui_juegos.construir``."""
+            import jarvis_ui_juegos
 
-            lienzo = tk.Canvas(page, bg=BG, highlightthickness=0, bd=0)
-            barra = ttk.Scrollbar(page, orient="vertical", command=lienzo.yview,
-                                  style="Jarvis.Vertical.TScrollbar")
-            lienzo.configure(yscrollcommand=barra.set)
-            barra.pack(side="right", fill="y", padx=(0, 6), pady=8)
-            lienzo.pack(side="left", fill="both", expand=True)
-            self.games_list = tk.Frame(lienzo, bg=BG, padx=28, pady=6)
-            ventana = lienzo.create_window((0, 0), window=self.games_list, anchor="nw")
-            self.games_list.bind("<Configure>", lambda _e: lienzo.configure(scrollregion=lienzo.bbox("all")))
-            lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana, width=e.width))
-            self.games_list.jarvis_scroll = lienzo
-            lienzo.jarvis_scroll = lienzo
+            jarvis_ui_juegos.construir(self, page)
 
-        def _load_games_page(self) -> None:
-            """Busca los juegos en otro hilo (un disco dormido puede tardar en responder)."""
+        def _load_games_page(self, forzar: bool = False) -> None:
+            """Busca los juegos en otro hilo (un disco dormido puede tardar en responder).
+
+            2026-11-23: si todavía no hay lista, se muestra al instante la guardada
+            (``jarvis_system.juegos_guardados``) y después la revisada, solo si cambió.
+            ``forzar`` (⟳ ACTUALIZAR) vuelve a recorrer todas las carpetas, sin caché."""
             import logging
             import threading
 
             import jarvis_system
 
-            self.games_summary.configure(text="Buscando juegos…")
+            anteriores = getattr(self, "_games", None)
+            if anteriores is None and not forzar:
+                try:
+                    anteriores = jarvis_system.juegos_guardados()
+                except Exception:
+                    logging.exception("No se pudo leer la lista de juegos guardada.")
+                    anteriores = None
+                if anteriores:
+                    self.events.put(("games_list", anteriores))
+            if not anteriores:
+                self.games_summary.configure(text="Buscando juegos…")
+
+            def huella(juegos) -> list:
+                return [(j.nombre, str(j.carpeta), str(j.ejecutable), j.problema) for j in juegos or []]
 
             def buscar() -> None:
                 try:
-                    juegos = jarvis_system.listar_juegos()
+                    juegos = jarvis_system.listar_juegos(usar_cache=not forzar)
                 except Exception:
                     logging.exception("No se pudieron listar los juegos.")
                     juegos = []
-                self.events.put(("games_list", juegos))
+                if forzar or not anteriores or huella(juegos) != huella(anteriores):
+                    self.events.put(("games_list", juegos))
 
             threading.Thread(target=buscar, name="JarvisJuegosLista", daemon=True).start()
 
         def _render_games(self, juegos=None) -> None:
-            if juegos is not None:
-                self._games = juegos
-            juegos = self._games or []
-            for fila in self.games_list.winfo_children():
-                fila.destroy()
-            filtro = self.games_filter.get().strip().casefold()
-            visibles = [j for j in juegos if not filtro or filtro in j.nombre.casefold()]
-            listos = [j for j in visibles if j.ejecutable is not None]
-            sin_exe = [j for j in visibles if j.ejecutable is None]
-            total = sum(1 for j in juegos if j.ejecutable is not None)
-            self.games_summary.configure(
-                text=f"{total} juegos reconocidos. Ábrelos con «abre …» o con ▶ JUGAR. "
-                     "Busca en «Games», «Epic Games» y «SteamLibrary» de cada disco, en la carpeta "
-                     "«Games» de tu usuario y en Steam.")
-            for juego in listos:
-                fila = tk.Frame(self.games_list, bg=PANEL, padx=16, pady=10,
-                                highlightthickness=1, highlightbackground=BORDER)
-                fila.pack(fill="x", pady=4)
-                textos = tk.Frame(fila, bg=PANEL)
-                textos.pack(side="left", fill="x", expand=True)
-                tk.Label(textos, text=juego.nombre, bg=PANEL, fg=TEXT, font=("Segoe UI", 11, "bold"),
-                         anchor="w").pack(anchor="w")
-                tk.Label(textos, text=f"{juego.carpeta.parent}   ·   {juego.ejecutable.name}", bg=PANEL, fg=MUTED,
-                         font=("Consolas", 8), anchor="w").pack(anchor="w")
-                self._ui_button(fila, "▶  JUGAR", lambda n=juego.nombre: self._play_game(n)).pack(side="right")
-                # Acciones al abrirlo (emuladores, launchers con «Jugar»…): el editor de las rutinas.
-                cuantas = len(self._game_actions(juego.nombre))
-                self._ui_button(fila, f"⚙  {cuantas} ACCION{'ES' if cuantas != 1 else ''}" if cuantas else
-                                "⚙  ACCIONES", lambda n=juego.nombre: self._edit_game_actions(n),
-                                fg=None if cuantas else MUTED).pack(side="right", padx=(0, 8))
-            if sin_exe:
-                tk.Label(self.games_list, text="CARPETAS SIN UN JUEGO CLARO (no se pueden abrir por nombre)",
-                         bg=BG, fg=MUTED, font=("Consolas", 9, "bold")).pack(anchor="w", pady=(16, 4))
-                for juego in sin_exe:
-                    tk.Label(self.games_list, text=f"•  {juego.nombre}  —  {juego.problema}", bg=BG, fg=MUTED,
-                             font=("Segoe UI", 9), anchor="w", justify="left", wraplength=900).pack(anchor="w")
-            if not visibles:
-                tk.Label(self.games_list, text="Ningún juego coincide con la búsqueda." if filtro else
-                         "No encontré juegos en las carpetas de juegos.", bg=BG, fg=MUTED,
-                         font=("Segoe UI", 10)).pack(anchor="w", pady=10)
+            import jarvis_ui_juegos
+
+            jarvis_ui_juegos.render(self, juegos)
+
+        def _portada_juego_lista(self, nombre: str) -> None:
+            import jarvis_ui_juegos
+
+            jarvis_ui_juegos.portada_lista(self, nombre)
 
         def _play_game(self, nombre: str) -> None:
             if self.busy:
@@ -1101,134 +1068,11 @@ class JarvisUIMixin:
             ))
 
         def _build_tv_page(self, page: tk.Frame) -> None:
-            """Control remoto de la tele (Google TV): tarjeta de estado, control (encendido, cruz,
-            navegación, volumen y reproducción), entradas y apps. Los botones van por ``_tv_button``."""
-            import jarvis_tv
+            """Control remoto de la tele (Google TV). 2026-11-23: rediseñada y adaptable al ancho, en
+            ``jarvis_ui_tele.construir``."""
+            import jarvis_ui_tele
 
-            cuerpo = tk.Frame(page, bg=BG, padx=20, pady=18)
-            cuerpo.pack(fill="both", expand=True)
-            columnas = tk.Frame(cuerpo, bg=BG)
-            columnas.pack(anchor="nw")
-            izquierda = tk.Frame(columnas, bg=BG)
-            izquierda.grid(row=0, column=0, sticky="n")
-            derecha = tk.Frame(columnas, bg=BG)
-            derecha.grid(row=0, column=1, sticky="n", padx=(16, 0))
-
-            def acomodar(evento):
-                """Ventana angosta: las entradas y apps pasan debajo del control (antes se cortaban)."""
-                ancho = izquierda.winfo_reqwidth() + derecha.winfo_reqwidth() + 16 + 40  # + márgenes
-                if evento.width < ancho:
-                    derecha.grid_configure(row=1, column=0, padx=0, sticky="nw")
-                else:
-                    derecha.grid_configure(row=0, column=1, padx=(16, 0), sticky="n")
-
-            cuerpo.bind("<Configure>", acomodar, add="+")
-
-            estilos = {  # fondo, texto, fondo al pasar el mouse
-                "normal": (PANEL_LIGHT, TEXT, HOVER), "acento": (CYAN, BG, CYAN),
-                "prender": (CYAN_DARK, CYAN, ACCENT_ACTIVE), "apagar": (PANEL_LIGHT, ERROR, HOVER),
-                "suave": (PANEL_LIGHT, CYAN, HOVER),
-            }
-
-            def tecla(padre, texto, accion, estilo="normal", ancho=6, alto=1, tam=11):
-                fondo, color, encima = estilos[estilo]
-                boton = tk.Button(padre, text=texto, command=lambda: self._tv_button(accion), bg=fondo, fg=color,
-                                  activebackground=encima, activeforeground=color, relief="flat", bd=0,
-                                  width=ancho, height=alto, cursor="hand2", highlightthickness=0,
-                                  font=("Segoe UI", tam, "bold" if estilo == "acento" else "normal"))
-                boton.bind("<Enter>", lambda _e: boton.configure(bg=encima))
-                boton.bind("<Leave>", lambda _e: boton.configure(bg=fondo))
-                return boton
-
-            def tarjeta(padre, titulo=None):
-                marco = tk.Frame(padre, bg=PANEL, padx=20, pady=16, highlightthickness=1, highlightbackground=BORDER)
-                marco.pack(fill="x", pady=(0, 12))
-                if titulo:
-                    tk.Label(marco, text=titulo, bg=PANEL, fg=MUTED,
-                             font=("Consolas", 8, "bold")).pack(anchor="w", pady=(0, 10))
-                return marco
-
-            def fila(padre, pady=(0, 8)):
-                marco = tk.Frame(padre, bg=PANEL)
-                marco.pack(pady=pady)
-                return marco
-
-            # Estado
-            estado = tarjeta(izquierda)
-            arriba = tk.Frame(estado, bg=PANEL)
-            arriba.pack(fill="x")
-            tk.Label(arriba, text="📺", bg=PANEL, fg=TEXT, font=("Segoe UI Emoji", 20)).pack(side="left", padx=(0, 12))
-            textos = tk.Frame(arriba, bg=PANEL)
-            textos.pack(side="left", fill="x", expand=True)
-            linea = tk.Frame(textos, bg=PANEL)
-            linea.pack(anchor="w")
-            self.tv_page_name = tk.Label(linea, text="La tele", bg=PANEL, fg=TEXT, font=("Segoe UI", 13, "bold"))
-            self.tv_page_name.pack(side="left")
-            self.tv_page_pill = tk.Label(linea, text="…", bg=PANEL_LIGHT, fg=MUTED, font=("Segoe UI", 8, "bold"),
-                                         padx=8, pady=1)
-            self.tv_page_pill.pack(side="left", padx=(10, 0))
-            self.tv_page_detail = tk.Label(textos, text="Conectando con la tele…", bg=PANEL, fg=MUTED,
-                                           font=("Segoe UI", 10), anchor="w")
-            self.tv_page_detail.pack(anchor="w", pady=(2, 0))
-
-            # Control
-            control = tarjeta(izquierda, "CONTROL")
-            energia = fila(control, pady=(0, 14))
-            tecla(energia, "⏻  Prender", "power_on", "prender", ancho=14).pack(side="left", padx=4)
-            tecla(energia, "⏻  Apagar", "power_off", "apagar", ancho=14).pack(side="left", padx=4)
-
-            cruz = tk.Frame(control, bg=PANEL)
-            cruz.pack(pady=(0, 14))
-            for texto, accion, f, c, estilo in (("▲", "up", 0, 1, "normal"), ("◀", "left", 1, 0, "normal"),
-                                                ("OK", "ok", 1, 1, "acento"), ("▶", "right", 1, 2, "normal"),
-                                                ("▼", "down", 2, 1, "normal")):
-                tecla(cruz, texto, accion, estilo, ancho=5, alto=2, tam=12).grid(row=f, column=c, padx=3, pady=3)
-
-            navegar = fila(control, pady=(0, 14))
-            for texto, accion in (("↩  Atrás", "back"), ("⌂  Inicio", "home"), ("⚙  Panel", "settings")):
-                tecla(navegar, texto, accion, ancho=10).pack(side="left", padx=4)
-
-            abajo = tk.Frame(control, bg=PANEL)
-            abajo.pack()
-            for f, (titulo, botones) in enumerate((
-                    ("VOLUMEN", (("−", "volume_down"), ("🔇", "mute"), ("+", "volume_up"))),
-                    ("REPRODUCCIÓN", (("◀◀", "rewind"), ("▶ ❚❚", "play_pause"), ("▶▶", "forward"))))):
-                tk.Label(abajo, text=titulo, bg=PANEL, fg=MUTED, font=("Consolas", 8, "bold"),
-                         anchor="w").grid(row=f, column=0, sticky="w", padx=(0, 12))
-                for c, (texto, accion) in enumerate(botones, start=1):
-                    tecla(abajo, texto, accion, ancho=5, tam=10).grid(row=f, column=c, padx=3, pady=3)
-
-            # Entradas, apps y frases
-            entradas = tarjeta(derecha, "ENTRADAS")
-            marco = tk.Frame(entradas, bg=PANEL)
-            marco.pack(anchor="w")
-            for n in range(1, 5):  # 2×2: la columna derecha queda angosta y entra al lado del control
-                tecla(marco, f"HDMI {n}", f"hdmi{n}", "suave", ancho=10).grid(row=(n - 1) // 2, column=(n - 1) % 2,
-                                                                             padx=(0, 6), pady=(0, 6))
-            apps = tarjeta(derecha, "APPS")
-            rejilla = tk.Frame(apps, bg=PANEL)
-            rejilla.pack(anchor="w")
-            tk.Label(apps, text="Las apps que abras con el control de la tele aparecen acá solas.", bg=PANEL,
-                     fg=MUTED, font=("Segoe UI", 8), wraplength=240, justify="left").pack(anchor="w", pady=(4, 0))
-            self._tv_apps_grid, self._tv_apps_key = rejilla, None
-
-            def dibujar_apps(lista):
-                """Rehace la rejilla si cambió la lista (fijas + aprendidas)."""
-                if lista == self._tv_apps_key or not rejilla.winfo_exists():
-                    return
-                self._tv_apps_key = list(lista)
-                for hijo in rejilla.winfo_children():
-                    hijo.destroy()
-                for i, (clave, nombre) in enumerate(lista):
-                    tecla(rejilla, nombre, f"app:{clave}", ancho=12, tam=10).grid(row=i // 2, column=i % 2,
-                                                                                  padx=(0, 6), pady=(0, 6))
-
-            self._render_tv_apps = dibujar_apps
-            dibujar_apps([(clave, nombre) for clave, (nombre, _enlace) in jarvis_tv.APPS.items()])
-            ayuda = tarjeta(derecha, "POR VOZ")
-            tk.Label(ayuda, text="«prende la tele» · «sube el volumen de la tele» · «abre Netflix en la tele» · "
-                     "«pon la tele en HDMI 1» · «pausa la tele»", bg=PANEL, fg=MUTED, font=("Segoe UI", 9),
-                     wraplength=240, justify="left").pack(anchor="w")
+            jarvis_ui_tele.construir(self, page)
 
         def _paint_tv_status(self, nombre: str, corto: str, detalle: str, tono: str) -> None:
             """Tarjeta de estado de la página 📺 TELE (la llama ``_refresh_tv_views``)."""
@@ -1399,6 +1243,86 @@ class JarvisUIMixin:
                     fg=CYAN if nombre == actual else MUTED,
                 )
 
+        # --- Estilo propio de un tema (íconos, botones, núcleo) [2026-11-23] -------------
+        # «Nébula» cambia más que los colores (jarvis_theme.ESTILOS). Todo se aplica y se deshace
+        # aquí, así volver a «Cian», «Mark» o «Claro» deja la interfaz exactamente como antes.
+
+        def _texto_mic(self) -> str:
+            return "  MIC" if jarvis_theme.estilo("iconos") else "🎙  MIC"
+
+        def _iconos(self):
+            cache = self.__dict__.get("_iconos_cache")
+            if cache is None:
+                import jarvis_iconos
+
+                cache = self._iconos_cache = jarvis_iconos.Iconos(self.root)
+            return cache
+
+        def _iconos_barra(self) -> None:
+            """Íconos de línea (o los símbolos de texto) en la barra lateral, MIC y ENVIAR."""
+            con_iconos = bool(jarvis_theme.estilo("iconos"))
+            actual = getattr(self, "_current_page", None)
+            for clave, boton in getattr(self, "_nav_buttons", {}).items():
+                texto = self._nav_textos.get(clave, boton.cget("text"))
+                try:
+                    if con_iconos:
+                        color = CYAN if clave == actual else MUTED
+                        boton.configure(text="  " + texto.split(None, 1)[-1], compound="left",
+                                        image=self._iconos().foto(clave, color, 18))
+                    else:
+                        boton.configure(text=texto, image="", compound="none")
+                except Exception:
+                    logging.exception("No se pudo poner el ícono de %s.", clave)
+            mic, enviar = getattr(self, "mic_button", None), getattr(self, "send_button", None)
+            try:
+                if mic is not None:
+                    mic.configure(image=self._iconos().foto("mic", CYAN, 18) if con_iconos else "",
+                                  compound="left" if con_iconos else "none")
+                    if mic.cget("text") in ("🎙  MIC", "  MIC"):
+                        mic.configure(text=self._texto_mic())
+                if enviar is not None:
+                    enviar.configure(text="ENVIAR  " if con_iconos else "ENVIAR  ➤",
+                                     image=self._iconos().foto("enviar", CYAN, 18) if con_iconos else "",
+                                     compound="right" if con_iconos else "none")
+            except Exception:
+                logging.exception("No se pudieron poner los íconos de MIC y ENVIAR.")
+
+        def _contornear(self, raiz: tk.Misc | None = None) -> None:
+            """Con «Nébula», los botones usan la letra del tema (Bahnschrift, técnica y angulosa, de
+            Windows); con los demás, vuelven a la que tenían. 2026-11-23: se probó un borde fino
+            (highlightthickness), pero en Windows Tk no lo dibuja en los botones."""
+            from tkinter import font as tkfont
+
+            raiz = raiz if raiz is not None else self.root
+            familia = jarvis_theme.estilo("fuente_botones")
+            pendientes = [raiz]
+            while pendientes:
+                widget = pendientes.pop()
+                try:
+                    pendientes.extend(widget.winfo_children())
+                except tk.TclError:
+                    continue
+                if not isinstance(widget, tk.Button):
+                    continue
+                try:
+                    original = getattr(widget, "_jarvis_fuente", None)
+                    if familia:
+                        if original is None:
+                            original = widget._jarvis_fuente = widget.cget("font")
+                        tamano = abs(int(tkfont.Font(root=widget, font=original).actual("size")))
+                        widget.configure(font=(familia, tamano))  # más grande cortaba AJUSTES abajo
+                    elif original is not None:
+                        widget.configure(font=original)
+                        del widget._jarvis_fuente
+                except (tk.TclError, AttributeError, ValueError):
+                    continue
+
+        def _aplicar_estilo_tema(self) -> None:
+            """Después de cambiar de tema (y al arrancar): íconos, letra de los botones y núcleo."""
+            self._iconos_barra()
+            self._contornear(self.root)
+            self._draw_orb()
+
         def _show_chat_window(self) -> None:
             if self._closing:
                 return
@@ -1511,25 +1435,44 @@ class JarvisUIMixin:
                     )
 
             core_radius = radius * 0.43
-            canvas.create_oval(
-                center_x - core_radius,
-                center_y - core_radius,
-                center_x + core_radius,
-                center_y + core_radius,
-                fill=ORB_CORE,
-                outline=glow,
-                width=2,
-                tags="orb",
-            )
-            canvas.create_oval(
-                center_x - core_radius * 0.83,
-                center_y - core_radius * 0.83,
-                center_x + core_radius * 0.83,
-                center_y + core_radius * 0.83,
-                outline=ORB_CORE_LINE,
-                width=1,
-                tags="orb",
-            )
+            if jarvis_theme.estilo("nucleo") == "hexagonal":
+                # «Nébula»: núcleo hexagonal con un hexágono interior que gira despacio y un punto
+                # magenta en el centro (diseño del lienzo «Tema futurista de Jarvis»).
+                def hexagono(r: float, giro: float) -> list[float]:
+                    puntos: list[float] = []
+                    for k in range(6):
+                        angulo = math.radians(-90 + 60 * k + giro)
+                        puntos += [center_x + math.cos(angulo) * r, center_y + math.sin(angulo) * r]
+                    return puntos
+
+                canvas.create_polygon(hexagono(core_radius * 1.08, 0), fill=ORB_CORE, outline=ORB_CORE_LINE,
+                                      width=2, tags="orb")
+                canvas.create_polygon(hexagono(core_radius * 0.82, self._orb_phase * (0.6 if active else 0.1)),
+                                      fill="", outline=glow, width=2, tags="orb")
+                punto = core_radius * 0.09
+                canvas.create_oval(center_x - punto, center_y + core_radius * 0.55 - punto,
+                                   center_x + punto, center_y + core_radius * 0.55 + punto,
+                                   fill=VIOLET, outline="", tags="orb")
+            else:
+                canvas.create_oval(
+                    center_x - core_radius,
+                    center_y - core_radius,
+                    center_x + core_radius,
+                    center_y + core_radius,
+                    fill=ORB_CORE,
+                    outline=glow,
+                    width=2,
+                    tags="orb",
+                )
+                canvas.create_oval(
+                    center_x - core_radius * 0.83,
+                    center_y - core_radius * 0.83,
+                    center_x + core_radius * 0.83,
+                    center_y + core_radius * 0.83,
+                    outline=ORB_CORE_LINE,
+                    width=1,
+                    tags="orb",
+                )
             center_label = "J.A.R.V.I.S."
             action_label = "TOCA PARA DETENER" if active else "TOCA PARA HABLAR"
             # Orbe compacto de la barra lateral: solo el nombre (el estado va debajo).
@@ -1659,6 +1602,9 @@ class JarvisUIMixin:
         def _update_scroll_region(self, event) -> None:
             self.chat_canvas.configure(scrollregion=event.widget.master.bbox("all"))
             self._fit_chat_text(ultimas=3)  # lo recién agregado (tarjetas, burbujas)
+            if jarvis_theme.estilo("fuente_botones"):
+                for fila in self.messages.winfo_children()[-3:]:
+                    self._contornear(fila)
             if self._chat_following:
                 self.chat_canvas.after_idle(self._scroll_chat_to_bottom)
 

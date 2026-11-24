@@ -340,6 +340,8 @@ class HerramientasMixin:
         if self._current_page:
             self._show_page(self._current_page)
         self._refresh_theme_buttons()
+        self._aplicar_estilo_tema()
+        self._refresh_games_widget(reconstruir=True)
         try:
             core.guardar_preferencia(jarvis_theme.PREFERENCIA, nombre)
         except Exception:

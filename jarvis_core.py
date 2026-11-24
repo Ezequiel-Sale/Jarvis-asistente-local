@@ -50,6 +50,18 @@ APP_DIR = (
     else Path(__file__).resolve().parent
 )
 DB_PATH = APP_DIR / "jarvis_memory.db"
+
+# 2026-11-23: el empaquetado (runtime hook «pyi_rth_mplconfig» de PyInstaller) manda la configuración de
+# matplotlib, que carga MediaPipe en el hilo de gestos, a una carpeta temporal que se borra al cerrar:
+# en cada arranque volvía a armar la lista de fuentes del sistema («generated new fontManager», en 23 de
+# 36 arranques del log). Una carpeta fija dentro de Jarvis la conserva.
+CARPETA_MATPLOTLIB = APP_DIR / "cache" / "matplotlib"
+if getattr(sys, "frozen", False):
+    try:
+        CARPETA_MATPLOTLIB.mkdir(parents=True, exist_ok=True)
+        os.environ["MPLCONFIGDIR"] = str(CARPETA_MATPLOTLIB)
+    except OSError:
+        pass  # queda la temporal de siempre
 RESPONSES_DIR = APP_DIR / "responses"
 VOZ_PIPER = "es_ES-davefx-medium"  # se cambia en Ajustes (jarvis_voices); este es el valor por defecto
 VOZ_HABLANTE: str | None = None  # para voces con varias personas (sharvard: «M» / «F»)

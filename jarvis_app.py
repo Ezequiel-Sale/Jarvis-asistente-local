@@ -209,6 +209,8 @@ class JarvisApp(
             self._floating_enabled = True
         self._configure_styles()
         self._build_layout()
+        self._aplicar_estilo_tema()  # íconos, bordes y núcleo del tema guardado («Nébula»)
+        self.root.after(2500, self._restore_games_widget)  # el widget del escritorio, si quedó abierto
         self._refresh_animations_button()
         self._refresh_morning_brief_button()
         self.floating =jarvis_floating.AvisoFlotante(self.root, self._show_from_tray)
@@ -873,6 +875,8 @@ class JarvisApp(
                         self._cancel_current_operation()
                     elif event[0] == "games_list":
                         self._render_games(event[1])
+                    elif event[0] == "portada_juego":
+                        self._portada_juego_lista(event[1])
                     elif event[0] == "mobile_screen":
                         self._show_screen_badge()
                     elif event[0] == "mobile_control_request":
@@ -972,6 +976,7 @@ class JarvisApp(
                             self._on_game_started(event[1])
                         else:
                             self._on_game_stopped()
+                        self._refresh_games_widget()  # la marca «ABIERTO»
                         self._handle_device_event(
                             jarvis_routines.DISPARADOR_JUEGO_ABIERTO if event[0] == "game_started"
                             else jarvis_routines.DISPARADOR_JUEGO_CERRADO,
@@ -1024,7 +1029,7 @@ class JarvisApp(
                         self._add_message("user", f"Confirmación por voz: {transcript}")
                         if decision is None:
                             self._set_plan_voice_controls(recording=False)
-                            self.mic_button.configure(state="normal", text="🎙  MIC", fg=CYAN)
+                            self.mic_button.configure(state="normal", text=self._texto_mic(), fg=CYAN)
                             self._set_status(
                                 f"NO RECONOCÍ «{transcript[:36]}»; "
                                 + self._approval_hint(approval_kind),
@@ -1061,7 +1066,7 @@ class JarvisApp(
                             continue
                         approval_kind = self._pending_approval_kind or "plan"
                         self._set_plan_voice_controls(recording=False)
-                        self.mic_button.configure(state="normal", text="🎙  MIC", fg=CYAN)
+                        self.mic_button.configure(state="normal", text=self._texto_mic(), fg=CYAN)
                         self._set_status(
                             "NO RECONOCÍ LA DECISIÓN; " + self._approval_hint(approval_kind),
                             ERROR,
@@ -1071,7 +1076,7 @@ class JarvisApp(
                             continue
                         logging.error("No se pudo reconocer la aprobación por voz: %s", event[1])
                         self._set_plan_voice_controls(recording=False)
-                        self.mic_button.configure(state="normal", text="🎙  MIC", fg=CYAN)
+                        self.mic_button.configure(state="normal", text=self._texto_mic(), fg=CYAN)
                         self._set_status("ERROR DE VOZ; USA LOS BOTONES", ERROR)
                     elif event[0] == "plan_confirmation_timeout":
                         _, reply = event
@@ -1098,6 +1103,8 @@ class JarvisApp(
                                 result = self._set_voice(value)
                             elif action == "set_theme":
                                 result = self._set_theme(value)
+                            elif action == "games_widget":
+                                result = self._set_games_widget(value)
                             elif action == "minimize_jarvis":
                                 self._hide_to_tray()
                                 result = "Jarvis se minimizó en la bandeja."
@@ -1300,6 +1307,7 @@ class JarvisApp(
                         self._execute_screen_action(*event[1:])
                     elif event[0] == "vista":
                         self._render_vista(event[1], event[2])
+                        self._contornear(self._pages.get(event[1]))
                     elif event[0] == "winget_progreso":
                         self._progreso_winget(event[1])
                     elif event[0] == "grabacion":

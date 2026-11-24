@@ -1520,6 +1520,8 @@ _NOMBRES_TEMA = {
     "mark": "mark", "rojo": "mark", "dorado": "mark", "rojo y dorado": "mark",
     "iron man": "mark", "ironman": "mark",
     "claro": "claro", "blanco": "claro",
+    # 2026-11-23: tema futurista negro, azul y magenta.
+    "nebula": "nebula", "futurista": "nebula", "neon": "nebula", "magenta": "nebula",
 }
 _TEMA = "(" + "|".join(sorted(map(re.escape, _NOMBRES_TEMA), key=len, reverse=True)) + ")"
 _CAMBIA_TEMA = re.compile(
@@ -1555,6 +1557,27 @@ def detectar_comando_compacto(texto: str) -> tuple[str, dict[str, object]] | Non
         return "set_compact_mode", {"enabled": True}
     if _COMPACTO_OFF.fullmatch(consulta):
         return "set_compact_mode", {"enabled": False}
+    return None
+
+
+_WIDGET_JUEGOS = r"(?:el\s+)?widget\s+(?:de\s+)?(?:los\s+)?juegos(?:\s+(?:en|del)\s+(?:el\s+)?escritorio)?"
+_WIDGET_JUEGOS_ON = re.compile(
+    r"^(?:muestra|muestrame|abre|abreme|pon|ponme|activa|activar|saca|mostrar|abrir|poner|deja)\s+"
+    + _WIDGET_JUEGOS + r"$"
+)
+_WIDGET_JUEGOS_OFF = re.compile(
+    r"^(?:oculta|ocultar|ocultame|esconde|esconder|cierra|cerrar|quita|quitar|desactiva|desactivar)\s+"
+    + _WIDGET_JUEGOS + r"$"
+)
+
+
+def detectar_comando_widget_juegos(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«mostrá el widget de juegos» / «ocultá el widget de juegos» (2026-11-23)."""
+    consulta = _normalizar_consulta(texto)
+    if _WIDGET_JUEGOS_OFF.fullmatch(consulta):
+        return "games_widget", {"visible": False}
+    if _WIDGET_JUEGOS_ON.fullmatch(consulta):
+        return "games_widget", {"visible": True}
     return None
 
 

@@ -148,15 +148,64 @@ class JuegoMixin:
         threading.Thread(target=hacer, name="JarvisAccionesJuego", daemon=True).start()
         return len(pasos)
 
-    def _edit_game_actions(self, juego: str) -> None:
-        """Editor de acciones (el de las rutinas, sin nombre ni disparador) para ``juego``."""
+    def _edit_game_actions(self, juego: str, padre=None) -> None:
+        """Editor de acciones (el de las rutinas, sin nombre ni disparador) para ``juego``.
+        ``padre``: el widget del escritorio, si se abre desde ahí (con Jarvis en la bandeja, una
+        ventana hija de la principal no se vería)."""
         from jarvis_routine_form import RoutineForm
 
         def guardar(pasos: list[dict]) -> None:
             jarvis_acciones_juego.guardar(core.obtener_preferencia, core.guardar_preferencia, juego, pasos)
 
-        RoutineForm(self.root, self.tool_registry, lambda: self._render_games(), juego=juego,
+        RoutineForm(padre or self.root, self.tool_registry, lambda: self._render_games(), juego=juego,
                     pasos=self._game_actions(juego), al_guardar=guardar)
+
+    # --- Widget de juegos en el escritorio (jarvis_widget_juegos) ---------------------------
+    def _tool_games_widget(self, visible: bool) -> str:
+        return self._request_tool_ui_action("games_widget", bool(visible))
+
+    def _set_games_widget(self, visible: bool) -> str:
+        """Hilo de Tk: muestra u oculta el widget y recuerda la elección."""
+        import jarvis_widget_juegos
+
+        widget = self.__dict__.get("_games_widget")
+        if visible:
+            if widget is None:
+                widget = self._games_widget = jarvis_widget_juegos.WidgetJuegos(self)
+            widget.mostrar()
+            self._games_widget_shown = True
+            logging.info("Widget de juegos en el escritorio: visible.")
+            return "Puse el widget de juegos en el escritorio."
+        if widget is not None:
+            widget.ocultar()
+        else:
+            core.guardar_preferencia(jarvis_widget_juegos.PREF_VISIBLE, "0")
+        self._games_widget_shown = False
+        logging.info("Widget de juegos en el escritorio: oculto.")
+        return "Oculté el widget de juegos."
+
+    def _toggle_games_widget(self) -> None:
+        """Botón de la página JUEGOS."""
+        self._set_games_widget(not self.__dict__.get("_games_widget_shown", False))
+
+    def _restore_games_widget(self) -> None:
+        """Al arrancar: vuelve a mostrarlo si quedó abierto."""
+        import jarvis_widget_juegos
+
+        try:
+            if core.obtener_preferencia(jarvis_widget_juegos.PREF_VISIBLE) == "1":
+                self._set_games_widget(True)
+        except Exception:
+            logging.exception("No se pudo restaurar el widget de juegos.")
+
+    def _refresh_games_widget(self, reconstruir: bool = False) -> None:
+        widget = self.__dict__.get("_games_widget")
+        if widget is None:
+            return
+        try:
+            widget.reconstruir() if reconstruir else widget.refrescar()
+        except Exception:
+            logging.exception("No se pudo redibujar el widget de juegos.")
 
     def _quiet_message(self, text: str) -> None:
         """Mensaje solo en el chat: sin voz, sin notificación y sin burbuja sobre el juego."""

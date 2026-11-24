@@ -197,7 +197,15 @@ def crear_verificadores(host: VerifierHost) -> dict[str, Verificador]:
             return Verificacion(True, f"Tema activo: {jarvis_theme.ETIQUETAS[jarvis_theme.tema_actual()]}.")
         return Verificacion(False, "el tema no cambió.")
 
+    def verificar_widget_juegos(arguments: Mapping[str, object], _result: object) -> Verificacion:
+        visible = bool(vars(host).get("_games_widget_shown", False))  # se anota en el hilo de Tk
+        if visible == bool(arguments["visible"]):
+            return Verificacion(True, "El widget de juegos está en el escritorio." if visible else
+                                "El widget de juegos está oculto.")
+        return Verificacion(False, "el widget de juegos no cambió.")
+
     return {
+        "games_widget": verificar_widget_juegos,
         "set_theme": verificar_tema,
         "set_system_volume": verificar_volumen,
         "set_jarvis_audio": verificar_audio_jarvis,

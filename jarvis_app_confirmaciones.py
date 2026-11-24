@@ -174,7 +174,7 @@ class ConfirmacionesMixin:
                 logging.exception("No se pudo cancelar la grabación de aprobación.")
             self.recorder = None
             self._recording_for_plan_approval = False
-            self.mic_button.configure(state="normal", text="🎙  MIC", fg=CYAN)
+            self.mic_button.configure(state="normal", text=self._texto_mic(), fg=CYAN)
         dialog = self._plan_dialog
         self._plan_dialog = None
         if dialog is not None and dialog.winfo_exists():

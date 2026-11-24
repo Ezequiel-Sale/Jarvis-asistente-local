@@ -226,13 +226,14 @@ class RutinasMixin:
         from jarvis_commands import (
             detectar_comando_compacto, detectar_comando_dispositivo_salida, detectar_comando_energia,
             detectar_comando_monitores, detectar_comando_multimedia, detectar_comando_tema,
-            detectar_comando_ventanas, detectar_comando_volumen,
+            detectar_comando_ventanas, detectar_comando_volumen, detectar_comando_widget_juegos,
         )
 
         orden = (jarvis_tv.detectar(texto) or detectar_comando_monitores(texto)
                  or detectar_comando_ventanas(texto) or detectar_comando_multimedia(texto)
                  or detectar_comando_energia(texto) or detectar_comando_tema(texto)
-                 or detectar_comando_compacto(texto) or jarvis_reminders.detectar_comando(texto)
+                 or detectar_comando_compacto(texto) or detectar_comando_widget_juegos(texto)
+                 or jarvis_reminders.detectar_comando(texto)
                  or jarvis_pestanas.detectar(texto))
         if orden is not None:
             return orden

@@ -106,7 +106,16 @@ class GamesPageTests(unittest.TestCase):
         import queue
         import tkinter as tk
 
+        import jarvis_portadas
         from jarvis_app import JarvisApp
+
+        # Las portadas: carpeta temporal y sin buscar en internet.
+        carpeta = tempfile.TemporaryDirectory()
+        self.addCleanup(carpeta.cleanup)
+        for parche in (patch.object(jarvis_portadas, "carpeta", lambda: Path(carpeta.name)),
+                       patch.object(jarvis_portadas, "hay_que_buscar", return_value=False)):
+            parche.start()
+            self.addCleanup(parche.stop)
 
         try:
             raiz = tk.Tk()
@@ -121,6 +130,7 @@ class GamesPageTests(unittest.TestCase):
             _render_games = JarvisApp._render_games
             _play_game = JarvisApp._play_game
             _ui_button = JarvisApp._ui_button
+            root = None
             busy = False
             events = queue.Queue()
 
@@ -131,6 +141,9 @@ class GamesPageTests(unittest.TestCase):
                 pass
 
             def _load_games_page(self):
+                pass
+
+            def _toggle_games_widget(self):
                 pass
 
             def _game_actions(self, juego):  # «Hades» tiene una acción al abrirse
@@ -147,19 +160,27 @@ class GamesPageTests(unittest.TestCase):
                   s.JuegoEncontrado("Roto", Path("E:/Games/Roto"), None, "Sin ejecutable.")]
         host._render_games(juegos)
         self.assertIn("2 juegos reconocidos", host.games_summary.cget("text"))
-        botones = [w for fila in host.games_list.winfo_children() for w in fila.winfo_children()
-                   if isinstance(w, tk.Button)]
-        self.assertEqual(len(botones), 4)  # ▶ JUGAR y ⚙ ACCIONES por juego
-        self.assertEqual([b.cget("text") for b in botones[:2]], ["▶  JUGAR", "⚙  1 ACCION"])
-        self.assertEqual(botones[3].cget("text"), "⚙  ACCIONES")
-        botones[0].invoke()
-        botones[1].invoke()
+        # 2026-11-23: tarjetas con portada; sin portada, «SUBIR PORTADA».
+        botones, pendientes = [], [host.games_list]
+        while pendientes:
+            w = pendientes.pop(0)
+            pendientes.extend(w.winfo_children())
+            if isinstance(w, tk.Button):
+                botones.append(w)
+        textos = [b.cget("text") for b in botones]
+        self.assertEqual(textos.count("▶  JUGAR"), 2)
+        self.assertIn("⚙ 1", textos)  # Hades tiene una acción
+        self.assertIn("⚙", textos)
+        self.assertEqual(textos.count("＋ SUBIR PORTADA"), 2)
+        next(b for b in botones if b.cget("text") == "▶  JUGAR").invoke()
+        next(b for b in botones if b.cget("text") == "⚙ 1").invoke()
         self.assertEqual(jugados, [("launch_game", {"name": "Hades"}, "abre Hades")])
         self.assertEqual(editados, ["Hades"])
+        self.assertTrue(any("Roto" in str(w.cget("text")) for w in host.games_list.winfo_children()
+                            if isinstance(w, tk.Label)))
         host.games_filter.set("elden")
-        filas = [f for f in host.games_list.winfo_children() if isinstance(f, tk.Frame)]
-        self.assertEqual(len(filas), 1)
-
+        rejilla = host.games_list.winfo_children()[0]
+        self.assertEqual(len(rejilla.winfo_children()), 1)
 
 if __name__ == "__main__":
     unittest.main()

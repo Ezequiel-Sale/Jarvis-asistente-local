@@ -64,3 +64,10 @@ brave_extension/config.js
 grabaciones/
 # Credenciales y tokens de Google y Outlook (jarvis_correo).
 cuentas/
+# Portadas de los juegos (las descarga Jarvis o las sube el usuario)
+portadas/
+juegos_cache.json
+juegos_cache.tmp
+apps_inicio.json
+apps_inicio.tmp
+/cache/

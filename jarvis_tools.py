@@ -35,6 +35,7 @@ class ToolEventHost(Protocol):
     def _tool_set_jarvis_audio(self, enabled: bool) -> str: ...
     def _tool_set_theme(self, theme: str) -> str: ...
     def _tool_set_compact_mode(self, enabled: bool) -> str: ...
+    def _tool_games_widget(self, visible: bool) -> str: ...
     def _tool_say_text(self, text: str) -> str: ...
     def _tool_notify_phone(self, text: str) -> str: ...
     def _tool_set_voice(self, voice: str) -> str: ...
@@ -672,11 +673,26 @@ def crear_registro_herramientas(
         timeout_seconds=20,
     )
     registry.register(
+        "games_widget",
+        "Muestra (visible=true) u oculta el widget de juegos de Jarvis en el escritorio: la lista de juegos "
+        "con JUGAR y sus acciones al abrir, al fondo, sobre el fondo de pantalla.",
+        {
+            "type": "object",
+            "properties": {"visible": {"type": "boolean"}},
+            "required": ["visible"],
+            "additionalProperties": False,
+        },
+        host._tool_games_widget,
+        label="Widget de juegos",
+        timeout_seconds=20,
+        verifier=verificadores.get("games_widget"),
+    )
+    registry.register(
         "set_theme",
         "Cambia el tema visual de Jarvis: cian (el original), mark (rojo y dorado) o claro.",
         {
             "type": "object",
-            "properties": {"theme": {"type": "string", "enum": ["cian", "mark", "claro"]}},
+            "properties": {"theme": {"type": "string", "enum": ["cian", "mark", "claro", "nebula"]}},
             "required": ["theme"],
             "additionalProperties": False,
         },

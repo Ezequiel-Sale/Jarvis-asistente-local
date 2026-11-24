@@ -66,6 +66,7 @@ from jarvis_commands import (
     detectar_comando_nueva_pestana,
     detectar_comando_nueva_ventana,
     detectar_comando_tema,
+    detectar_comando_widget_juegos,
     detectar_comando_ventanas,
     detectar_comando_volumen,
     detectar_comando_voz,
@@ -269,6 +270,7 @@ class OrdenesMixin:
             or detectar_comando_monitores(text)
             or detectar_comando_tema(text)
             or detectar_comando_compacto(text)
+            or detectar_comando_widget_juegos(text)
             or detectar_comando_voz(text)
             or detectar_comando_gpu(text)
             or detectar_comando_energia(text)
@@ -460,6 +462,7 @@ class OrdenesMixin:
                 or detectar_comando_monitores(transcript)
                 or detectar_comando_tema(transcript)
                 or detectar_comando_compacto(transcript)
+                or detectar_comando_widget_juegos(transcript)
                 or detectar_comando_voz(transcript)
                 or detectar_comando_gpu(transcript)
                 or detectar_comando_energia(transcript)
@@ -814,6 +817,7 @@ class OrdenesMixin:
         "restore_display_config": "VOLVIENDO A LA CONFIGURACIÓN DE MONITORES…",
         "fix_display_scaling": "REAJUSTANDO EL ESCALADO…",
         "set_theme": "CAMBIANDO EL TEMA…",
+        "games_widget": "WIDGET DE JUEGOS…",
         "set_compact_mode": "CAMBIANDO EL MODO DE VENTANA…",
         "set_voice": "CAMBIANDO LA VOZ…",
         "apply_gpu_profile": "APLICANDO EL UNDERVOLT…",

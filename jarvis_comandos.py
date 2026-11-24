@@ -221,6 +221,8 @@ CATALOGO: tuple[Seccion, ...] = (
     _s("🎨", "Apariencia y sistema",
        ("Cambia al tema rojo / Pon el modo claro", "Cambia los colores de Jarvis."),
        ("Modo compacto", "Deja solo el orbe en una ventanita siempre visible."),
+       ("Mostrá el widget de juegos / Ocultá el widget de juegos",
+        "Tus juegos en el escritorio, al fondo: ▶ para jugar y ⚙ para sus acciones al abrir."),
        ("Desactiva el inicio con Windows", "Jarvis deja de abrirse al encender la PC."),
        ("Aplica el undervolt / ¿Está aplicado el undervolt?", "Reaplica o revisa el perfil de la GPU.")),
 )
