@@ -87,6 +87,8 @@ class PaginaTests(unittest.TestCase):
         def columnas_de_la_derecha():
             return "dos" if self.vista._tv_columnas == 2 else "una"
 
+        # El CI de GitHub tiene una pantalla de 1024×768 y Tk limita la ventana a la pantalla.
+        self.root.maxsize(4000, 4000)
         self.root.geometry("1500x900")
         self.esperar()
         self.assertEqual(columnas_de_la_derecha(), "dos")

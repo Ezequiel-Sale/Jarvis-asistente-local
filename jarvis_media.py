@@ -624,6 +624,10 @@ def _firma_teatro(botones: dict) -> tuple:
     return "exit_theater" in botones, lados
 
 
+# 2026-11-24: Twitch pasó a nombrarlo en español y «modo teatro» dejaba de encontrarlo.
+REPRODUCTOR_TWITCH = {"twitch video player", "reproductor de video de twitch"}
+
+
 def _reproductor_sin_controles(zona) -> tuple[tuple, int | None] | None:
     """El reproductor de Twitch aunque tenga los controles escondidos: (lados, borde izquierdo de la página).
 
@@ -640,7 +644,7 @@ def _reproductor_sin_controles(zona) -> tuple[tuple, int | None] | None:
         for control, _ in auto.WalkControl(ventana, maxDepth=40):
             if control.ControlTypeName == "DocumentControl" and control.AutomationId == "RootWebArea":
                 izquierda = control.BoundingRectangle.left
-            elif control.ControlTypeName == "GroupControl" and _normal(control.Name) == "twitch video player":
+            elif control.ControlTypeName == "GroupControl" and _normal(control.Name) in REPRODUCTOR_TWITCH:
                 r = control.BoundingRectangle
                 return (r.left, r.top, r.right, r.bottom), izquierda
     return None
