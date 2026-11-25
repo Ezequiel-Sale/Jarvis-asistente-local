@@ -677,7 +677,22 @@ def _teatro_sin_controles(enabled: bool, zona, donde: str, esperar_cambio: float
     )
 
 
-def modo_teatro(enabled: bool, monitor: int | None = None, *, espera: float = 1.5,
+def modo_teatro(enabled: bool, monitor: int | None = None, **opciones) -> str:
+    """Como ``_modo_teatro``, reintentando si la accesibilidad falla al recorrer la página (2026-11-24:
+    COMError «Un evento no pudo invocar a ninguno de los suscriptores» con Twitch). Si el primer intento
+    ya lo cambió, el segundo lo ve y no lo vuelve a tocar."""
+    for intento in range(3):
+        try:
+            return _modo_teatro(enabled, monitor, **opciones)
+        except Exception as error:
+            if not _es_error_com(error) or intento == 2:
+                raise
+            logging.info("La accesibilidad falló en el modo teatro (%s); reintento.", error.args[:1])
+            time.sleep(ESPERA_REINTENTO_UIA)
+    raise AssertionError("inalcanzable")
+
+
+def _modo_teatro(enabled: bool, monitor: int | None = None, *, espera: float = 1.5,
                 esperar_cambio: float = ESPERA_CAMBIO) -> str:
     """Activa o quita el modo teatro (modo cine) del reproductor de la pestaña activa.
 
