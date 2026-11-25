@@ -1,11 +1,15 @@
 """Pestañas de Brave por voz: «siguiente pestaña», «pestaña 3», «última pestaña», «cerrá la pestaña»,
-«reabrí la pestaña», «andá a la pestaña de YouTube», «cerrá la pestaña de Gmail», «¿qué pestañas tengo?».
+«reabrí la pestaña», «andá a la pestaña de YouTube», «cerrá la pestaña de Gmail», «¿qué pestañas tengo?»,
+«mueve la pestaña número 3 al monitor 2».
 
 - Siguiente / anterior / por número / cerrar / reabrir: los atajos de Brave (Ctrl+Tab,
   Ctrl+Mayús+Tab, Ctrl+1…8, Ctrl+9 = la última, Ctrl+W, Ctrl+Mayús+T), con la ventana de Brave al
   frente (la del frente o, si no, la última usada, ``jarvis_windows.ventana_brave``).
 - Por nombre y la lista: accesibilidad de Windows. Brave expone cada pestaña como ``TabItem`` con el
   patrón de selección (medido 2026-11-17: 10 pestañas leídas en 0,45 s): se elige sin mover el mouse.
+- Mover a un monitor (2026-11-24, pedido del usuario): Brave no tiene atajo para sacar una pestaña a otra
+  ventana; lo hace la extensión «Jarvis para Brave» (``chrome.windows.create({tabId})``) y Jarvis lleva la
+  ventana nueva al monitor y la maximiza. Si era la única pestaña, se mueve la ventana entera.
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ import re
 import time
 import unicodedata
 
-ACCIONES = ("next", "previous", "number", "last", "close", "reopen", "go", "list")
+ACCIONES = ("next", "previous", "number", "last", "close", "reopen", "go", "list", "move")
+ESPERA_VENTANA_NUEVA = 3.0  # lo que puede tardar en aparecer la ventana de la pestaña movida
 
 VK_CONTROL, VK_SHIFT, VK_TAB = 0x11, 0x10, 0x09
 _SUBIR = 2  # KEYEVENTF_KEYUP
@@ -101,10 +106,13 @@ def _enviar(teclas: list[tuple]) -> None:
     jarvis_input._send_input(list(teclas))
 
 
-def pestana(action: str, number: int | None = None, title: str = "") -> str:
+def pestana(action: str, number: int | None = None, title: str = "", monitor: int | None = None,
+            screen_name: str | None = None) -> str:
     """La herramienta ``browser_tab``."""
     if action not in ACCIONES:
         raise ValueError(f"Acción de pestaña no válida: {action}.")
+    if action == "move":
+        return mover_pestana(number, title, monitor, screen_name)
     ventana = _brave_al_frente()
     if action in ATAJOS and not (action == "close" and title):
         _enviar(ATAJOS[action])
@@ -144,6 +152,81 @@ def pestana(action: str, number: int | None = None, title: str = "") -> str:
         _enviar(ATAJOS["close"])
         return f"Cerré la pestaña «{titulos[indice]}»."
     return f"Fui a la pestaña «{titulos[indice]}»."
+
+
+def _monitor_por_nombre(nombre: str) -> int:
+    """«tv» / «la tele» → el número del monitor activo con ese nombre (la «Smart TV Pro»)."""
+    import jarvis_core as core
+    import jarvis_displays
+    import jarvis_windows
+
+    clave = jarvis_windows.normalizar(nombre)
+    if clave in ("tele", "televisor", "television", "smart tv"):
+        clave = "tv"
+    pantallas, _ = jarvis_displays.listar_pantallas(jarvis_displays.cargar_mapa(core.obtener_preferencia))
+    for pantalla in pantallas:
+        if pantalla.numero and clave in jarvis_windows.normalizar(pantalla.nombre).split():
+            return pantalla.numero
+    raise ValueError(f"No encontré ningún monitor llamado «{nombre}».")
+
+
+def _numero_por_titulo(hwnd: int, title: str) -> int:
+    import ctypes
+
+    import uiautomation as auto
+
+    ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    with auto.UIAutomationInitializerInThread():
+        titulos = [titulo_limpio(c.Name) for c in _pestanas_de(hwnd, auto)]
+    indice = elegir(titulos, title)
+    if indice is None:
+        raise RuntimeError(f"No encontré ninguna pestaña de Brave que diga «{title}».")
+    return indice + 1
+
+
+def _ventana_nueva(antes: set[int], *, listar=None, dormir=time.sleep, reloj=time.monotonic):
+    """La ventana de Brave que apareció después de ``antes`` (espera hasta ``ESPERA_VENTANA_NUEVA``)."""
+    import jarvis_windows
+
+    listar = listar or jarvis_windows.listar_ventanas
+    limite = reloj() + ESPERA_VENTANA_NUEVA
+    while True:
+        nuevas = [v for v in listar() if v.programa == "brave" and v.hwnd not in antes]
+        if nuevas or reloj() >= limite:
+            return nuevas[0] if nuevas else None
+        dormir(0.1)
+
+
+def mover_pestana(number: int | None, title: str = "", monitor: int | None = None,
+                  screen_name: str | None = None) -> str:
+    """Saca la pestaña (por número, título o la actual) a una ventana nueva en el monitor pedido."""
+    import jarvis_brave
+    import jarvis_vision
+    import jarvis_windows
+
+    if monitor is None and screen_name:
+        monitor = _monitor_por_nombre(screen_name)
+    if monitor is None:
+        raise ValueError("Decime a qué monitor mover la pestaña (por ejemplo «al monitor 2»).")
+    destino = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), monitor)  # antes de tocar nada
+    ventana = _brave_al_frente()
+    if title:
+        number = _numero_por_titulo(ventana.hwnd, title)
+    antes = {v.hwnd for v in jarvis_windows.listar_ventanas() if v.programa == "brave"}
+    datos = jarvis_brave._activo().pedir("mover_pestana", numero=number)
+    titulo = str(datos.get("titulo") or "").strip()
+    if datos.get("sola"):
+        movida = ventana  # era la única pestaña: va la ventana entera
+    else:
+        movida = _ventana_nueva(antes)
+        if movida is None:
+            raise RuntimeError("Saqué la pestaña a otra ventana, pero no la encontré para moverla.")
+    if not jarvis_windows.mover(movida, destino):
+        raise RuntimeError(f"No pude llevar la pestaña al monitor {monitor}.")
+    jarvis_windows._user32().ShowWindow(movida.hwnd, 3)  # SW_MAXIMIZE
+    logging.info("Pestaña %s de Brave movida al monitor %s.", number or "actual", monitor)
+    cual = f"«{titulo}»" if titulo else (f"número {number}" if number else "actual")
+    return f"Moví la pestaña {cual} al monitor {monitor}."
 
 
 def titulos_actuales() -> list[str]:
@@ -200,6 +283,27 @@ _LISTA = re.compile(rf"^(?:que|cuales)\s+{_P}s\s+(?:tengo|hay)(?:\s+abiertas)?(?
                     rf"|^(?:deci|decime|dime|lista|listame|nombra|nombrame)\s+(?:las\s+|mis\s+)?{_P}s(?:\s+abiertas)?$")
 # «la pestaña de Ajustes» es una sección de Jarvis (``detectar_navegacion`` va antes); estas tampoco.
 _NO_TITULO = {"atras", "adelante", "jarvis", "rutinas"}
+
+
+# Lo que queda como «app» en «mueve la pestaña número 3 al monitor 2» (``detectar_mover_ventana``).
+_PESTANA_NUMERO = re.compile(rf"^{_P}\s+(?:numero\s+)?(?P<n>\d{{1,2}}|" + "|".join(_NUMEROS) + r")$")
+_PESTANA_ORDINAL = re.compile(r"^(?P<ord>" + "|".join(_ORDINALES) + rf")\s+{_P}$")
+_PESTANA_TITULO = re.compile(rf"^{_P}\s+(?:de|del)\s+(?P<titulo>.+)$")
+_PESTANA_ACTUAL = re.compile(rf"^(?:(?:esta|esa)\s+)?{_P}(?:\s+(?:actual|abierta))?$")
+
+
+def pestana_a_mover(app: str) -> dict | None:
+    """Argumentos de «move» si lo que se manda a un monitor es una pestaña; si no, None."""
+    if (m := _PESTANA_NUMERO.fullmatch(app)) is not None:
+        valor = m.group("n")
+        return {"action": "move", "number": int(valor) if valor.isdigit() else _NUMEROS[valor]}
+    if (m := _PESTANA_ORDINAL.fullmatch(app)) is not None:
+        return {"action": "move", "number": _ORDINALES[m.group("ord")]}
+    if (m := _PESTANA_TITULO.fullmatch(app)) is not None:
+        return {"action": "move", "title": m.group("titulo").strip()}
+    if _PESTANA_ACTUAL.fullmatch(app):
+        return {"action": "move"}
+    return None
 
 
 def detectar(texto: str) -> tuple[str, dict] | None:

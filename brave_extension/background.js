@@ -94,7 +94,20 @@ function actuar(n, accion, texto) {
   return {ok: false, error: "Acción desconocida."};
 }
 
+// «Mueve la pestaña 3 al monitor 2»: la saca a una ventana propia (Jarvis la lleva al monitor).
+// No lee ni toca la página, así que vale para cualquier pestaña.
+async function moverPestana(numero) {
+  const ventana = await chrome.windows.getLastFocused({populate: true, windowTypes: ["normal"]});
+  const pestanas = (ventana && ventana.tabs) || [];
+  const tab = numero ? pestanas[numero - 1] : pestanas.find((t) => t.active);
+  if (!tab) throw new Error(`Esa ventana de Brave tiene ${pestanas.length} pestañas: no hay una número ${numero}.`);
+  if (pestanas.length === 1) return {titulo: tab.title || "", sola: true};
+  const nueva = await chrome.windows.create({tabId: tab.id, focused: true});
+  return {titulo: tab.title || "", sola: false, ventana: nueva.id};
+}
+
 async function ejecutar(orden) {
+  if (orden.accion === "mover_pestana") return await moverPestana(orden.numero);
   const tab = await pestanaActiva();
   if (orden.accion === "leer") {
     const [r] = await chrome.scripting.executeScript({target: {tabId: tab.id}, func: leerPagina, args: [orden.max_texto || 6000]});

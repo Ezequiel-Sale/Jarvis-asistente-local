@@ -823,7 +823,7 @@ class CustomGestureAppTests(unittest.TestCase):
         host._run_routine_from_mobile.assert_called_once_with(7, desde="con un gesto")
         self.assertIn("rutina «Cine»", host._gesture_history[0])
         JarvisApp._on_gesture_shortcut(host, "propio:ok", False)
-        host._send_text_as_typed.assert_called_once_with("pausa")
+        host._send_text_as_typed.assert_called_once_with("pausa", exacto=True)  # tal cual la guardaste
 
     def test_unassigned_and_busy(self) -> None:
         host = self._host({})

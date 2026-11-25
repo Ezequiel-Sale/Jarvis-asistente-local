@@ -245,7 +245,9 @@ def interactuar_con_ventana_brave(
     brave: Path,
     atajo: int,
     texto: str | None = None,
+    elegir=None,
 ) -> bool:
+    """``elegir(ventanas) -> hwnd | None``: en qué ventana de Brave (None = no hay una que sirva)."""
     if os.name != "nt":
         return False
 
@@ -272,7 +274,12 @@ def interactuar_con_ventana_brave(
     ]
     user32.keybd_event.restype = None
     foreground = user32.GetForegroundWindow()
-    target = foreground if foreground in windows else windows[0]
+    if elegir is not None:
+        target = elegir(windows)
+        if target is None:
+            return False
+    else:
+        target = foreground if foreground in windows else windows[0]
     show_command = 3 if user32.IsZoomed(target) else 9
     user32.ShowWindow(target, show_command)
     user32.BringWindowToTop(target)
@@ -299,8 +306,8 @@ def interactuar_con_ventana_brave(
     keybd_event(0x0D, 0, 0x0002, 0)
     return True
 
-def navegar_en_ventana_brave(url: str, brave: Path) -> bool:
-    return interactuar_con_ventana_brave(brave, 0x4C, url)
+def navegar_en_ventana_brave(url: str, brave: Path, elegir=None) -> bool:
+    return interactuar_con_ventana_brave(brave, 0x4C, url, elegir)
 
 def abrir_nueva_pestana_brave(brave: Path) -> bool:
     return interactuar_con_ventana_brave(brave, 0x54)

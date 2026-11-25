@@ -344,6 +344,72 @@ def detectar_comando_navegacion_web(texto: str) -> str | None:
     destino = coincidencia.group(1).strip(" \t,;!?¿¡")
     return destino or None
 
+
+# «Navega a Twitch en el monitor 1» (2026-11-24: iba entero como dirección y fallaba «no puede contener espacios»).
+_NAVEGAR_MONITOR = re.compile(
+    r"^(?P<destino>.+?)\s+(?:en|al|a|para)\s+(?:el\s+|la\s+)?(?:(?P<tv>tele|televisor|television|tv|smart\s+tv)"
+    r"|(?:monitor|pantalla)\s+(?:numero\s+|n[uú]mero\s+)?(?P<n>\d|uno|dos|tres|cuatro))$", re.IGNORECASE)
+# Sitios que se nombran sin dominio. Lo demás de una palabra sin punto → «nombre.com».
+SITIOS_CONOCIDOS = {
+    "twitch": "twitch.tv", "youtube": "youtube.com", "netflix": "netflix.com", "crunchyroll": "crunchyroll.com",
+    "gmail": "mail.google.com", "google": "google.com", "whatsapp": "web.whatsapp.com",
+    "spotify": "open.spotify.com", "github": "github.com", "mercadolibre": "mercadolibre.com.ar",
+    "kick": "kick.com", "disney": "disneyplus.com", "disneyplus": "disneyplus.com", "max": "max.com",
+    "primevideo": "primevideo.com", "chatgpt": "chatgpt.com", "claude": "claude.ai",
+}
+_NUM_PALABRA = {"uno": 1, "dos": 2, "tres": 3, "cuatro": 4}
+
+
+def direccion_de_sitio(destino: str) -> str:
+    """«Twitch» → twitch.tv, «Mercado Libre» → mercadolibre.com.ar, «google.com» queda igual."""
+    if "." in destino or "/" in destino:
+        return destino
+    clave = unicodedata.normalize("NFKD", destino.casefold())
+    clave = re.sub(r"[^a-z0-9]", "", "".join(c for c in clave if not unicodedata.combining(c)))
+    if not clave:
+        return destino
+    return SITIOS_CONOCIDOS.get(clave, f"{clave}.com")
+
+
+# El monitor en cualquier lugar de la frase («En el monitor 1 abre…», «… en la tele»).
+_EN_MONITOR = re.compile(
+    r"(?:^|\s)(?:en|al|a|para)\s+(?:el\s+|la\s+)?(?:(?P<tv>tele|televisor|televisi[oó]n|tv|smart\s+tv)"
+    r"|(?:monitor|pantalla)\s+(?:n[uú]mero\s+)?(?P<n>\d|uno|dos|tres|cuatro))(?=$|[\s,.;!?])", re.IGNORECASE)
+# «abre una nueva pestaña y luego navega Twitch.tv» (2026-11-24: la IA abrió una ventana nueva).
+_PESTANA_Y_NAVEGA = re.compile(
+    r"^(?:abr[eií]r?|crea|cre[aá])\s+(?:una\s+)?(?:nueva\s+pesta[nñ]a|pesta[nñ]a\s+nueva|otra\s+pesta[nñ]a)"
+    r"[\s,]+(?:y\s+)?(?:luego\s+|despu[eé]s\s+|entonces\s+)?(?P<resto>.+)$", re.IGNORECASE)
+_NAVEGA = re.compile(
+    r"^(?:(?:jarvis|por favor|puedes|podr[ií]as|quiero)[,\s]+)*"
+    r"(?:(?:ir|ve|anda|and[aá]|naveg[aá]|dir[ií]gete|dirigirme)\s+a|naveg[aá]|naveg[aá]\s+en)\s+(?P<destino>.+?)$",
+    re.IGNORECASE)
+
+
+def detectar_navegacion_web(texto: str) -> tuple[str, dict[str, object]] | None:
+    """``("navigate_browser", {"url", "monitor"?/"screen_name"?, "new_tab"?})`` para «navega a X (en el monitor
+    N)» y «(en el monitor N) abre una nueva pestaña y luego navega X»."""
+    frase = texto.strip().rstrip(".!?¡¿ ")
+    argumentos: dict[str, object] = {}
+    m = _EN_MONITOR.search(frase)
+    if m is not None:
+        if m.group("tv"):
+            argumentos["screen_name"] = "tv"
+        else:
+            valor = m.group("n").lower()
+            argumentos["monitor"] = int(valor) if valor.isdigit() else _NUM_PALABRA[valor]
+        frase = (frase[:m.start()] + " " + frase[m.end():]).strip(" ,")
+    p = _PESTANA_Y_NAVEGA.fullmatch(frase)
+    if p is not None:
+        argumentos["new_tab"] = True
+        frase = p.group("resto").strip()
+    n = _NAVEGA.fullmatch(frase)
+    if n is None:
+        return None
+    destino = n.group("destino").strip(" \t,;!?¿¡")
+    if not destino:
+        return None
+    return "navigate_browser", {"url": direccion_de_sitio(destino), **argumentos}
+
 def normalizar_url_web(destino: str) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in destino):
         raise ValueError("La dirección contiene caracteres no válidos.")
@@ -564,7 +630,8 @@ _CORRECCIONES_VOZ = (
     (r"\brea\s+nuda\b", "reanuda"),
     (r"\bre\s+anudar?\b", "reanuda"),
     (r"\bvaos\s+al\s+(v[ií]deo)\b", r"pausa el \1"),
-    (r"\bdes(?:hutea|\s+mutea|mutia|mute\s+a)\b", "desmutea"),
+    # «desmuntea Twitch» (2026-11-24): no se reconocía y la IA lo tomó por «desmontar» y cerró la pestaña.
+    (r"\bdes(?:hutea|\s+mutea|mutia|mute\s+a|muntea|montea|\s+muntea|mutie|mutee)\b", "desmutea"),
     (r"\bmute\s+a\s+(la|el)\b", r"mutea \1"),
     (r"\bmutia\b", "mutea"),
     (r"\bspot(?:icia|ifai|ifay|ifi)\b", "Spotify"),
@@ -983,6 +1050,13 @@ def detectar_mover_ventana(texto: str) -> tuple[str, dict[str, object]] | None:
         return None
     if not app or re.fullmatch(r"(?:el\s+|la\s+)?(?:monitor|pantalla|escritorio)(?:\s+.*)?", app):
         return None
+    import jarvis_pestanas
+
+    # «mueve la pestaña número 3 al monitor 2» (2026-11-24): la pestaña sola, no la ventana de Brave.
+    pestana = jarvis_pestanas.pestana_a_mover(app)
+    if pestana is not None:
+        donde = {"screen_name": "tv"} if match.group("tv") else {"monitor": _numero_monitor(match.group(3))}
+        return "browser_tab", {**pestana, **donde}
     if match.group("tv"):
         return "move_window", {"app": app, "screen_name": "tv"}
     return "move_window", {"app": app, "monitor": _numero_monitor(match.group(3))}
@@ -1014,6 +1088,14 @@ _VERBO_VENTANA = {
 _VENTANA = re.compile(
     r"^(?P<verbo>" + "|".join(_VERBO_VENTANA.values()) + r")\s+(?:(?:la|el|las|los)\s+)?"
     r"(?:ventanas?\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?(?P<app>.+?)(?:\s+(?:al\s+frente|adelante))?$"
+)
+# «cierra el navegador del monitor 3», «minimiza Discord en el monitor 2» (2026-11-24: la IA minimizó Brave).
+_VERBO_CERRAR = r"cierra|cerra|cerrar"
+_VENTANA_EN_MONITOR = re.compile(
+    r"^(?P<verbo>" + "|".join([_VERBO_CERRAR, *_VERBO_VENTANA.values()]) + r")\s+(?:(?:la|el|las|los)\s+)?"
+    r"(?:ventanas?\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?(?P<app>.+?)\s+"
+    r"(?:del|de\s+la|en\s+el|en\s+la|que\s+esta\s+en\s+el)\s+(?:monitor|pantalla)\s+(?:numero\s+)?"
+    r"(?P<n>\d|uno|dos|tres|cuatro)$"
 )
 _CAMBIA_A_VENTANA = re.compile(
     r"^(?:cambia|cambiate|pasa|pasate|ve|ir|vamos)\s+a\s+la\s+ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?(?P<app>.+)$"
@@ -1051,6 +1133,15 @@ def detectar_comando_ventanas(texto: str) -> tuple[str, dict[str, object]] | Non
     for accion, patron in _HISTORIAL.items():
         if patron.fullmatch(consulta):
             return "browser_history", {"action": accion}
+    if (match := _VENTANA_EN_MONITOR.fullmatch(consulta)) is not None:
+        app = match.group("app").strip()
+        if app in _NAVEGADOR:
+            app = "brave"
+        if app and not _ENCADENADA.search(app) and app not in ("monitor", "pantalla", "escritorio"):
+            verbo = match.group("verbo")
+            accion = "window_close" if re.fullmatch(_VERBO_CERRAR, verbo) else next(
+                a for a, patron in _VERBO_VENTANA.items() if re.fullmatch(patron, verbo))
+            return "window_control", {"app": app, "action": accion, "monitor": _numero_monitor(match.group("n"))}
     if consulta in ("muestra el escritorio", "mostrar el escritorio", "minimiza todo",
                     "minimiza todas las ventanas", "ver el escritorio"):
         return "window_control", {"app": "todo", "action": "window_minimize"}
@@ -1579,6 +1670,34 @@ def detectar_comando_widget_juegos(texto: str) -> tuple[str, dict[str, object]] 
     if _WIDGET_JUEGOS_ON.fullmatch(consulta):
         return "games_widget", {"visible": True}
     return None
+
+
+# «Cerrá WhatsApp», «cierra Discord y Spotify» (2026-11-24: iba a la IA, que a veces contestaba «no
+# estaba abierto» sin intentarlo). Lo que no es un programa queda afuera: pestañas, ventanas, «esto»,
+# pantalla completa, sesión, modos… (de eso se ocupan las otras órdenes o la IA).
+_CERRAR_PROGRAMA = re.compile(
+    r"^(?:cierra|cerrar|cierrame|cierre|termina|terminar|mata|matar|sal\s+de|salir\s+de)\s+"
+    r"(?:(?:el|la|los|las)\s+)?(?:(?:programa|programas|app|aplicacion|aplicaciones)\s+(?:de\s+)?)?"
+    r"(?P<nombre>[a-z0-9][a-z0-9 .+-]{1,40})$"
+)
+_NO_ES_PROGRAMA = re.compile(
+    r"\b(?:pestana|pestanas|tab|tabs|ventana|ventanas|esto|eso|esta|esa|este|ese|todo|todas|todos|sesion|"
+    r"pantalla|modo|chat|conversacion|jarvis|monitor|tele|televisor|puerta|ojos|boca|aviso|plan|mano|"
+    r"menu|dialogo|carpeta|archivo|grabacion|video|juego|"
+    # Sitios: son pestañas del navegador; cerrar el «programa» cerraría Brave entero.
+    r"youtube|twitch|netflix|crunchyroll|kick|prime|disney|gmail|facebook|instagram|twitter|reddit)\b"
+)
+
+
+def detectar_cerrar_programa(texto: str) -> tuple[str, dict[str, object]] | None:
+    """«cerrá WhatsApp» → close_program {"names": "whatsapp"}; «cerrá Discord y Spotify» → los dos."""
+    m = _CERRAR_PROGRAMA.fullmatch(_normalizar_consulta(texto))
+    if m is None:
+        return None
+    nombres = [n.strip() for n in re.split(r"\s+y\s+|,", m.group("nombre")) if n.strip()]
+    if not nombres or len(nombres) > 4 or any(_NO_ES_PROGRAMA.search(n) or len(n.split()) > 3 for n in nombres):
+        return None
+    return "close_program", {"names": ", ".join(nombres)}
 
 
 _LIMPIEZA = re.compile(

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jarvis para Brave",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Deja que tu asistente Jarvis (en esta PC) lea la pestaña activa y toque sus botones y campos cuando se lo pedís, y pulsa «Omitir intro/créditos» en Crunchyroll y otros sitios de series. Solo habla con 127.0.0.1.",
   "permissions": [
     "scripting",

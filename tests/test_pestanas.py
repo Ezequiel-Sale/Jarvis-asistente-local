@@ -34,6 +34,63 @@ class PhraseTests(unittest.TestCase):
             with self.subTest(frase=frase):
                 self.assertEqual(p.detectar(frase), ("browser_tab", argumentos))
 
+    def test_move_to_monitor(self) -> None:
+        from jarvis_commands import detectar_mover_ventana
+
+        casos = {
+            "mueve la pestaña número 3 al monitor 2": {"action": "move", "number": 3, "monitor": 2},
+            "mové la pestaña 3 al monitor 1": {"action": "move", "number": 3, "monitor": 1},
+            "manda la tercera pestaña a la pantalla 2": {"action": "move", "number": 3, "monitor": 2},
+            "pasa la pestaña de YouTube al monitor 3": {"action": "move", "title": "youtube", "monitor": 3},
+            "mueve esta pestaña a la tele": {"action": "move", "screen_name": "tv"},
+            "mover la pestaña dos al monitor 1": {"action": "move", "number": 2, "monitor": 1},
+        }
+        for frase, argumentos in casos.items():
+            with self.subTest(frase=frase):
+                self.assertEqual(detectar_mover_ventana(frase), ("browser_tab", argumentos))
+        # Las ventanas siguen siendo ventanas.
+        self.assertEqual(detectar_mover_ventana("mueve Brave al monitor 2"),
+                         ("move_window", {"app": "brave", "monitor": 2}))
+
+    def test_move_takes_the_new_window_to_the_monitor(self) -> None:
+        brave = SimpleNamespace(hwnd=10, programa="brave")
+        nueva = SimpleNamespace(hwnd=20, programa="brave")
+        puente = Mock()
+        puente.pedir.return_value = {"titulo": "Twitch", "sola": False}
+        destino = object()
+        listas = iter([[brave], [brave, nueva]])
+        with patch.object(p, "_brave_al_frente", return_value=brave), \
+                patch("jarvis_brave._activo", return_value=puente), \
+                patch("jarvis_vision.listar_monitores", return_value=[]), \
+                patch("jarvis_vision.elegir_monitor", return_value=destino), \
+                patch("jarvis_windows.listar_ventanas", side_effect=lambda: next(listas)), \
+                patch("jarvis_windows.mover", return_value=True) as mover, \
+                patch("jarvis_windows._user32") as user32:
+            texto = p.pestana("move", number=3, monitor=2)
+        puente.pedir.assert_called_once_with("mover_pestana", numero=3)
+        mover.assert_called_once_with(nueva, destino)
+        user32.return_value.ShowWindow.assert_called_once_with(20, 3)
+        self.assertEqual(texto, "Moví la pestaña «Twitch» al monitor 2.")
+
+    def test_only_tab_moves_the_whole_window(self) -> None:
+        brave = SimpleNamespace(hwnd=10, programa="brave")
+        puente = Mock()
+        puente.pedir.return_value = {"titulo": "Twitch", "sola": True}
+        with patch.object(p, "_brave_al_frente", return_value=brave), \
+                patch("jarvis_brave._activo", return_value=puente), \
+                patch("jarvis_vision.listar_monitores", return_value=[]), \
+                patch("jarvis_vision.elegir_monitor", return_value="m"), \
+                patch("jarvis_windows.listar_ventanas", return_value=[brave]), \
+                patch("jarvis_windows.mover", return_value=True) as mover, \
+                patch("jarvis_windows._user32"):
+            p.pestana("move", monitor=1)
+        puente.pedir.assert_called_once_with("mover_pestana", numero=None)
+        mover.assert_called_once_with(brave, "m")
+
+    def test_move_needs_a_monitor(self) -> None:
+        with self.assertRaises(ValueError):
+            p.pestana("move", number=2)
+
     def test_other_orders_are_not_taken(self) -> None:
         for frase in ("abrí una pestaña nueva", "silenciá la pestaña", "siguiente canción", "cerrá esto",
                       "pasá este tema"):

@@ -152,6 +152,7 @@ CATALOGO: tuple[Seccion, ...] = (
         "Lo lleva a esa pantalla y lo acomoda (también «mueve Jarvis al monitor 2 a la izquierda»).")),
     _s("🗔", "Programas, juegos y ventanas",
        ("Abre WhatsApp / Abre la calculadora", "Abre cualquier aplicación por su nombre."),
+       ("Cerrá WhatsApp / Cerrá Discord y Spotify", "Cierra esos programas (como la X; si siguen, a la fuerza)."),
        ("Abre Elden Ring", "Abre un juego de tu biblioteca. Al jugar, Jarvis libera la tarjeta gráfica, se "
         "calla los avisos no urgentes y cierra los programas que elijas en Ajustes → Modo juego."),
        ("Minimiza Discord / Maximiza Spotify", "Achica o agranda la ventana de un programa."),
@@ -162,6 +163,7 @@ CATALOGO: tuple[Seccion, ...] = (
        ("Abre una pestaña", "Abre una pestaña nueva en Brave."),
        ("Abrí una ventana nueva / de incógnito", "Abre una ventana nueva de Brave (o de incógnito)."),
        ("Abre youtube.com", "Va a esa página web."),
+       ("Mueve la pestaña número 3 al monitor 2", "Saca esa pestaña a su propia ventana en ese monitor."),
        ("Página anterior / Página siguiente", "Navega hacia atrás o adelante."),
        ("Recarga la página / F5", "Vuelve a cargar la página.")),
     _s("📄", "Archivos",

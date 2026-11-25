@@ -720,8 +720,10 @@ def crear_registro_herramientas(
         (
             "Pestañas de Brave: next (siguiente), previous (anterior), number (la pestaña number, desde 1), "
             "last (la última), close (cierra la actual o, con title, la que tenga ese título), reopen (vuelve "
-            "a abrir la última cerrada), go (va a la pestaña cuyo título contiene title: «la de YouTube») y "
-            "list (dice qué pestañas hay). Para abrir una nueva, open_new_browser_tab."
+            "a abrir la última cerrada), go (va a la pestaña cuyo título contiene title: «la de YouTube»), "
+            "list (dice qué pestañas hay) y move (saca la pestaña number, la de title o la actual a una "
+            "ventana propia en el monitor `monitor`, o en la tele con screen_name «tv»). Para abrir una "
+            "nueva, open_new_browser_tab."
         ),
         {
             "type": "object",
@@ -729,6 +731,8 @@ def crear_registro_herramientas(
                 "action": {"type": "string", "enum": list(jarvis_pestanas.ACCIONES)},
                 "number": {"type": "integer", "minimum": 1, "maximum": 99},
                 "title": {"type": "string", "maxLength": 100},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+                "screen_name": {"type": "string", "maxLength": 40},
             },
             "required": ["action"],
             "additionalProperties": False,
@@ -740,10 +744,17 @@ def crear_registro_herramientas(
     )
     registry.register(
         "navigate_browser",
-        "Navega en Brave a una dirección web HTTP o HTTPS.",
+        "Navega en Brave a una dirección web HTTP o HTTPS; con monitor (o screen_name «tv»), en la ventana de "
+        "Brave de ese monitor (o en una nueva llevada ahí); new_tab=true la abre en una pestaña nueva (no hace falta "
+        "open_new_browser_tab antes).",
         {
             "type": "object",
-            "properties": {            "url": {"type": "string", "minLength": 1}},
+            "properties": {
+                "url": {"type": "string", "minLength": 1},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
+                "screen_name": {"type": "string", "maxLength": 40},
+                "new_tab": {"type": "boolean"},
+            },
             "required": ["url"],
             "additionalProperties": False,
         },
@@ -926,8 +937,9 @@ def crear_registro_herramientas(
             "Minimiza, maximiza, restaura o trae al frente las ventanas de cualquier programa. "
             "app es el programa (discord, spotify, explorador…), parte del título, «todo» para "
             "todas las ventanas o «esto» para la que el usuario señala (o la activa). Para Brave o Jarvis "
-            "también sirve. window_close cierra solo «esto» (la ventana señalada); para cerrar un programa "
-            "por su nombre, close_program."
+            "también sirve. Con monitor, solo las ventanas de ese monitor (y window_close puede cerrar por "
+            "nombre: «cierra el navegador del monitor 3»). Sin monitor, window_close cierra solo «esto» (la "
+            "ventana señalada); para cerrar un programa entero por su nombre, close_program."
         ),
         {
             "type": "object",
@@ -936,6 +948,7 @@ def crear_registro_herramientas(
                 "action": {"type": "string",
                            "enum": ["window_minimize", "window_maximize", "window_restore", "window_focus",
                                     "window_close"]},
+                "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
             },
             "required": ["app", "action"],
             "additionalProperties": False,

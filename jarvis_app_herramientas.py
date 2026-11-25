@@ -182,9 +182,23 @@ class HerramientasMixin:
         logging.info("Resumen automático de la mañana.")
         self._start_direct_tool_action("morning_briefing", {}, "(resumen automático de la mañana)")
 
-    def _tool_window_control(self, app: str, action: str) -> str:
-        """«minimiza Discord», «maximiza Spotify», «trae el explorador al frente»."""
+    def _tool_window_control(self, app: str, action: str, monitor: int | None = None) -> str:
+        """«minimiza Discord», «maximiza Spotify», «trae el explorador al frente», «cierra Brave del monitor 3»."""
         clave = jarvis_windows.nombre_app(app)
+        if monitor is not None:
+            import jarvis_vision
+
+            destino = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), monitor)
+            user32 = jarvis_windows._user32()
+            objetivo = jarvis_windows._monitor_destino(user32, destino)
+            hechas, programas = jarvis_windows.cambiar_estado(
+                app, action, monitor=monitor,
+                en_monitor=lambda v: user32.MonitorFromWindow(v.hwnd, 2) == objetivo)
+            if hechas == 0:
+                raise RuntimeError(f"Windows no dejó cambiar la ventana de «{app}».")
+            verbo = jarvis_windows.ACCIONES_ESTADO[action][0]
+            cuantas = f"{hechas} ventanas" if hechas > 1 else "la ventana"
+            return f"{verbo.capitalize()} {cuantas} de {', '.join(programas)} del monitor {monitor}."
         if clave in jarvis_windows.PROPIAS:  # su propia ventana, aunque esté oculta en la bandeja
             if action in ("window_minimize", "window_maximize"):
                 return self._tool_manage_window("minimize" if action == "window_minimize" else "maximize")
@@ -362,16 +376,53 @@ class HerramientasMixin:
             subprocess.Popen([str(brave), "about:blank"], shell=False)
         return "Abrí una pestaña nueva en Brave."
 
-    def _tool_navigate_browser(self, url: str) -> str:
+    def _tool_navigate_browser(self, url: str, monitor: int | None = None,
+                               screen_name: str | None = None, new_tab: bool = False) -> str:
         url = normalizar_url_web(url)
         brave = encontrar_brave()
         if brave is None:
             raise FileNotFoundError(
                 "No encontré Brave. Instálalo o agrega brave.exe al PATH."
             )
+        if monitor is None and screen_name:
+            monitor = self._monitor_por_nombre(screen_name)
+        if monitor is not None:
+            return self._navegar_en_monitor(url, brave, monitor, new_tab)
+        if new_tab:
+            from jarvis_system import interactuar_con_ventana_brave
+
+            if not interactuar_con_ventana_brave(brave, 0x54, url):  # Ctrl+T y la dirección
+                subprocess.Popen([str(brave), url], shell=False)
+            return f"Abrí {url} en una pestaña nueva de Brave."
         if not navegar_en_ventana_brave(url, brave):
             subprocess.Popen([str(brave), url], shell=False)
         return f"Navegué a {url} en Brave."
+
+    def _navegar_en_monitor(self, url: str, brave, numero: int, new_tab: bool = False) -> str:
+        """En la ventana de Brave que está en ese monitor o, si no hay, en una nueva llevada ahí."""
+        import jarvis_pestanas
+        import jarvis_vision
+        import jarvis_windows
+
+        destino = jarvis_vision.elegir_monitor(jarvis_vision.listar_monitores(), numero)
+        user32 = jarvis_windows._user32()
+        objetivo = jarvis_windows._monitor_destino(user32, destino)
+
+        def en_ese_monitor(ventanas: list[int]) -> int | None:
+            return next((h for h in ventanas if user32.MonitorFromWindow(h, 2) == objetivo), None)
+
+        from jarvis_system import interactuar_con_ventana_brave
+
+        if interactuar_con_ventana_brave(brave, 0x54 if new_tab else 0x4C, url, en_ese_monitor):
+            donde = "una pestaña nueva de Brave" if new_tab else "Brave"
+            return f"Abrí {url} en {donde}, en el monitor {numero}."
+        antes = {v.hwnd for v in jarvis_windows.listar_ventanas() if v.programa == "brave"}
+        subprocess.Popen([str(brave), "--new-window", url], shell=False)
+        nueva = jarvis_pestanas._ventana_nueva(antes)
+        if nueva is None or not jarvis_windows.mover(nueva, destino):
+            return f"Abrí {url} en Brave, pero no pude llevarlo al monitor {numero}."
+        user32.ShowWindow(nueva.hwnd, 3)  # SW_MAXIMIZE
+        return f"Abrí {url} en una ventana nueva de Brave en el monitor {numero}."
 
     def _tool_launch_game(self, name: str) -> str:
         folder_name, executable = localizar_ejecutable_juego(name)

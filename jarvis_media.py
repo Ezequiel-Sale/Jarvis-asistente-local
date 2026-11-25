@@ -1043,6 +1043,7 @@ def volumen_aplicacion(
     mute: bool | None = None,
     *,
     sesiones: Callable[[], list] | None = None,
+    pestana: Callable[..., str] | None = None,
 ) -> str:
     if percentage is None and mute is None:
         raise ValueError("Indica percentage o mute.")
@@ -1074,7 +1075,21 @@ def volumen_aplicacion(
             return f"Quité el silencio de {nombre}."
         return f"Volumen de {nombre} al {percentage} %."
 
-    return aplicar() if sesiones is not None else _con_com(aplicar)
+    resultado = aplicar() if sesiones is not None else _con_com(aplicar)
+    # 2026-11-24: «desmuteá Twitch» buscaba una aplicación «twitch» y no la hay (es una pestaña de Brave).
+    # Si ninguna app con audio se llama así, se silencia o activa la pestaña cuyo título lo contiene.
+    if mute is not None and percentage is None and resultado.startswith("No encuentro audio de"):
+        pestana = pestana or (silenciar_pestana if sesiones is None else None)
+        if pestana is not None:
+            try:
+                en_pestana = pestana(mute=mute, match=app)
+            except Exception:
+                logging.debug("No se pudo probar con las pestañas de «%s».", app, exc_info=True)
+            else:
+                if not en_pestana.startswith("No encontré"):
+                    return en_pestana
+                return f"{resultado} Tampoco encontré una pestaña de «{app}» con sonido."
+    return resultado
 
 
 def aplicaciones_con_audio(*, sesiones: Callable[[], list] | None = None) -> list[dict]:

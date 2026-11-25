@@ -548,7 +548,7 @@ class GestosMixin:
         elif tipo == "rutina":
             self._run_routine_from_mobile(int(valor), desde="con un gesto")
         else:  # frase: como si la escribieras en el chat
-            self._send_text_as_typed(str(valor))
+            self._send_text_as_typed(str(valor), exacto=True)  # tal cual la guardaste
         self._gesture_history_add(gesto, self._describe_custom_gesture(asignacion))
 
     # --- Fase 6: «enseñá tu gesto» -------------------------------------------------------

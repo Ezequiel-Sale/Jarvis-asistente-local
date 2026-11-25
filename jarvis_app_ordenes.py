@@ -62,11 +62,12 @@ from jarvis_commands import (
     detectar_comando_limpieza,
     detectar_comando_monitores,
     detectar_comando_multimedia,
-    detectar_comando_navegacion_web,
+    detectar_navegacion_web,
     detectar_comando_nueva_pestana,
     detectar_comando_nueva_ventana,
     detectar_comando_tema,
     detectar_comando_widget_juegos,
+    detectar_cerrar_programa,
     detectar_comando_ventanas,
     detectar_comando_volumen,
     detectar_comando_voz,
@@ -79,7 +80,7 @@ from jarvis_commands import (
 )
 from jarvis_plugins import GestorPlugins
 from jarvis_system import cambiar_estado_ventana_brave, encontrar_brave, localizar_ejecutable_juego
-from jarvis_theme import CYAN, ERROR, MUTED
+from jarvis_theme import CYAN, ERROR, MUTED, TEXT
 from jarvis_tool_registry import ToolCancelledError, ToolError
 from jarvis_app_confirmaciones import ConfirmacionesMixin
 
@@ -111,6 +112,125 @@ class OrdenesMixin:
             logging.debug("No se pudo revisar si «…» es una orden conocida.", exc_info=True)
             return False
 
+    # --- «¿Quisiste decir…?» (jarvis_correcciones, 2026-11-24) ------------------------------------
+    def _es_orden_completa(self, texto: str) -> bool:
+        """¿Jarvis la hace sin la IA, entera o partida en órdenes conocidas?"""
+        if self._is_known_order(texto):
+            return True
+        partes = self._split_orders(texto)
+        return bool(partes) and len(partes) > 1 and all(self._is_known_order(p) for p in partes)
+
+    def _corregir_palabras(self, texto: str) -> str:
+        """Las palabras mal entendidas que ya confirmaste se cambian solas."""
+        import jarvis_correcciones
+
+        aprendidas = self.__dict__.get("_correcciones_aprendidas")  # se cargan al arrancar (no se lee la base acá)
+        if not isinstance(aprendidas, dict) or not aprendidas:
+            return texto
+        corregido = jarvis_correcciones.aplicar(texto, aprendidas)
+        if corregido != texto:
+            logging.info("Palabra corregida con lo aprendido (%d caracteres).", len(corregido))
+        return corregido
+
+    def _buscar_correccion(self, texto: str):
+        import jarvis_correcciones
+
+        if texto == self.__dict__.get("_sin_correccion_una_vez"):
+            self._sin_correccion_una_vez = None
+            return None
+        try:
+            return jarvis_correcciones.sugerir(texto, self._es_orden_completa)
+        except Exception:
+            logging.debug("No se pudo buscar una palabra parecida.", exc_info=True)
+            return None
+
+    def _preguntar_correccion(self, texto: str, escuchada: str, correcta: str, corregido: str) -> None:
+        """Hilo de Tk: «¿Quisiste decir "desmutea"?» con SÍ / NO / «¿Cuál es la palabra?»."""
+        import jarvis_ui_kit as kit
+
+        logging.info("¿Quisiste decir…? Sugerí «%s» para «%s».", correcta, escuchada)
+        self._correccion_pendiente = {"texto": texto, "escuchada": escuchada, "correcta": correcta,
+                                      "corregido": corregido}
+        tarjeta, cuerpo = self._confirmation_card(
+            titulo=f"¿QUISISTE DECIR «{correcta.upper()}»?", color=CYAN, aprobar="SÍ", rechazar="NO",
+            pista=f"Escuché «{escuchada}». Si es otra palabra, tocá «¿Cuál es la palabra?» y escribila: "
+                  "la recuerdo para la próxima. También podés responder por voz: «sí», «no» o «la palabra es …».",
+            al_aprobar=lambda: self._resolver_correccion("si"),
+            al_rechazar=lambda: self._resolver_correccion("no"),
+            resumen=f"¿Quisiste decir «{correcta}»?")
+        self._correccion_pendiente["tarjeta"] = tarjeta
+        tk.Label(cuerpo, text=f"«{corregido}»", bg=cuerpo.cget("bg"), fg=TEXT, font=("Segoe UI", 11),
+                 anchor="w", justify="left", wraplength=640).pack(anchor="w")
+        zona = tk.Frame(cuerpo, bg=cuerpo.cget("bg"))
+        zona.pack(anchor="w", fill="x", pady=(8, 0))
+
+        def pedir_palabra() -> None:
+            for hijo in zona.winfo_children():
+                hijo.destroy()
+            entrada = tk.Entry(zona, bg=kit.color("PANEL"), fg=TEXT, insertbackground=CYAN, relief="flat",
+                               font=("Segoe UI", 10), width=24)
+            entrada.pack(side="left", ipady=5, padx=(0, 8))
+            entrada.focus_set()
+            guardar = lambda *_: self._resolver_correccion("palabra", entrada.get())
+            entrada.bind("<Return>", lambda _e: (guardar(), "break")[1])
+            kit.boton(zona, "GUARDAR", guardar, primario=True).pack(side="left")
+
+        kit.boton(zona, "¿CUÁL ES LA PALABRA?", pedir_palabra, fondo="PANEL").pack(side="left")
+        self._hablar_aviso(f"¿Quisiste decir {correcta}?")
+
+    def _hablar_aviso(self, texto: str) -> None:
+        """Solo voz (la pregunta ya está en el chat): no con el audio apagado ni jugando en silencio."""
+        if not getattr(self, "audio_enabled", False) or getattr(self, "_game_quiet", False) is True:
+            return
+
+        def hablar() -> None:
+            try:
+                self.events.put(("announce_audio", core.generar_audio_tts(texto)))
+            except Exception:
+                logging.debug("No se pudo decir la pregunta.", exc_info=True)
+
+        threading.Thread(target=hablar, name="JarvisPreguntaPalabra", daemon=True).start()
+
+    def _resolver_correccion(self, tipo: str, palabra: str | None = None) -> None:
+        """Hilo de Tk. SÍ: aprende la sugerida y hace la orden; NO: la frase va como estaba (a la IA);
+        «palabra»: aprende la que escribiste o dijiste y hace la frase con ella."""
+        import jarvis_correcciones
+
+        pendiente = self.__dict__.get("_correccion_pendiente")
+        if not pendiente:
+            return
+        if tipo == "palabra":
+            palabra = " ".join((palabra or "").split())
+            if not palabra:
+                return  # campo vacío: sigue esperando
+        self._correccion_pendiente = None
+        escuchada, tarjeta = pendiente["escuchada"], pendiente["tarjeta"]
+        resolver = getattr(tarjeta, "jarvis_resolver", None)
+        if tipo == "no":
+            if resolver is not None:
+                resolver(False, "✕  NO: lo mando como estaba")
+            self._sin_correccion_una_vez = pendiente["texto"]
+            texto = pendiente["texto"]
+        else:
+            correcta = pendiente["correcta"] if tipo == "si" else palabra
+            try:
+                self._correcciones_aprendidas = jarvis_correcciones.guardar(
+                    core.obtener_preferencia, core.guardar_preferencia, escuchada, correcta)
+            except Exception:
+                logging.exception("No se pudo guardar la palabra corregida.")
+            logging.info("Palabra aprendida: «%s» → «%s».", escuchada, correcta)
+            if resolver is not None:
+                resolver(True, f"✓  Aprendí: «{escuchada}» → «{correcta}»")
+            texto = jarvis_correcciones.reemplazar(pendiente["texto"], escuchada, correcta)
+            self._sin_correccion_una_vez = texto  # si aun así no es una orden, va a la IA sin volver a preguntar
+            self._refresh_correcciones()
+        self.root.after(50, lambda: self._send_text_as_typed(texto))
+
+    def _refresh_correcciones(self) -> None:
+        refrescar = getattr(self, "_dibujar_correcciones", None)
+        if callable(refrescar):
+            refrescar()
+
     def _split_orders(self, texto: str) -> list[str] | None:
         """Las oraciones a hacer por separado, o None si la frase va entera como siempre."""
         from jarvis_commands import dividir_oraciones
@@ -119,6 +239,13 @@ class OrdenesMixin:
         if not partes:
             return None
         if len(partes) == 1:
+            # 2026-11-24: «Cerrá WhatsApp y luego desmuteá Twitch» iba entera a la IA (que contestó sin
+            # hacer nada). Con «luego / después» o «y», se parte si CADA parte es una orden conocida.
+            from jarvis_commands import dividir_ordenes, dividir_por_y
+
+            for divididas in (dividir_ordenes(partes[0]), dividir_por_y(partes[0])):
+                if len(divididas) >= 2 and all(self._is_known_order(p) for p in divididas):
+                    return divididas
             # Solo se quitó cortesía («Pausa. Gracias.» → «Pausa»): esa sola; si no cambió nada, None.
             return partes if partes[0].rstrip(".") != texto.strip().rstrip(".") else None
         if not any(self._is_known_order(p) for p in partes):
@@ -129,7 +256,9 @@ class OrdenesMixin:
         """Hilo de Tk: la primera ya, las demás cuando Jarvis quede libre (de a una)."""
         logging.info("Frase con %d órdenes: se hacen de a una.", len(partes))
         self._pending_orders = list(partes[1:])
-        self._send_text_as_typed(partes[0])
+        # Las partes de la frase de un gesto también van tal cual (sin palabras corregidas).
+        self._ordenes_exactas = self.__dict__.get("_texto_exacto") is True
+        OrdenesMixin._enviar_parte(self, partes[0])
         if self._pending_orders:
             self.root.after(self.ESPERA_SIGUIENTE_ORDEN_MS, self._drain_pending_orders)
 
@@ -141,16 +270,29 @@ class OrdenesMixin:
             self.root.after(self.ESPERA_SIGUIENTE_ORDEN_MS, self._drain_pending_orders)
             return
         siguiente = pendientes.pop(0)
-        self._send_text_as_typed(siguiente)
+        OrdenesMixin._enviar_parte(self, siguiente)
         if pendientes:
             self.root.after(self.ESPERA_SIGUIENTE_ORDEN_MS, self._drain_pending_orders)
 
-    def _send_text_as_typed(self, texto: str) -> None:
-        """Una orden como si la escribieras en el chat (gestos propios, órdenes de a una)."""
+    def _enviar_parte(self, texto: str) -> None:
+        if self.__dict__.get("_ordenes_exactas") is True:
+            self._send_text_as_typed(texto, exacto=True)
+        else:
+            self._send_text_as_typed(texto)
+
+    def _send_text_as_typed(self, texto: str, *, exacto: bool = False) -> None:
+        """Una orden como si la escribieras en el chat (gestos propios, órdenes de a una).
+
+        ``exacto``: frases que escribiste vos de antemano (la de un gesto): sin palabras corregidas ni
+        «¿Quisiste decir…?» (2026-11-24: «muévelo → mueve» cambió la frase de un gesto y movió Brave)."""
         borrador = self.input.get("1.0", "end-1c")
         self.input.delete("1.0", "end")
         self.input.insert("1.0", texto)
-        self._send_text()
+        self._texto_exacto = exacto
+        try:
+            self._send_text()
+        finally:
+            self._texto_exacto = False
         if borrador.strip():  # lo que estabas escribiendo no se pierde
             estado = str(self.input.cget("state"))
             self.input.configure(state="normal")
@@ -163,6 +305,17 @@ class OrdenesMixin:
         text = self.input.get("1.0", "end-1c").strip()
         if not text:
             return
+        if self.__dict__.get("_correccion_pendiente") is not None:
+            import jarvis_correcciones
+
+            decision = jarvis_correcciones.respuesta(text)
+            if decision is not None:  # «sí», «no» o «la palabra es …» a «¿Quisiste decir…?»
+                self.input.delete("1.0", "end")
+                self._resolver_correccion(*decision)
+                return
+        exacto = self.__dict__.get("_texto_exacto") is True
+        if not exacto:
+            text = OrdenesMixin._corregir_palabras(self, text)
         if self._es_orden_de_grabacion(text) is True:  # «mirá cómo lo hago», «listo, guardalo como …»
             self.input.delete("1.0", "end")
             self._add_message("user", text)
@@ -172,6 +325,12 @@ class OrdenesMixin:
         if partes is not None:
             self.input.delete("1.0", "end")
             self._run_orders(partes)
+            return
+        sugerencia = None if exacto else OrdenesMixin._buscar_correccion(self, text)
+        if sugerencia is not None:  # una palabra parecida la vuelve una orden: se pregunta
+            self.input.delete("1.0", "end")
+            self._add_message("user", text)
+            self._preguntar_correccion(text, *sugerencia)
             return
         self.input.delete("1.0", "end")
         self._add_message("user", text)
@@ -276,6 +435,7 @@ class OrdenesMixin:
             or detectar_comando_energia(text)
             or detectar_comando_ventanas(text)
             or jarvis_pestanas.detectar(text)
+            or detectar_cerrar_programa(text)
             or self.plugins.detectar_comando(text)
         )
         if system_query is not None:
@@ -308,9 +468,9 @@ class OrdenesMixin:
         if ventana_nueva is not None:
             self._start_direct_tool_action("open_new_browser_tab", ventana_nueva, text)
             return
-        destination = detectar_comando_navegacion_web(text)
-        if destination is not None:
-            self._start_browser_action("navigate", destination, text)
+        navegacion = detectar_navegacion_web(text)
+        if navegacion is not None:
+            self._start_direct_tool_action(*navegacion, text)
             return
         action = detectar_accion_ventana(text)
         if action is not None:
@@ -366,6 +526,15 @@ class OrdenesMixin:
             if not transcript:
                 self.events.put(("empty_transcript",))
                 return
+            if self.__dict__.get("_correccion_pendiente") is not None:
+                import jarvis_correcciones
+
+                decision = jarvis_correcciones.respuesta(transcript)
+                if decision is not None:  # respuesta a «¿Quisiste decir…?»
+                    self.events.put(("transcript", transcript))
+                    self.events.put(("correccion_respuesta", *decision))
+                    return
+            transcript = OrdenesMixin._corregir_palabras(self, transcript)
             if self._es_orden_de_grabacion(transcript) is True:
                 self.events.put(("transcript", transcript))
                 self.events.put(("grabacion", transcript))
@@ -373,6 +542,11 @@ class OrdenesMixin:
             partes = self._split_orders(transcript)
             if partes is not None:  # varias oraciones con alguna orden conocida: de a una
                 self.events.put(("multi_orders", partes))
+                return
+            sugerencia = OrdenesMixin._buscar_correccion(self, transcript)
+            if sugerencia is not None:  # «¿Quisiste decir…?»
+                self.events.put(("transcript", transcript))
+                self.events.put(("correccion_pregunta", transcript, *sugerencia))
                 return
             self.events.put(("transcript", transcript))
             if detectar_borrado_historial(transcript):
@@ -468,6 +642,7 @@ class OrdenesMixin:
                 or detectar_comando_energia(transcript)
                 or detectar_comando_ventanas(transcript)
                 or jarvis_pestanas.detectar(transcript)
+                or detectar_cerrar_programa(transcript)
             )
             plugins = getattr(self, "plugins", None)
             if system_query is None and isinstance(plugins, GestorPlugins):
@@ -491,11 +666,9 @@ class OrdenesMixin:
             if ventana_nueva is not None:
                 self.events.put(("system_query", "open_new_browser_tab", ventana_nueva, transcript))
                 return
-            destination = detectar_comando_navegacion_web(transcript)
-            if destination is not None:
-                self.events.put(
-                    ("browser_action", "navigate", destination, transcript)
-                )
+            navegacion = detectar_navegacion_web(transcript)
+            if navegacion is not None:
+                self.events.put(("system_query", *navegacion, transcript))
                 return
             action = detectar_accion_ventana(transcript)
             if action is not None:

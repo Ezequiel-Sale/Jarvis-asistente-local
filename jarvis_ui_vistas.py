@@ -20,11 +20,17 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from jarvis_theme import BG, BORDER, CYAN, ERROR, HOVER, MUTED, PANEL, PANEL_LIGHT, TEXT
+from jarvis_theme import BG, BORDER, CYAN, ERROR, MUTED, PANEL, PANEL_LIGHT, TEXT
 
 VISTAS = ("sistema", "programas", "mensajeria", "tareas")
-TITULOS = {"sistema": "SISTEMA", "programas": "PROGRAMAS Y ACTUALIZACIONES", "mensajeria": "CORREO, AGENDA Y WHATSAPP",
-           "tareas": "TAREAS GRABADAS Y PORTAPAPELES"}
+TITULOS = {"sistema": "SISTEMA", "programas": "PROGRAMAS", "mensajeria": "MENSAJES", "tareas": "TAREAS"}
+SUBTITULOS = {
+    "sistema": "Ajustes de Windows al instante, la red y la salud de la PC. Todo también por voz y con «deshacé».",
+    "programas": "Actualizaciones con winget y programas que arrancan con Windows.",
+    "mensajeria": "Correos sin leer, tu agenda de la semana y WhatsApp. También: «¿tengo correos?», «leé el segundo».",
+    "tareas": "Lo que le enseñaste con «mirá cómo lo hago» y lo último que copiaste.",
+}
+DIAS_CORTOS = ("LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB", "DOM")
 BOTONES = (("sistema", "🖥   SISTEMA"), ("programas", "📦   PROGRAMAS"), ("mensajeria", "💬   MENSAJES"),
            ("tareas", "🎬   TAREAS"))
 NOMBRES_AJUSTES = {"night_light": "Luz nocturna", "dark_mode": "Modo oscuro de Windows", "wifi": "Wi-Fi",
@@ -136,18 +142,28 @@ class VistasMixin:
         self._vista_cuerpos: dict[str, tk.Frame] = {}
         self._vista_estado: dict[str, tk.Label] = {}
         self._vista_cargada: dict[str, float] = {}
+        self._vista_datos: dict[str, dict] = {}  # lo último leído (los filtros redibujan sin releer)
         for nombre in VISTAS:
             cuerpo = self._vista_desplazable(paginas[nombre], nombre)
             self._vista_cuerpos[nombre] = cuerpo
 
     def _vista_desplazable(self, page: tk.Frame, nombre: str) -> tk.Frame:
-        cabecera = tk.Frame(page, bg=BG, padx=28, pady=12)
+        import jarvis_ui_kit as kit
+
+        cabecera = tk.Frame(page, bg=BG, padx=28, pady=14)
         cabecera.pack(fill="x")
-        estado = tk.Label(cabecera, text="", bg=BG, fg=MUTED, font=("Segoe UI", 10), anchor="w")
-        estado.pack(side="left")
+        cabecera.grid_columnconfigure(0, weight=1)
+        # El título ya está en la cabecera de la página: acá, qué hay en la vista.
+        subtitulo = kit.nota(cabecera, SUBTITULOS[nombre], fondo="BG", fg="MUTED")
+        subtitulo.configure(font=("Segoe UI", 10))
+        subtitulo.grid(row=0, column=0, sticky="we")
+        derecha = tk.Frame(cabecera, bg=BG)
+        derecha.grid(row=0, column=1, sticky="e", padx=(16, 0))
+        estado = tk.Label(derecha, text="", bg=BG, fg=MUTED, font=("Segoe UI", 9), anchor="e")
+        estado.pack(side="left", padx=(0, 10))
         self._vista_estado[nombre] = estado
-        self._ui_button(cabecera, "⟳  ACTUALIZAR", lambda n=nombre: self._cargar_vista(n, forzar=True),
-                        fg=MUTED).pack(side="right")
+        self._ui_button(derecha, "⟳  ACTUALIZAR", lambda n=nombre: self._cargar_vista(n, forzar=True),
+                        fg=MUTED).pack(side="left")
         lienzo = tk.Canvas(page, bg=BG, highlightthickness=0, bd=0)
         barra = ttk.Scrollbar(page, orient="vertical", command=lienzo.yview, style="Jarvis.Vertical.TScrollbar")
         lienzo.configure(yscrollcommand=barra.set)
@@ -165,36 +181,52 @@ class VistasMixin:
         lienzo.jarvis_scroll = lienzo
         return cuerpo
 
-    def _seccion(self, padre: tk.Frame, titulo: str, nota: str = "") -> tk.Frame:
-        marco = tk.Frame(padre, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
-        marco.pack(fill="x", pady=(0, 14))
-        tk.Label(marco, text=titulo, bg=PANEL, fg=CYAN, font=("Consolas", 10, "bold"), anchor="w").pack(fill="x")
+    def _seccion(self, padre: tk.Frame, titulo: str, nota: str = "", *, empaquetar: bool = True) -> tk.Frame:
+        """Una tarjeta con su título (en violeta) y una nota opcional."""
+        import jarvis_ui_kit as kit
+
+        marco = kit.tarjeta(padre, padx=20, pady=16)
+        if empaquetar:
+            marco.pack(fill="x", pady=(0, 16))
+        marco.jarvis_scroll = getattr(padre, "jarvis_scroll", None)
+        kit.titulo_seccion(marco, titulo).pack(fill="x")
         if nota:
-            etiqueta = tk.Label(marco, text=nota, bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w",
-                                justify="left", wraplength=760)
-            etiqueta.pack(fill="x", pady=(2, 6))
-            etiqueta.bind("<Configure>", lambda e: e.width > 50 and etiqueta.configure(wraplength=e.width - 8))
+            kit.nota(marco, nota).pack(fill="x", pady=(2, 8))
+        else:
+            tk.Frame(marco, bg=PANEL, height=6).pack(fill="x")
         return marco
 
     def _fila(self, padre: tk.Frame, texto: str, *, detalle: str = "", color: str = TEXT,
-              botones: tuple = ()) -> tk.Frame:
-        fila = tk.Frame(padre, bg=PANEL)
-        fila.pack(fill="x", pady=3)
+              botones: tuple = (), fondo: str = "PANEL_LIGHT") -> tk.Frame:
+        """Un renglón en caja: texto, detalle y botones a la derecha."""
+        import jarvis_ui_kit as kit
+
+        fila = tk.Frame(padre, bg=kit.color(fondo), padx=12, pady=9, highlightthickness=1,
+                        highlightbackground=kit.color("BORDER"))
+        fila.pack(fill="x", pady=(0, 8))
         for texto_boton, comando, color_boton in reversed(botones):
-            tk.Button(fila, text=texto_boton, command=comando, bg=PANEL_LIGHT, fg=color_boton or CYAN,
-                      activebackground=HOVER, activeforeground=TEXT, relief="flat", padx=10, pady=4,
-                      font=("Consolas", 8, "bold"), cursor="hand2").pack(side="right", padx=(6, 0))
-        tk.Label(fila, text=texto, bg=PANEL, fg=color, font=("Segoe UI", 10), anchor="w").pack(side="left")
+            kit.boton(fila, texto_boton, comando, fondo="PANEL", fg=None).pack(side="right", padx=(6, 0))
+            if color_boton:
+                fila.winfo_children()[-1].configure(fg=color_boton)
+        textos = tk.Frame(fila, bg=kit.color(fondo))
+        textos.pack(side="left", fill="x", expand=True)
+        if texto:
+            tk.Label(textos, text=texto, bg=kit.color(fondo), fg=color, font=("Segoe UI", 10, "bold"),
+                     anchor="w").pack(fill="x")
         if detalle:
-            tk.Label(fila, text=detalle, bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w").pack(side="left", padx=(10, 0))
+            tk.Label(textos, text=detalle, bg=kit.color(fondo), fg=MUTED, font=("Segoe UI", 9),
+                     anchor="w").pack(fill="x")
         return fila
 
     def _texto(self, padre: tk.Frame, texto: str, color: str = TEXT) -> tk.Label:
-        etiqueta = tk.Label(padre, text=texto, bg=PANEL, fg=color, font=("Segoe UI", 10), anchor="w",
+        import jarvis_ui_kit as kit
+
+        etiqueta = tk.Label(padre, text=texto, bg=padre.cget("bg"), fg=color, font=("Segoe UI", 10), anchor="w",
                             justify="left", wraplength=760)
         etiqueta.pack(fill="x", pady=2)
         # El ancho real del panel (2026-11-20: con la ventana angosta el texto se cortaba a la derecha).
-        etiqueta.bind("<Configure>", lambda e: e.width > 50 and etiqueta.configure(wraplength=e.width - 8))
+        etiqueta.bind("<Configure>", lambda e: e.width > 50 and kit.postergar(
+            etiqueta, lambda: etiqueta.configure(wraplength=e.width - 8), clave="ancho"))
         return etiqueta
 
     # Carga ---------------------------------------------------------------------------------------
@@ -220,6 +252,7 @@ class VistasMixin:
 
     def _render_vista(self, nombre: str, datos: dict) -> None:
         cuerpo = self._vista_cuerpos[nombre]
+        self.__dict__.setdefault("_vista_datos", {})[nombre] = datos
         for hijo in cuerpo.winfo_children():
             hijo.destroy()
         self._vista_estado[nombre].configure(text=f"Actualizado a las {time.strftime('%H:%M')}.")
@@ -246,36 +279,67 @@ class VistasMixin:
 
     # SISTEMA ------------------------------------------------------------------------------------
     def _render_sistema(self, cuerpo: tk.Frame, datos: dict) -> None:
-        marco = self._seccion(cuerpo, "AJUSTES DE WINDOWS", "Al instante; también por voz («desactivá la luz nocturna») "
-                                                             "y con «deshacé».")
+        import jarvis_ui_kit as kit
+
+        kit.titulo_seccion(cuerpo, "AJUSTES DE WINDOWS", fondo="BG").pack(fill="x", pady=(0, 10))
+        tiles = kit.Rejilla(cuerpo, 200, separacion=14, max_columnas=4)
+        tiles.pack(fill="x", pady=(0, 6))
         for ajuste, activo in datos["ajustes"].items():
             nombre = NOMBRES_AJUSTES[ajuste]
-            if activo is None:
-                self._fila(marco, nombre, detalle="no se pudo leer", color=MUTED)
-                continue
+            fondo = "CYAN_DARK" if activo else "PANEL"
+            tile = kit.tarjeta(tiles, fondo=fondo, borde="BORDER_STRONG" if activo else "BORDER")
+            arriba = tk.Frame(tile, bg=kit.color(fondo))
+            arriba.pack(fill="x")
+            tk.Label(arriba, text=nombre[0], width=3, bg=kit.color("CYAN") if activo else kit.color("PANEL_LIGHT"),
+                     fg=kit.color("BG") if activo else kit.color("ORB_BRIGHT"), font=("Segoe UI", 12, "bold"),
+                     pady=4).pack(side="left")
             estado = "off" if activo else "on"
-            self._fila(marco, nombre, detalle="activado" if activo else "desactivado",
-                       botones=(("DESACTIVAR" if activo else "ACTIVAR",
-                                 lambda a=ajuste, s=estado, n=nombre: self._accion_vista(
-                                     "windows_setting", {"setting": a, "state": s}, f"{n}: {s}"), None),))
-        marco = self._seccion(cuerpo, "RED Y ENCENDIDO DESDE EL CELULAR",
-                              "Antes de apagar o suspender, si estás por Wi-Fi y el cable está enchufado, Jarvis pasa al cable.")
+            kit.interruptor(arriba, activo, None if activo is None else (
+                lambda a=ajuste, s=estado, n=nombre: self._accion_vista(
+                    "windows_setting", {"setting": a, "state": s}, f"{n}: {s}")), fondo=fondo).pack(side="right")
+            tk.Label(tile, text=nombre, bg=kit.color(fondo), fg=TEXT, font=("Segoe UI", 11, "bold"),
+                     anchor="w").pack(fill="x", pady=(14, 0))
+            tk.Label(tile, text="no se pudo leer" if activo is None else ("activado" if activo else "desactivado"),
+                     bg=kit.color(fondo), fg=kit.color("ORB_BRIGHT") if activo else MUTED, font=("Segoe UI", 9),
+                     anchor="w").pack(fill="x")
+            tiles.agregar(tile)
+
+        dos = kit.Rejilla(cuerpo, 420, separacion=16, max_columnas=2)
+        dos.pack(fill="x", pady=(10, 0))
+        marco = self._seccion(dos, "RED Y ENCENDIDO DESDE EL CELULAR",
+                              "Antes de apagar o suspender, si estás por Wi-Fi y el cable está enchufado, Jarvis pasa "
+                              "al cable.", empaquetar=False)
+        dos.agregar(marco)
         for nombre, habilitada, conectada in datos["red"]:
             estado = "conectada" if conectada else ("deshabilitada" if not habilitada else "sin conexión")
-            self._fila(marco, nombre, detalle=estado, color=CYAN if conectada else MUTED,
+            self._fila(marco, f"●  {nombre}", detalle=estado, color=CYAN if conectada else TEXT,
                        botones=(("DESHABILITAR" if habilitada else "HABILITAR",
                                  lambda n=nombre, h=habilitada: self._accion_vista(
                                      "network_adapter", {"name": n, "state": "off" if h else "on"},
                                      f"Placa {n}"), None),))
         for consejo in datos["encendido"]:
-            self._texto(marco, f"• {consejo}", MUTED)
-        marco = self._seccion(cuerpo, "SALUD DE LA PC", "Lee los registros de Windows (no cambia nada).")
-        salida = self._texto(marco, "Elegí qué revisar.", MUTED)
-        botones = tk.Frame(marco, bg=PANEL)
-        botones.pack(fill="x", pady=(6, 0))
-        for texto, pregunta in (("CAÍDAS (7 DÍAS)", "crashes"), ("DISCOS", "disks"), ("ERRORES (7 DÍAS)", "errors")):
-            self._ui_button(botones, texto, lambda p=pregunta, s=salida: self._revisar_salud(p, s)).pack(
-                side="left", padx=(0, 8))
+            self._texto(marco, f"•  {consejo}", MUTED)
+
+        marco = self._seccion(dos, "SALUD DE LA PC", "Lee los registros de Windows (no cambia nada).",
+                              empaquetar=False)
+        dos.agregar(marco)
+        opciones = tk.Frame(marco, bg=PANEL)
+        opciones.pack(fill="x")
+        opciones.grid_columnconfigure((0, 1, 2), weight=1, uniform="salud")
+        resultado = tk.Frame(marco, bg=PANEL_LIGHT, padx=12, pady=10, highlightthickness=1,
+                             highlightbackground=BORDER)
+        salida = tk.Label(resultado, text="Elegí qué revisar.", bg=PANEL_LIGHT, fg=MUTED, font=("Segoe UI", 10),
+                          anchor="nw", justify="left", wraplength=400)
+        salida.pack(fill="both", expand=True)
+        salida.bind("<Configure>", lambda e: e.width > 50 and kit.postergar(
+            salida, lambda: salida.configure(wraplength=e.width - 8), clave="ancho"))
+        for columna, (texto, periodo, pregunta) in enumerate((("CAÍDAS", "Últimos 7 días", "crashes"),
+                                                              ("DISCOS", "Estado y espacio", "disks"),
+                                                              ("ERRORES", "Últimos 7 días", "errors"))):
+            kit.boton(opciones, f"{texto}\n{periodo}", lambda p=pregunta, s=salida: self._revisar_salud(p, s),
+                      justify="left", anchor="w", pady=8).grid(
+                row=0, column=columna, sticky="nsew", padx=(0, 8) if columna < 2 else 0)
+        resultado.pack(fill="both", expand=True, pady=(10, 0))
         for error in datos["errores"]:
             self._texto(marco, error, ERROR)
 
@@ -289,8 +353,23 @@ class VistasMixin:
         threading.Thread(target=trabajar, name="JarvisVistaSalud", daemon=True).start()
 
     # PROGRAMAS ----------------------------------------------------------------------------------
+    FILTROS_INICIO = ("Todos", "Arrancan", "Desactivados")
+
     def _render_programas(self, cuerpo: tk.Frame, datos: dict) -> None:
-        actualizaciones = datos["actualizaciones"]
+        import jarvis_ui_kit as kit
+
+        actualizaciones, inicio = datos["actualizaciones"], datos["inicio"]
+        activos = sum(1 for _, a in inicio if a)
+        resumen = tk.Frame(cuerpo, bg=BG)
+        resumen.pack(fill="x", pady=(0, 14))
+        for numero, texto, token in ((str(len(actualizaciones)), "por actualizar", "CYAN"),
+                                     (f"{activos} de {len(inicio)}", "arrancan con Windows", "VIOLET")):
+            caja = kit.tarjeta(resumen, padx=16, pady=8)
+            caja.pack(side="left", padx=(0, 10))
+            tk.Label(caja, text=numero, bg=PANEL, fg=kit.color(token), font=("Segoe UI", 16, "bold"),
+                     anchor="w").pack(anchor="w")
+            tk.Label(caja, text=texto, bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w").pack(anchor="w")
+
         marco = self._seccion(cuerpo, f"ACTUALIZACIONES DISPONIBLES ({len(actualizaciones)})",
                               "Con winget. Cada actualización te pide aprobación; cerrá el programa antes.")
         if datos["error_winget"]:
@@ -298,21 +377,193 @@ class VistasMixin:
         elif not actualizaciones:
             self._texto(marco, "Tus programas están al día.", CYAN)
         else:
-            self._fila(marco, "", botones=(("ACTUALIZAR TODO", lambda: self._accion_vista(
-                "update_programs", {"name": "all"}, "Actualizar todos los programas"), None),))
+            kit.boton(marco, "ACTUALIZAR TODO", lambda: self._accion_vista(
+                "update_programs", {"name": "all"}, "Actualizar todos los programas"), primario=True).pack(
+                anchor="e", pady=(0, 10))
+            tarjetas = kit.Rejilla(marco, 260, max_columnas=3, fondo="PANEL")
+            tarjetas.pack(fill="x")
             for nombre, identificador, version, disponible in actualizaciones:
-                self._fila(marco, nombre, detalle=f"{version} → {disponible}",
-                           botones=(("ACTUALIZAR", lambda i=identificador, n=nombre: self._accion_vista(
-                               "update_programs", {"name": i}, f"Actualizar {n}"), None),))
-        inicio = datos["inicio"]
-        marco = self._seccion(cuerpo, f"ARRANCAN CON WINDOWS ({sum(1 for _, a in inicio if a)} de {len(inicio)})",
+                caja = kit.tarjeta(tarjetas, fondo="PANEL_LIGHT", padx=12, pady=12)
+                arriba = tk.Frame(caja, bg=PANEL_LIGHT)
+                arriba.pack(fill="x")
+                tk.Label(arriba, text=(nombre[:1] or "?").upper(), width=3, bg=BORDER, fg=kit.color("ORB_BRIGHT"),
+                         font=("Segoe UI", 12, "bold"), pady=4).pack(side="left")
+                textos = tk.Frame(arriba, bg=PANEL_LIGHT)
+                textos.pack(side="left", fill="x", expand=True, padx=(10, 0))
+                tk.Label(textos, text=nombre[:34], bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10, "bold"),
+                         anchor="w").pack(fill="x")
+                tk.Label(textos, text=f"{version} → {disponible}", bg=PANEL_LIGHT, fg=CYAN, font=("Consolas", 9),
+                         anchor="w").pack(fill="x")
+                kit.boton(caja, "ACTUALIZAR", lambda i=identificador, n=nombre: self._accion_vista(
+                    "update_programs", {"name": i}, f"Actualizar {n}"), fondo="PANEL").pack(fill="x", pady=(10, 0))
+                tarjetas.agregar(caja)
+
+        marco = self._seccion(cuerpo, f"ARRANCAN CON WINDOWS ({activos} de {len(inicio)})",
                               "Desactivar uno no lo desinstala: solo deja de abrirse al prender la PC.")
-        for nombre, activo in sorted(inicio, key=lambda p: (not p[1], p[0].casefold())):
-            self._fila(marco, nombre, detalle="arranca" if activo else "desactivado", color=TEXT if activo else MUTED,
-                       botones=(("DESACTIVAR" if activo else "ACTIVAR",
-                                 lambda n=nombre, a=activo: self._accion_vista(
-                                     "startup_apps", {"action": "disable" if a else "enable", "name": n},
-                                     f"Inicio de {n}"), None),))
+        filtro = self.__dict__.get("_filtro_inicio", "Todos")
+        botones = tk.Frame(marco, bg=PANEL_LIGHT, padx=3, pady=3)
+        botones.pack(anchor="w", pady=(0, 10))
+        for texto in self.FILTROS_INICIO:
+            elegido = texto == filtro
+            kit.boton(botones, texto.upper(), lambda t=texto: self._filtrar_inicio(t), primario=elegido,
+                      pady=3).pack(side="left", padx=(0, 3))
+        visibles = [p for p in inicio if filtro == "Todos" or (p[1] if filtro == "Arrancan" else not p[1])]
+        filas = kit.Rejilla(marco, 240, separacion=10, max_columnas=3, fondo="PANEL")
+        filas.pack(fill="x")
+        for nombre, activo in sorted(visibles, key=lambda p: (not p[1], p[0].casefold())):
+            fondo = "PANEL_LIGHT" if activo else "PANEL"
+            caja = kit.tarjeta(filas, fondo=fondo, padx=12, pady=10)
+            tk.Label(caja, text=nombre[:30], bg=kit.color(fondo), fg=TEXT if activo else MUTED,
+                     font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left", fill="x", expand=True)
+            kit.interruptor(caja, activo, lambda n=nombre, a=activo: self._accion_vista(
+                "startup_apps", {"action": "disable" if a else "enable", "name": n}, f"Inicio de {n}"),
+                fondo=fondo).pack(side="right")
+            tk.Label(caja, text="arranca" if activo else "desactivado", bg=kit.color(fondo), fg=MUTED,
+                     font=("Segoe UI", 8)).pack(side="right", padx=(0, 8))
+            filas.agregar(caja)
+        if not visibles:
+            self._texto(marco, "Ninguno con ese filtro.", MUTED)
+
+    def _filtrar_inicio(self, filtro: str) -> None:
+        self._filtro_inicio = filtro
+        datos = self.__dict__.get("_vista_datos", {}).get("programas")
+        if datos is not None:
+            self._render_vista("programas", datos)
+
+    # MENSAJES -----------------------------------------------------------------------------------
+    def _render_mensajeria(self, cuerpo: tk.Frame, datos: dict) -> None:
+        import jarvis_ui_kit as kit
+
+        cuentas = kit.Rejilla(cuerpo, 280, separacion=14, max_columnas=3)
+        cuentas.pack(fill="x", pady=(0, 6))
+        for cuenta, titulo, letra in (("google", "Google", "G"), ("outlook", "Outlook", "O")):
+            conectada = cuenta in datos["cuentas"]
+            fondo = "CYAN_DARK" if conectada else "PANEL"
+            caja = kit.tarjeta(cuentas, fondo=fondo, borde="BORDER_STRONG" if conectada else "BORDER")
+            tk.Label(caja, text=letra, width=3, bg=kit.color("CYAN") if conectada else kit.color("PANEL_LIGHT"),
+                     fg=kit.color("BG") if conectada else kit.color("ORB_BRIGHT"), font=("Segoe UI", 13, "bold"),
+                     pady=5).pack(side="left")
+            if not conectada:
+                kit.boton(caja, "CONECTAR", lambda c=cuenta: self._accion_vista(
+                    "connect_account", {"account": c}, f"Conectar {c}")).pack(side="right", padx=(8, 0))
+            textos = tk.Frame(caja, bg=kit.color(fondo))
+            textos.pack(side="left", fill="x", expand=True, padx=(12, 0))
+            tk.Label(textos, text=titulo, bg=kit.color(fondo), fg=TEXT, font=("Segoe UI", 11, "bold"),
+                     anchor="w").pack(fill="x")
+            tk.Label(textos, text=("Gmail y Calendar · " if cuenta == "google" else "") +
+                     ("conectada" if conectada else "sin conectar"), bg=kit.color(fondo),
+                     fg=kit.color("ORB_BRIGHT") if conectada else MUTED, font=("Segoe UI", 9), anchor="w").pack(fill="x")
+            cuentas.agregar(caja)
+        caja = kit.tarjeta(cuentas)
+        tk.Label(caja, text="W", width=3, bg=kit.color("PANEL_LIGHT"), fg=kit.color("VIOLET"),
+                 font=("Segoe UI", 13, "bold"), pady=5).pack(side="left")
+        kit.boton(caja, "REVISAR", lambda: self._accion_vista("whatsapp_unread", {}, "Revisar WhatsApp"),
+                  fg="VIOLET").pack(side="right", padx=(8, 0))
+        textos = tk.Frame(caja, bg=PANEL)
+        textos.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        tk.Label(textos, text="WhatsApp", bg=PANEL, fg=TEXT, font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x")
+        kit.nota(textos, "Lo trae un momento y lo vuelve a ocultar").pack(fill="x")
+        cuentas.agregar(caja)
+        kit.nota(cuerpo, "Las cuentas se conectan una sola vez; los pasos para crear las credenciales están en el "
+                         "README («Conectar Gmail, Google Calendar y Outlook»).", fondo="BG").pack(fill="x", pady=(0, 14))
+
+        if datos["cuentas"]:
+            dos = kit.Rejilla(cuerpo, 420, separacion=16, max_columnas=2)
+            dos.pack(fill="x")
+            marco = self._seccion(dos, f"CORREOS SIN LEER ({len(datos['correos'])})",
+                                  "«Leé el segundo» usa estos números.", empaquetar=False)
+            dos.agregar(marco)
+            if not datos["correos"]:
+                self._texto(marco, "No tenés correos sin leer.", CYAN)
+            for numero, (de, asunto) in enumerate(datos["correos"], 1):
+                self._fila(marco, f"{numero}.  {de[:40]}", detalle=(asunto or "(sin asunto)")[:70],
+                           botones=(("LEER", lambda n=numero: self._accion_vista(
+                               "email_read", {"number": n}, f"Leer el correo {n}"), None),))
+            marco = self._seccion(dos, "AGENDA DE LOS PRÓXIMOS 7 DÍAS", empaquetar=False)
+            dos.agregar(marco)
+            if not datos["eventos"]:
+                self._texto(marco, "No tenés nada agendado.", MUTED)
+            dias: dict = {}
+            for inicio, titulo, todo_el_dia in datos["eventos"]:
+                dias.setdefault(inicio.date(), []).append((inicio, titulo, todo_el_dia))
+            hoy = time.localtime()
+            for dia, eventos in dias.items():
+                renglon = tk.Frame(marco, bg=PANEL)
+                renglon.pack(fill="x", pady=(0, 10))
+                fecha = tk.Frame(renglon, bg=PANEL, width=56)
+                fecha.pack(side="left", anchor="n")
+                es_hoy = (dia.year, dia.month, dia.day) == (hoy.tm_year, hoy.tm_mon, hoy.tm_mday)
+                tk.Label(fecha, text="HOY" if es_hoy else DIAS_CORTOS[dia.weekday()], bg=PANEL, fg=MUTED,
+                         font=("Segoe UI", 8, "bold")).pack()
+                tk.Label(fecha, text=str(dia.day), bg=PANEL, fg=CYAN if es_hoy else TEXT,
+                         font=("Segoe UI", 16, "bold")).pack()
+                lista = tk.Frame(renglon, bg=PANEL)
+                lista.pack(side="left", fill="x", expand=True, padx=(10, 0))
+                for inicio, titulo, todo_el_dia in eventos:
+                    caja = tk.Frame(lista, bg=PANEL_LIGHT, padx=10, pady=7, highlightthickness=1,
+                                    highlightbackground=BORDER)
+                    caja.pack(fill="x", pady=(0, 6))
+                    tk.Label(caja, text="Todo el día" if todo_el_dia else inicio.strftime("%H:%M"), width=12,
+                             bg=PANEL_LIGHT, fg=CYAN, font=("Consolas", 9), anchor="w").pack(side="left")
+                    tk.Label(caja, text=titulo[:70], bg=PANEL_LIGHT, fg=TEXT, font=("Segoe UI", 10),
+                             anchor="w").pack(side="left", fill="x", expand=True)
+        for error in datos["errores"]:
+            self._texto(cuerpo, error, ERROR)
+
+    # TAREAS -------------------------------------------------------------------------------------
+    def _render_tareas(self, cuerpo: tk.Frame, datos: dict) -> None:
+        import jarvis_grabador
+        import jarvis_ui_kit as kit
+
+        arriba = tk.Frame(cuerpo, bg=BG)
+        arriba.pack(fill="x", pady=(0, 10))
+        textos = tk.Frame(arriba, bg=BG)
+        textos.pack(side="left", fill="x", expand=True)
+        kit.titulo_seccion(textos, f"TAREAS GRABADAS ({len(datos['grabaciones'])})", fondo="BG").pack(fill="x")
+        kit.nota(textos, "Grabá una con «mirá cómo lo hago» y guardala con «listo, guardalo como …»; después decí su "
+                         "nombre para repetirla.", fondo="BG").pack(fill="x")
+        kit.boton(arriba, "●  GRABAR UNA NUEVA", lambda: self._manejar_grabacion("mirá cómo lo hago"),
+                  fondo="PANEL", fg="ERROR", pady=8).pack(side="right", padx=(12, 0))
+        if not datos["grabaciones"]:
+            self._texto(self._seccion(cuerpo, "TODAVÍA NO GRABASTE NINGUNA"),
+                        "Decí «mirá cómo lo hago» y hacé la tarea: Jarvis anota cada clic y cada tecla.", MUTED)
+        tarjetas = kit.Rejilla(cuerpo, 280, separacion=14, max_columnas=3)
+        tarjetas.pack(fill="x", pady=(0, 6))
+        for nombre, pasos, archivo in datos["grabaciones"]:
+            caja = kit.tarjeta(tarjetas)
+            cabeza = tk.Frame(caja, bg=PANEL)
+            cabeza.pack(fill="x")
+            tk.Label(cabeza, text=nombre[:32], bg=PANEL, fg=TEXT, font=("Segoe UI", 11, "bold"),
+                     anchor="w").pack(side="left", fill="x", expand=True)
+            kit.ficha(cabeza, f"{len(pasos)} pasos").pack(side="right")
+            if pasos:
+                kit.nota(caja, jarvis_grabador.describir(pasos[:3])[:220] +
+                         (f"  (+{len(pasos) - 3} más)" if len(pasos) > 3 else "")).pack(fill="x", pady=(8, 0))
+            botones = tk.Frame(caja, bg=PANEL)
+            botones.pack(fill="x", pady=(12, 0))
+            kit.boton(botones, "▶ REPETIR", lambda n=nombre: self._accion_vista(
+                "replay_recording", {"name": n}, n), primario=True).pack(side="left", fill="x", expand=True)
+            kit.boton(botones, "BORRAR", lambda n=nombre, a=archivo: self._borrar_grabacion(n, a),
+                      fg="MUTED").pack(side="left", padx=(8, 0))
+            tarjetas.agregar(caja)
+
+        marco = self._seccion(cuerpo, "LO ÚLTIMO QUE COPIASTE",
+                              "Solo mientras Jarvis está abierto; no guarda lo copiado de bancos ni contraseñas.")
+        if not datos["copiados"]:
+            self._texto(marco, "Todavía no copiaste nada.", MUTED)
+        filas = kit.Rejilla(marco, 360, separacion=10, max_columnas=2, fondo="PANEL")
+        filas.pack(fill="x")
+        for numero, texto in enumerate(datos["copiados"], 1):
+            linea = " ".join(texto.split())
+            caja = tk.Frame(filas, bg=PANEL_LIGHT, padx=10, pady=7, highlightthickness=1, highlightbackground=BORDER)
+            tk.Label(caja, text=str(numero), width=2, bg=PANEL_LIGHT, fg=CYAN, font=("Segoe UI", 10, "bold")).pack(
+                side="left")
+            tk.Label(caja, text=linea[:60] + ("…" if len(linea) > 60 else ""), bg=PANEL_LIGHT, fg=TEXT,
+                     font=("Consolas", 9), anchor="w").pack(side="left", fill="x", expand=True, padx=(6, 6))
+            kit.boton(caja, "COPIAR", lambda n=numero: self._accion_vista(
+                "clipboard_history", {"action": "copy", "number": n}, "Copiar del historial"), fondo="PANEL").pack(
+                side="right")
+            filas.agregar(caja)
 
     def _progreso_winget(self, evento: dict) -> None:
         """Hilo de Tk: una barra por programa que se descarga o instala (``jarvis_winget.al_progreso``)."""
@@ -352,61 +603,6 @@ class VistasMixin:
         fila = self._progresos.pop(paquete, (None,))[0]
         if fila is not None and fila.winfo_exists():
             fila.destroy()
-
-    # MENSAJES -----------------------------------------------------------------------------------
-    def _render_mensajeria(self, cuerpo: tk.Frame, datos: dict) -> None:
-        marco = self._seccion(cuerpo, "CUENTAS", "Se conectan una sola vez; los pasos para crear las credenciales "
-                                                 "están en el README («Conectar Gmail, Google Calendar y Outlook»).")
-        for cuenta, titulo in (("google", "Google (Gmail y Calendar)"), ("outlook", "Outlook")):
-            conectada = cuenta in datos["cuentas"]
-            self._fila(marco, titulo, detalle="conectada" if conectada else "sin conectar",
-                       color=CYAN if conectada else MUTED,
-                       botones=(() if conectada else (("CONECTAR", lambda c=cuenta: self._accion_vista(
-                           "connect_account", {"account": c}, f"Conectar {c}"), None),)))
-        if datos["cuentas"]:
-            marco = self._seccion(cuerpo, f"CORREOS SIN LEER ({len(datos['correos'])})")
-            if not datos["correos"]:
-                self._texto(marco, "No tenés correos sin leer.", CYAN)
-            for numero, (de, asunto) in enumerate(datos["correos"], 1):
-                self._fila(marco, de[:40], detalle=(asunto or "(sin asunto)")[:70],
-                           botones=(("LEER", lambda n=numero: self._accion_vista(
-                               "email_read", {"number": n}, f"Leer el correo {n}"), None),))
-            marco = self._seccion(cuerpo, "AGENDA DE LOS PRÓXIMOS 7 DÍAS")
-            if not datos["eventos"]:
-                self._texto(marco, "No tenés nada agendado.", MUTED)
-            for inicio, titulo, todo_el_dia in datos["eventos"]:
-                cuando = inicio.strftime("%a %d/%m") + ("" if todo_el_dia else inicio.strftime(" %H:%M"))
-                self._fila(marco, titulo[:70], detalle=cuando)
-        marco = self._seccion(cuerpo, "WHATSAPP", "Revisarlo trae WhatsApp al frente un momento y después lo vuelve a ocultar en la bandeja.")
-        self._fila(marco, "Mensajes sin leer", botones=(("REVISAR", lambda: self._accion_vista(
-            "whatsapp_unread", {}, "Revisar WhatsApp"), None),))
-        for error in datos["errores"]:
-            self._texto(marco, error, ERROR)
-
-    # TAREAS -------------------------------------------------------------------------------------
-    def _render_tareas(self, cuerpo: tk.Frame, datos: dict) -> None:
-        import jarvis_grabador
-
-        marco = self._seccion(cuerpo, f"TAREAS GRABADAS ({len(datos['grabaciones'])})",
-                              "Grabá una con «mirá cómo lo hago» y guardala con «listo, guardalo como …»; "
-                              "después decí su nombre para repetirla.")
-        self._fila(marco, "", botones=(("●  GRABAR UNA NUEVA", lambda: self._manejar_grabacion("mirá cómo lo hago"), ERROR),))
-        for nombre, pasos, archivo in datos["grabaciones"]:
-            self._fila(marco, nombre, detalle=f"{len(pasos)} pasos",
-                       botones=(("▶ REPETIR", lambda n=nombre: self._accion_vista(
-                                     "replay_recording", {"name": n}, n), None),
-                                ("BORRAR", lambda n=nombre, a=archivo: self._borrar_grabacion(n, a), MUTED)))
-            if pasos:
-                self._texto(marco, "    " + jarvis_grabador.describir(pasos)[:400], MUTED)
-        marco = self._seccion(cuerpo, "LO ÚLTIMO QUE COPIASTE",
-                              "Solo mientras Jarvis está abierto; no guarda lo copiado de bancos ni contraseñas.")
-        if not datos["copiados"]:
-            self._texto(marco, "Todavía no copiaste nada.", MUTED)
-        for numero, texto in enumerate(datos["copiados"], 1):
-            linea = " ".join(texto.split())
-            self._fila(marco, linea[:80] + ("…" if len(linea) > 80 else ""),
-                       botones=(("COPIAR", lambda n=numero: self._accion_vista(
-                           "clipboard_history", {"action": "copy", "number": n}, "Copiar del historial"), None),))
 
     def _borrar_grabacion(self, nombre: str, archivo) -> None:
         import jarvis_routines

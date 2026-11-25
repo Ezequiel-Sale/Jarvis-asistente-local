@@ -526,7 +526,8 @@ def enfocar(hwnd: int, user32=None) -> bool:
 
 
 def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = None,
-                   propio_pid: int | None = None, mostrar=None) -> tuple[int, list[str]]:
+                   propio_pid: int | None = None, mostrar=None, en_monitor=None,
+                   monitor: int | None = None) -> tuple[int, list[str]]:
     """Aplica ``accion`` a las ventanas de ``app``; devuelve (cuántas, programas).
 
     «traer al frente» usa solo la primera (la de más arriba); el resto, todas.
@@ -548,11 +549,18 @@ def cambiar_estado(app: str, accion: str, *, ventanas: list[Ventana] | None = No
 
             time.sleep(0.3)
             elegidas = elegir(listar_ventanas(), app, propio)
+    if en_monitor is not None:  # «cierra el navegador del monitor 3» (2026-11-24)
+        elegidas = [v for v in elegidas if en_monitor(v)]
+        if not elegidas:
+            raise ErrorVentana(f"No encontré ninguna ventana de «{app}» en el monitor {monitor}.")
     if not elegidas:
         raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
     if accion == "window_focus":
         elegidas = elegidas[:1]
-    if accion == "window_close":
+    if accion == "window_close" and en_monitor is not None:
+        if any(v.pid == propio for v in elegidas):
+            raise ErrorVentana("A mí no me cierro así: usá la X de mi ventana o el menú de la bandeja.")
+    elif accion == "window_close":
         if clave not in ACTIVA:
             raise ErrorVentana("Por nombre cierro programas enteros («cerrá Discord»); una sola ventana, "
                                "señalándola: «cerrá esto».")

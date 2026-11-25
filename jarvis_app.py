@@ -211,6 +211,14 @@ class JarvisApp(
         self._build_layout()
         self._aplicar_estilo_tema()  # íconos, bordes y núcleo del tema guardado («Nébula»)
         self.root.after(2500, self._restore_games_widget)  # el widget del escritorio, si quedó abierto
+        try:  # palabras mal entendidas que ya confirmaste («desmuntea» → «desmutea»)
+            import jarvis_correcciones
+
+            self._correcciones_aprendidas = jarvis_correcciones.cargar(core.obtener_preferencia)
+        except Exception:
+            logging.exception("No se pudieron leer las palabras corregidas.")
+            self._correcciones_aprendidas = {}
+        self._refresh_correcciones()
         self._refresh_animations_button()
         self._refresh_morning_brief_button()
         self.floating =jarvis_floating.AvisoFlotante(self.root, self._show_from_tray)
@@ -1223,6 +1231,12 @@ class JarvisApp(
                         self._execute_continuous_toggle(enabled, command)
                     elif event[0] == "gesture":
                         self._on_gesture(event[1])
+                    elif event[0] == "correccion_pregunta":
+                        self._set_idle()
+                        self._preguntar_correccion(*event[1:])
+                    elif event[0] == "correccion_respuesta":
+                        self._set_idle()
+                        self._resolver_correccion(*event[1:])
                     elif event[0] == "multi_orders":
                         self._set_idle()  # la voz dejó a Jarvis «ocupado» transcribiendo
                         self._run_orders(event[1])

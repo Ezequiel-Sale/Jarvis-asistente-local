@@ -923,13 +923,18 @@ def escala_intermedia(escala: Escala) -> int:
 
 
 def elegir_monitor_escalado(pantallas: list[Pantalla], numero: int | None, escalas: Callable[[Pantalla], Escala]) -> Pantalla:
-    """El monitor pedido o, sin número, el activo con más escala (la TV)."""
+    """El monitor pedido o, sin número, uno que quedó fuera de su escala recomendada (si hay) y, entre esos,
+    el de más escala (la TV)."""
     if numero is not None:
         return _buscar(pantallas, numero)
     activas = [p for p in pantallas if p.activa]
     if not activas:
         raise ErrorPantalla("No hay monitores activos.")
-    return max(activas, key=lambda p: (escalas(p).actual, -(p.numero or 0)))
+    def clave(p: Pantalla):
+        e = escalas(p)
+        return (e.actual != e.recomendada, max(e.actual, e.recomendada), -(p.numero or 0))
+
+    return max(activas, key=clave)
 
 
 def arreglar_escalado(
@@ -938,22 +943,30 @@ def arreglar_escalado(
     *,
     dormir: Callable[[float], None] | None = None,
 ) -> str:
-    """Baja la escala del monitor (a 200 %) y la devuelve a la que tenía."""
+    """Baja la escala del monitor (a 200 %) y la deja en la recomendada por Windows.
+
+    No se vuelve a «la que tenía»: 2026-11-24, al encender la tele Windows la dejó al 175 % (la recomendada
+    es 300 %) y el arreglo terminaba otra vez en 175 %."""
     import time
 
     pantallas, _ = listar_pantallas(mapa)
     pantalla = elegir_monitor_escalado(pantallas, numero, leer_escala)
     escala = leer_escala(pantalla)
-    intermedia = escala_intermedia(escala)
+    final = escala.recomendada if escala.recomendada in escala.posibles else escala.actual
+    intermedia = escala_intermedia(Escala(final, escala.recomendada, escala.posibles))
     poner_escala(pantalla, intermedia, escala)
     try:
         (dormir or time.sleep)(ESPERA_ESCALADO)
     finally:
-        poner_escala(pantalla, escala.actual, escala)  # siempre se vuelve a la original
-    logging.info("Escalado reajustado en el %s: %s %% → %s %%.", pantalla.descripcion, intermedia, escala.actual)
+        poner_escala(pantalla, final, escala)  # siempre termina en la recomendada
+    logging.info("Escalado reajustado en el %s: %s %% → %s %% → %s %%.", pantalla.descripcion, escala.actual,
+                 intermedia, final)
+    if final != escala.actual:
+        return (f"Reajusté el escalado del {pantalla.descripcion}: estaba al {escala.actual} %, lo puse al "
+                f"{intermedia} % y lo dejé al {final} % (el recomendado).")
     return (
         f"Reajusté el escalado del {pantalla.descripcion}: lo puse al {intermedia} % "
-        f"y lo devolví al {escala.actual} %."
+        f"y lo devolví al {final} %."
     )
 
 

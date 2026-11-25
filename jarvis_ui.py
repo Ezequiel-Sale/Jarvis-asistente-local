@@ -58,6 +58,10 @@ class JarvisUIMixin:
             content.grid(row=0, column=1, sticky="nsew")
             content.grid_rowconfigure(2, weight=1)
             content.grid_columnconfigure(0, weight=1)
+            self._contenido_principal = content
+            self._tam_raiz: tuple[int, int] | None = None
+            self._contenido_congelado = False
+            self.root.bind("<Configure>", self._al_redimensionar_raiz, add="+")
 
             header = tk.Frame(content, bg=BG, padx=28, pady=16)
             header.grid(row=0, column=0, sticky="ew")
@@ -271,9 +275,50 @@ class JarvisUIMixin:
                 self._show_page(seccion)
             self._set_status(self._PAGE_TITLES.get(seccion, "COMANDOS DE VOZ").upper(), CYAN)
 
+        # Mientras se arrastra el borde de la ventana, el contenido queda congelado en su tamaño y se
+        # reacomoda una sola vez al soltar (2026-11-24, pedido del usuario: «se va trabando»). En Windows
+        # cada widget de Tk es una ventana propia: con ~200 visibles, cada píxel del arrastre costaba
+        # 80–130 ms aunque Jarvis no hiciera nada (medido; una ventana vacía, 4 ms).
+        DEMORA_DESCONGELAR_MS = 140
+
+        def _al_redimensionar_raiz(self, evento) -> None:
+            if evento.widget is not self.root:
+                return  # la raíz recibe también los <Configure> de todos sus hijos
+            tam = (evento.width, evento.height)
+            anterior, self._tam_raiz = self._tam_raiz, tam
+            if anterior is None or anterior == tam:
+                return  # la primera vez, o solo se movió
+            import jarvis_ui_kit
+
+            contenido = self._contenido_principal
+            if not self._contenido_congelado and contenido.winfo_width() > 1:
+                # La celda de la grilla deja de seguir a la ventana (peso 0, tamaño fijo): el contenido no
+                # cambia de tamaño, así que nada adentro se reacomoda. Sacarlo de la grilla para fijarlo
+                # (place) era igual de lento: desmapea y vuelve a mapear cada widget.
+                self.root.grid_columnconfigure(1, weight=0, minsize=contenido.winfo_width())
+                self.root.grid_rowconfigure(0, weight=0, minsize=contenido.winfo_height())
+                self._contenido_congelado = True
+            jarvis_ui_kit.postergar(self.root, self._descongelar_contenido, self.DEMORA_DESCONGELAR_MS,
+                                    clave="redimensionar")
+
+        def _descongelar_contenido(self) -> None:
+            if not self._contenido_congelado:
+                return
+            self._contenido_congelado = False
+            self.root.grid_columnconfigure(1, weight=1, minsize=0)
+            self.root.grid_rowconfigure(0, weight=1, minsize=0)
+
         def _show_page(self, nombre: str) -> None:
             if nombre not in self._pages:
                 return
+            # 2026-11-24 (pedido del usuario: la ventana se trababa al cambiar de tamaño): las secciones
+            # ocultas se sacan de la grilla. Con tkraise seguían ocupando la celda y TODAS se reacomodaban
+            # con cada píxel del arrastre (380 ms por paso medidos); la que se muestra recibe su tamaño al
+            # volver.
+            for otra, pagina in self._pages.items():
+                if otra != nombre:
+                    pagina.grid_remove()
+            self._pages[nombre].grid()
             self._pages[nombre].tkraise()
             self._current_page = nombre
             cambia = getattr(self, "_current_page", "") != nombre
@@ -509,7 +554,8 @@ class JarvisUIMixin:
             ).grid(row=1, column=0, sticky="w", pady=(8, 0))
 
         def _build_settings_page(self, page: tk.Frame) -> None:
-            """Vista de monitores e interruptores; desplazable con la rueda."""
+            """Ajustes agrupados por tema (``jarvis_ui_ajustes``); desplazable con la rueda. Cada ajuste se
+            arma dentro del marco de su grupo: ``cuerpo`` va cambiando de grupo antes de cada bloque."""
             lienzo = tk.Canvas(page, bg=BG, highlightthickness=0, bd=0)
             barra = ttk.Scrollbar(page, orient="vertical", command=lienzo.yview,
                                   style="Jarvis.Vertical.TScrollbar")
@@ -522,6 +568,11 @@ class JarvisUIMixin:
             lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana, width=e.width))
             cuerpo.jarvis_scroll = lienzo
             lienzo.jarvis_scroll = lienzo
+            import jarvis_ui_ajustes
+            import jarvis_ui_kit
+
+            grupos = jarvis_ui_ajustes.construir(self, cuerpo)
+            cuerpo = grupos["pantallas"]
 
             # Vista de monitores: a escala y en su posición real; clic para acciones.
             mapa_marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
@@ -548,14 +599,22 @@ class JarvisUIMixin:
                 marco.grid_columnconfigure(0, weight=1)
                 tk.Label(marco, text=titulo, bg=PANEL, fg=TEXT,
                          font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
-                tk.Label(marco, text=descripcion, bg=PANEL, fg=MUTED, justify="left",
-                         wraplength=540, font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
+                detalle = tk.Label(marco, text=descripcion, bg=PANEL, fg=MUTED, justify="left",
+                                   wraplength=540, font=("Segoe UI", 9))
+                detalle.grid(row=1, column=0, sticky="w", pady=(2, 0))
                 boton = self._ui_button(marco, texto, comando, fg=MUTED)
                 boton.configure(width=30)
                 boton.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
+                # 2026-11-24: con los grupos al costado la columna es más angosta; el texto se ajusta
+                # al ancho que queda junto al botón (con 540 fijos se cortaba a la derecha).
+                marco.bind("<Configure>", lambda e, d=detalle, b=boton: e.width > 100 and jarvis_ui_kit.postergar(
+                    d, lambda: d.configure(wraplength=max(200, e.width - b.winfo_reqwidth() - 70)), clave="ancho"),
+                           add="+")
                 setattr(self, atributo, boton)
                 return marco
 
+            cuerpo = grupos["voz"]
+            self._build_voice_settings(cuerpo)
             fila("Respuestas habladas",
                  "Jarvis lee en voz alta sus respuestas. También: «silencia tu voz» / «activa tu voz».",
                  "audio_toggle_button", "AUDIO ON", self._toggle_audio_enabled)
@@ -567,6 +626,11 @@ class JarvisUIMixin:
                  "Silencia el micrófono para hablar con otros. Mientras Jarvis habla, solo «para» "
                  "o «Jarvis, …». También: «escúchame siempre» / «desactiva la escucha continua».",
                  "continuous_button", "ESCUCHA CONTINUA …", self._toggle_continuous_button)
+            fila("Interrumpir con «Hey Jarvis»",
+                 "Mientras Jarvis habla, decir «Hey Jarvis» lo calla y te escucha. Solo con la salida en "
+                 "los auriculares: por los altavoces el micrófono oiría su propia voz.",
+                 "interrupt_button", "✋  INTERRUMPIR …", self._toggle_interrupt)
+            self._build_correcciones_settings(cuerpo)
             marco = fila("Solo mi voz",
                          "Jarvis reconoce tu voz y no obedece a otras personas, a la tele ni a un vídeo. "
                          "La primera vez lees 6 frases para registrarla (se guarda una huella de 256 números, "
@@ -581,6 +645,7 @@ class JarvisUIMixin:
                                                              self._cycle_speaker_strictness, fg=MUTED)
             self.speaker_strictness_button.pack(side="left", padx=(8, 0))
             self._refresh_speaker_buttons()
+            cuerpo = grupos["gestos"]
             marco = fila("Gestos con la mano",
                          "Índice: puntero; pellizco corto: clic; sostenido: arrastrar; abrir el pulgar en L: clic "
                          "derecho. Dos dedos arriba o abajo: "
@@ -649,48 +714,51 @@ class JarvisUIMixin:
                                                   anchor="w", font=("Consolas", 9))
             self.gesture_history_label.pack(anchor="w")
             self._refresh_custom_gestures()
+            cuerpo = grupos["inicio"]
             fila("Iniciar con Windows",
                  "Al encender la PC, Jarvis arranca oculto en la bandeja. "
                  "También: «desactiva el inicio con Windows».",
                  "autostart_button", "⏻  INICIO CON WINDOWS …", self._toggle_autostart_button)
+            cuerpo = grupos["pantallas"]
             fila("Arreglar la barra de tareas sola",
                  "Si tras cambiar monitores la barra de tareas de la TV queda fuera de su sitio, "
                  "Jarvis baja y sube su escala automáticamente (igual que «arregla el escalado»).",
                  "taskbar_button", "▭  ARREGLO AUTOMÁTICO …", self._toggle_taskbar_button)
-            self._build_voice_settings(cuerpo)
-            fila("Interrumpir con «Hey Jarvis»",
-                 "Mientras Jarvis habla, decir «Hey Jarvis» lo calla y te escucha. Solo con la salida en "
-                 "los auriculares: por los altavoces el micrófono oiría su propia voz.",
-                 "interrupt_button", "✋  INTERRUMPIR …", self._toggle_interrupt)
+            cuerpo = grupos["conexiones"]
             self._build_mobile_settings(cuerpo)
             self._build_search_settings(cuerpo)
+            cuerpo = grupos["apariencia"]
             fila("Aviso flotante",
                  "Con Jarvis en la bandeja, una burbuja en la esquina muestra lo que entendió y la "
                  "respuesta, y las confirmaciones con SÍ / NO, sin quitarte el foco.",
                  "floating_button", "▤  AVISO FLOTANTE …", self._toggle_floating)
+            cuerpo = grupos["juego"]
             fila("Mantener el undervolt de la GPU",
                  "Cada minuto comprueba que la GPU tenga aplicado tu perfil de Adrenalin (undervolt.xml en "
                  "Documentos) y lo reaplica si se perdió tras un reinicio o un pantallazo. Si se pierde 3 veces "
                  "en una hora deja de hacerlo y te avisa.",
                  "gpu_profile_button", "⚡  UNDERVOLT …", self._toggle_gpu_profile)
             self._build_game_mode_settings(cuerpo)
+            cuerpo = grupos["conexiones"]
             self._build_tv_settings(cuerpo)
+            cuerpo = grupos["inicio"]
             fila("Resumen de la mañana",
                  "La primera vez que usas la PC por la mañana, Jarvis te dice el clima, tus avisos y rutinas "
                  "de hoy y cómo está el equipo. Se pide cuando quieras con «buenos días».",
                  "morning_brief_button", "☀  RESUMEN …", self._toggle_morning_brief)
+            cuerpo = grupos["apariencia"]
             fila("Animaciones",
                  "Los mensajes, tarjetas y secciones aparecen con un fundido corto.",
                  "animations_button", "✦  ANIMACIONES …", self._toggle_animations)
 
             marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14,
                              highlightthickness=1, highlightbackground=BORDER)
-            marco.pack(fill="x", pady=(0, 10))
+            marco.pack(fill="x", pady=(0, 10), before=cuerpo.winfo_children()[0])  # el tema, primero
             marco.grid_columnconfigure(0, weight=1)
             tk.Label(marco, text="Tema", bg=PANEL, fg=TEXT,
                      font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
             tk.Label(marco, text="Colores de Jarvis. También: «cambia al tema rojo», «pon el modo claro».",
-                     bg=PANEL, fg=MUTED, justify="left", wraplength=620,
+                     bg=PANEL, fg=MUTED, justify="left", wraplength=300,
                      font=("Segoe UI", 9)).grid(row=1, column=0, sticky="w", pady=(2, 0))
             botones = tk.Frame(marco, bg=PANEL)
             botones.grid(row=0, column=1, rowspan=2, sticky="e", padx=(16, 0))
@@ -703,10 +771,14 @@ class JarvisUIMixin:
             self._refresh_theme_buttons()
 
             self.settings_info = tk.Label(
-                cuerpo, text="", bg=BG, fg=MUTED, justify="left", anchor="w",
+                self._ajustes_pie, text="", bg=BG, fg=MUTED, justify="left", anchor="w",
                 font=("Consolas", 8),
             )
             self.settings_info.pack(fill="x", pady=(14, 0))
+            jarvis_ui_ajustes.ajustar_textos(self)
+            jarvis_ui_ajustes.mostrar(self, jarvis_ui_ajustes.POR_DEFECTO)
+            jarvis_ui_ajustes.filtrar(self, "")
+
 
         def _draw_monitor_map(self) -> None:
             lienzo = getattr(self, "monitor_canvas", None)
@@ -1180,7 +1252,7 @@ class JarvisUIMixin:
             tk.Label(marco, text="Cuando le preguntas algo reciente o que no conoce, Jarvis busca en internet "
                      "y responde citando las fuentes. Solo sale a internet el texto buscado. Usa Tavily "
                      "(clave TAVILY_API_KEY en el .env junto a Jarvis.exe) y DuckDuckGo de respaldo.",
-                     bg=PANEL, fg=MUTED, justify="left", wraplength=620,
+                     bg=PANEL, fg=MUTED, justify="left", wraplength=560,
                      font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
             self.search_info = tk.Label(marco, text="", bg=PANEL, fg=MUTED, justify="left", anchor="w",
                                         font=("Consolas", 9))
@@ -1202,6 +1274,78 @@ class JarvisUIMixin:
                 logging.exception("No se pudo leer el uso de la búsqueda en internet.")
                 texto = "No pude leer el uso de este mes."
             etiqueta.configure(text=texto)
+
+        ALTO_LISTA_CORRECCIONES = 220  # px; unas 6 palabras a la vista
+
+        def _build_correcciones_settings(self, cuerpo: tk.Frame) -> None:
+            """Palabras mal entendidas que Jarvis aprendió con «¿Quisiste decir…?» (2026-11-24)."""
+            marco = tk.Frame(cuerpo, bg=PANEL, padx=18, pady=14, highlightthickness=1, highlightbackground=BORDER)
+            marco.pack(fill="x", pady=(0, 10))
+            titulo = tk.Label(marco, text="Palabras corregidas", bg=PANEL, fg=TEXT, font=("Segoe UI", 11, "bold"))
+            titulo.pack(anchor="w")
+            tk.Label(marco, text="Cuando no entiende una orden pero una palabra parecida la arregla, Jarvis te "
+                     "pregunta «¿Quisiste decir…?». Lo que confirmás queda acá y se corrige solo. ✕ lo olvida.",
+                     bg=PANEL, fg=MUTED, font=("Segoe UI", 9), justify="left", wraplength=560).pack(anchor="w",
+                                                                                              pady=(2, 8))
+            # Recuadro de alto máximo con su propio scroll (2026-11-24, pedido del usuario: la lista va a crecer).
+            caja = tk.Frame(marco, bg=PANEL)
+            caja.pack(fill="x")
+            lienzo = tk.Canvas(caja, bg=PANEL, highlightthickness=0, bd=0, height=40)
+            barra = ttk.Scrollbar(caja, orient="vertical", command=lienzo.yview, style="Jarvis.Vertical.TScrollbar")
+            lienzo.configure(yscrollcommand=barra.set)
+            lienzo.pack(side="left", fill="x", expand=True)
+            lista = tk.Frame(lienzo, bg=PANEL)
+            ventana = lienzo.create_window((0, 0), window=lista, anchor="nw")
+            lienzo.bind("<Configure>", lambda e: lienzo.itemconfigure(ventana, width=e.width))
+
+            def ajustar_alto(_evento=None) -> None:
+                """Hasta ``ALTO_LISTA_CORRECCIONES`` crece con la lista; de ahí en más, scroll."""
+                alto = lista.winfo_reqheight()
+                lienzo.configure(scrollregion=(0, 0, 0, alto), height=min(max(alto, 20), self.ALTO_LISTA_CORRECCIONES))
+                if alto > self.ALTO_LISTA_CORRECCIONES:
+                    barra.pack(side="right", fill="y", padx=(6, 0))
+                    lista.jarvis_scroll = lienzo  # la rueda mueve esta lista (no la página)
+                else:
+                    barra.pack_forget()
+                    lista.__dict__.pop("jarvis_scroll", None)  # corta: la rueda sigue moviendo la página
+                    lienzo.yview_moveto(0)
+
+            lista.bind("<Configure>", ajustar_alto, add="+")
+            self._correcciones_lista, self._correcciones_lienzo = lista, lienzo
+
+            def dibujar() -> None:
+                if not lista.winfo_exists():
+                    return
+                for hijo in lista.winfo_children():
+                    hijo.destroy()
+                aprendidas = self.__dict__.get("_correcciones_aprendidas") or {}
+                titulo.configure(text=f"Palabras corregidas ({len(aprendidas)})" if aprendidas else
+                                 "Palabras corregidas")
+                if not aprendidas:
+                    tk.Label(lista, text="Todavía ninguna.", bg=PANEL, fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+                    return
+                for escuchada, correcta in sorted(aprendidas.items()):
+                    fila = tk.Frame(lista, bg=PANEL_LIGHT, padx=10, pady=4)
+                    fila.pack(fill="x", pady=(0, 4))
+                    tk.Label(fila, text=f"«{escuchada}»  →  «{correcta}»", bg=PANEL_LIGHT, fg=TEXT,
+                             font=("Segoe UI", 10), anchor="w").pack(side="left", fill="x", expand=True)
+                    tk.Button(fila, text="✕", command=lambda e=escuchada: olvidar(e), bg=PANEL_LIGHT, fg=MUTED,
+                              activebackground=HOVER, activeforeground=TEXT, relief="flat", bd=0, padx=8,
+                              cursor="hand2").pack(side="right")
+
+            def olvidar(escuchada: str) -> None:
+                import jarvis_core as core
+                import jarvis_correcciones
+
+                try:
+                    self._correcciones_aprendidas = jarvis_correcciones.olvidar(
+                        core.obtener_preferencia, core.guardar_preferencia, escuchada)
+                except Exception:
+                    logging.exception("No se pudo olvidar la palabra corregida.")
+                dibujar()
+
+            self._dibujar_correcciones = dibujar
+            dibujar()
 
         def _build_voice_settings(self, cuerpo: tk.Frame) -> None:
             import jarvis_voices
@@ -1611,8 +1755,11 @@ class JarvisUIMixin:
         def _resize_messages(self, event) -> None:
             self.chat_canvas.itemconfigure(self.messages_window, width=event.width)
             if event.width != getattr(self, "_chat_fit_width", None):
+                import jarvis_ui_kit
+
                 self._chat_fit_width = event.width
-                self.chat_canvas.after_idle(self._fit_chat_text)
+                # Al terminar el arrastre, no con cada píxel (recorre todos los mensajes).
+                jarvis_ui_kit.postergar(self.chat_canvas, self._fit_chat_text, clave="ajuste_chat")
 
         # Lo que ocupan los márgenes de la fila, la tarjeta o la burbuja y alguna sangría.
         _MARGEN_CHAT = 120

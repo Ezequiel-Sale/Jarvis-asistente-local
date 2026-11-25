@@ -346,6 +346,10 @@ def construir(app, page: tk.Frame) -> None:
         dibujar_grilla()
         acomodar_etiquetas(ancho_derecha - 46)
 
-    cuerpo.bind("<Configure>", acomodar, add="+")
+    import jarvis_ui_kit
+
+    # Al terminar el arrastre del borde, no con cada píxel (2026-11-24: se trababa).
+    cuerpo.bind("<Configure>", lambda e: jarvis_ui_kit.postergar(cuerpo, lambda: acomodar(e), clave="acomodar"),
+                add="+")
     dibujar_apps([(clave, nombre) for clave, (nombre, _enlace) in jarvis_tv.APPS.items()])
     acomodar_etiquetas(600)

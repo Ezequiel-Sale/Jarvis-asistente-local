@@ -24,6 +24,13 @@ class Host(v.VistasMixin, JarvisUIMixin):
         self._manejar_grabacion = Mock()
 
 
+def todos(widget) -> list:
+    salida = []
+    for hijo in widget.winfo_children():
+        salida += [hijo, *todos(hijo)]
+    return salida
+
+
 def textos(widget) -> list[str]:
     salida = []
     for hijo in widget.winfo_children():
@@ -56,10 +63,16 @@ class VistasTests(unittest.TestCase):
                                         "red": [("Ethernet", True, True), ("Wi-Fi", True, False)],
                                         "encendido": ["Desactivá el inicio rápido."], "errores": []})
         self.assertIn("Luz nocturna", texto)
-        self.assertIn("ACTIVAR", texto)
+        self.assertIn("desactivado", texto)
         self.assertIn("no se pudo leer", texto)
-        self.assertIn("Ethernet", texto)
-        self.assertIn("CAÍDAS (7 DÍAS)", texto)
+        self.assertIn("●  Ethernet", texto)
+        self.assertIn("CAÍDAS\nÚltimos 7 días", texto)
+        # Los interruptores: clic en el de la luz nocturna (apagada) la prende con la herramienta de siempre.
+        interruptores = [w for w in todos(self.host._vista_cuerpos["sistema"]) if hasattr(w, "jarvis_encendido")]
+        self.assertEqual([w.jarvis_encendido for w in interruptores], [False, True, None, True])
+        interruptores[0].jarvis_alternar()
+        self.host._start_direct_tool_action.assert_called_once_with(
+            "windows_setting", {"setting": "night_light", "state": "on"}, "Luz nocturna: on")
 
     def test_programs_view_buttons_use_the_tools(self):
         texto = self.render("programas", {"actualizaciones": [("Git", "Git.Git", "2.55", "2.56")],
@@ -67,6 +80,11 @@ class VistasTests(unittest.TestCase):
         self.assertIn("ACTUALIZACIONES DISPONIBLES (1)", texto)
         self.assertIn("2.55 → 2.56", texto)
         self.assertIn("ARRANCAN CON WINDOWS (1 de 2)", texto)
+        self.assertIn("1 de 2", texto)  # el resumen de arriba
+        self.host._filtrar_inicio("Desactivados")
+        texto = " | ".join(textos(self.host._vista_cuerpos["programas"]))
+        self.assertIn("Steam", texto)
+        self.assertNotIn("Discord", texto)
         self.host._accion_vista("update_programs", {"name": "Git.Git"}, "Actualizar Git")
         self.host._start_direct_tool_action.assert_called_once_with("update_programs", {"name": "Git.Git"}, "Actualizar Git")
 
@@ -76,6 +94,7 @@ class VistasTests(unittest.TestCase):
         self.assertIn("conectada", texto)
         self.assertIn("CONECTAR", texto)  # Outlook sin conectar
         self.assertIn("Factura", texto)
+        self.assertIn("1.  Ana", texto)
         self.assertIn("Dentista", texto)
         self.assertIn("REVISAR", texto)
 

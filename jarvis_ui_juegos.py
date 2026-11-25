@@ -113,8 +113,11 @@ def construir(app, page: tk.Frame) -> None:
         lienzo.itemconfigure(ventana, width=evento.width)
         columnas = columnas_para(evento.width - 56)
         if columnas != app.__dict__.get("_games_columnas"):
+            import jarvis_ui_kit
+
             app._games_columnas = columnas
-            app._render_games()
+            # Rearmar las tarjetas al terminar el arrastre del borde, no en cada columna que entra o sale.
+            jarvis_ui_kit.postergar(lienzo, lambda: reacomodar(app), clave="columnas")
 
     lienzo.bind("<Configure>", al_cambiar_ancho)
     app.games_list.jarvis_scroll = lienzo
@@ -221,9 +224,8 @@ def render(app, juegos=None) -> None:
     rejilla = tk.Frame(app.games_list, bg=t.BG)
     rejilla.pack(anchor="nw", fill="x")
     rejilla.jarvis_scroll = app.games_list.jarvis_scroll
-    for i, juego in enumerate(listos):
-        _tarjeta(app, rejilla, juego).grid(row=i // columnas, column=i % columnas, sticky="nw",
-                                           padx=(0, SEPARACION), pady=(0, SEPARACION))
+    app._games_tarjetas = [_tarjeta(app, rejilla, juego) for juego in listos]
+    _ubicar(app._games_tarjetas, columnas)
     if sin_exe:
         tk.Label(app.games_list, text="CARPETAS SIN UN JUEGO CLARO (no se pueden abrir por nombre)", bg=t.BG,
                  fg=t.MUTED, font=("Consolas", 9, "bold")).pack(anchor="w", pady=(16, 4))
@@ -239,6 +241,21 @@ def render(app, juegos=None) -> None:
     widget = app.__dict__.get("_games_widget")  # el widget del escritorio usa los mismos juegos
     if widget is not None:
         widget.refrescar()
+
+
+def _ubicar(tarjetas: list, columnas: int) -> None:
+    for i, tarjeta in enumerate(tarjetas):
+        tarjeta.grid(row=i // columnas, column=i % columnas, sticky="nw", padx=(0, SEPARACION), pady=(0, SEPARACION))
+
+
+def reacomodar(app) -> None:
+    """Cambió cuántas columnas entran: se mueven las tarjetas que ya están (2026-11-24: rearmarlas con sus
+    portadas al soltar el borde de la ventana tardaba ~0,7 s con 21 juegos)."""
+    tarjetas = [t for t in app.__dict__.get("_games_tarjetas") or [] if t.winfo_exists()]
+    if not tarjetas:
+        render(app)
+        return
+    _ubicar(tarjetas, app.__dict__.get("_games_columnas") or 4)
 
 
 def _pintar_contador(app, todos) -> None:

@@ -290,8 +290,11 @@ class RoutinesPanel:
             row=0, column=0, columnspan=4, sticky="w", padx=4, pady=16)
 
     def _al_cambiar_ancho(self, event) -> None:
+        import jarvis_ui_kit
+
         self.canvas.itemconfigure(self._rows_window, width=event.width)
-        self._acomodar(event.width)
+        # Las tarjetas se reacomodan al terminar el arrastre del borde (2026-11-24: se trababa).
+        jarvis_ui_kit.postergar(self.canvas, lambda: self._acomodar(event.width), clave="acomodar")
 
     def _acomodar(self, ancho: int) -> None:
         """Tantas columnas de tarjetas como entren; el texto se ajusta al ancho de cada una."""

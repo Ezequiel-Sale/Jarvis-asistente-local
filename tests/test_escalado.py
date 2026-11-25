@@ -75,6 +75,21 @@ class ScaleTests(unittest.TestCase):
             d.arreglar_escalado(3, {}, dormir=cancelado)
         self.assertEqual(poner.call_args_list[-1].args[1], 300)
 
+    @patch.object(d, "poner_escala")
+    @patch.object(d, "leer_escala", return_value=d.escala_desde_relativa(-7, -4, 1))
+    @patch.object(d, "listar_pantallas", return_value=([KG, VX, TV], {}))
+    def test_broken_scale_ends_at_recommended(self, _listar, leer, poner) -> None:
+        """2026-11-24: al encender la tele Windows la dejó al 175 % y el arreglo volvía a 175 %."""
+        self.assertEqual(leer.return_value.actual, 175)
+        texto = d.arreglar_escalado(3, {}, dormir=lambda _s: None)
+        self.assertEqual([c.args[1] for c in poner.call_args_list], [200, 300])
+        self.assertIn("300 %", texto)
+
+    def test_without_number_prefers_monitor_off_its_recommended_scale(self) -> None:
+        rota = d.escala_desde_relativa(-7, -4, 1)  # TV al 175 %
+        escalas = {"kg": ESCALA_100, "vx": ESCALA_100, "tv": rota}
+        self.assertIs(d.elegir_monitor_escalado([KG, VX, TV], None, lambda p: escalas[p.clave]), TV)
+
     def test_disabled_monitor_is_rejected(self) -> None:
         apagado = d.Pantalla("vx", "VX2428-FHD", ADAPTER, 2, False, 2, None)
         with self.assertRaises(d.ErrorPantalla):
