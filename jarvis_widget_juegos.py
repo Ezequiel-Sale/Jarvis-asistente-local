@@ -3,7 +3,9 @@
 Una ventana sin bordes de Jarvis que queda al fondo, sobre el fondo de pantalla y detrás de las demás
 ventanas, con los juegos de la página 🎮 JUEGOS: portada, ▶ JUGAR y ⚙ para ver, quitar o editar
 las acciones al abrir cada uno. Dos vistas: tarjetas (dos columnas) y lista (más juegos a la vista).
-Se arrastra desde la cabecera, se agranda o achica desde la agarradera «◢» de abajo a la derecha
+Se arrastra desde la cabecera, se agranda o achica desde las agarraderas de las cuatro esquinas
+(2026-11-25: en 4K la de abajo a la derecha quedaba fuera de la pantalla; las de arriba o a la izquierda
+mueven la ventana para que el lado opuesto quede quieto)
 (las tarjetas son de ancho fijo: más ancho, más columnas) y recuerda posición, tamaño, vista, si
 estaba abierto y la apariencia (preferencias ``widget_juegos_*``). Win+D también lo oculta: para
 sobrevivir a eso habría que meterlo en la capa del escritorio, que usa Wallpaper Engine.
@@ -382,10 +384,21 @@ class WidgetJuegos:
         agarradera.bind("<B1-Motion>", self._estirar)
         agarradera.bind("<ButtonRelease-1>", self._soltar_estirar)
         self.agarradera = agarradera
+        self.agarraderas = {"se": agarradera}
+        for esquina, texto, relx, rely, anchor, cursor in (
+                ("nw", "◤", 0, 0, "nw", "size_nw_se"), ("ne", "◥", 1, 0, "ne", "size_ne_sw"),
+                ("sw", "◣", 0, 1, "sw", "size_ne_sw")):
+            otra = tk.Label(interior, text=texto, bg=self._clave, fg=t.MUTED, font=("Segoe UI", 10),
+                            cursor=cursor, bd=0, padx=1, pady=0)
+            otra.place(relx=relx, rely=rely, anchor=anchor)
+            otra.bind("<ButtonPress-1>", lambda e, q=esquina: self._empezar_estirar(e, q))
+            otra.bind("<B1-Motion>", self._estirar)
+            otra.bind("<ButtonRelease-1>", self._soltar_estirar)
+            self.agarraderas[esquina] = otra
         tk.Label(pie, text="● JARVIS", bg=self._clave, fg=t.CYAN, font=("Segoe UI", 8, "bold")).pack(side="right")
         # El aviso va último: con el widget angosto se recorta él, no «JARVIS» ni la agarradera.
         self.aviso = tk.Label(pie, text="", bg=self._clave, fg=t.MUTED, font=("Segoe UI", 8), anchor="w")
-        self.aviso.pack(side="left", fill="x", expand=True)
+        self.aviso.pack(side="left", fill="x", expand=True, padx=(8, 0))  # deja lugar a «◣»
         self._aviso_normal()
 
         self.panel_acciones = tk.Frame(interior, bg=t.PANEL_LIGHT, highlightthickness=1,
@@ -875,21 +888,32 @@ class WidgetJuegos:
 
     # --- Arrastre -------------------------------------------------------------------------------
 
-    def _empezar_estirar(self, evento) -> None:
-        self._estirando = (evento.x_root, evento.y_root, self.ventana.winfo_width(), self.ventana.winfo_height())
+    def _empezar_estirar(self, evento, esquina: str = "se") -> None:
+        """``esquina``: «se», «sw», «ne» o «nw» (la agarradera que se arrastra)."""
+        v = self.ventana
+        self._estirando = (evento.x_root, evento.y_root, v.winfo_width(), v.winfo_height(), v.winfo_x(),
+                           v.winfo_y(), esquina)
 
     def _estirar(self, evento) -> None:
         if self._estirando is None:
             return
-        x0, y0, ancho, alto = self._estirando
-        nuevo = tamano_de(f"{ancho + evento.x_root - x0}x{alto + evento.y_root - y0}")
-        self.ventana.geometry(f"{nuevo[0]}x{nuevo[1]}")
+        x0, y0, ancho, alto, vx, vy, esquina = self._estirando
+        dx, dy = evento.x_root - x0, evento.y_root - y0
+        nuevo = tamano_de(f"{ancho - dx if 'w' in esquina else ancho + dx}x"
+                          f"{alto - dy if 'n' in esquina else alto + dy}")
+        # Arriba o a la izquierda: el lado opuesto queda donde estaba.
+        x = vx + ancho - nuevo[0] if "w" in esquina else vx
+        y = vy + alto - nuevo[1] if "n" in esquina else vy
+        self.ventana.geometry(f"{nuevo[0]}x{nuevo[1]}+{x}+{y}")
 
     def _soltar_estirar(self, _evento) -> None:
         if self._estirando is None:
             return
+        esquina = self._estirando[-1]
         self._estirando = None
         self._guardar(PREF_TAMANO, f"{self.ventana.winfo_width()}x{self.ventana.winfo_height()}")
+        if esquina != "se":
+            self._guardar(PREF_POSICION, f"{self.ventana.winfo_x()},{self.ventana.winfo_y()}")
         self.al_fondo()
 
     def _empezar_arrastre(self, evento) -> None:

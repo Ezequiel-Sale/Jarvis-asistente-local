@@ -70,14 +70,18 @@ class JarvisUIMixin:
                 header, text="CHAT", bg=BG, fg=CYAN, font=("Segoe UI", 17, "bold"),
             )
             self.page_title.grid(row=0, column=0, sticky="w")
-            self.status = tk.Label(
-                header, text="●  SISTEMA LISTO", bg=BG, fg=CYAN, font=("Consolas", 9, "bold"),
-            )
-            self.status.grid(row=0, column=1, sticky="e", padx=(16, 16))
+            # El estado («● PROCESANDO SOLICITUD…») va en la barra lateral, debajo de los gestos (2026-11-26:
+            # con la ventana angosta los botones de la cabecera lo tapaban). Se crea en _build_sidebar.
             self.header_actions = tk.Frame(header, bg=BG)
             self.header_actions.grid(row=0, column=2, sticky="e")
             self.new_chat_button = self._ui_button(
                 self.header_actions, "＋  NUEVA CONVERSACIÓN", self._new_conversation
+            )
+            import jarvis_ui_conversaciones
+
+            # Bandeja con las conversaciones guardadas (2026-11-25).
+            self.conversations_button = self._ui_button(
+                self.header_actions, "☰  CONVERSACIONES", lambda: jarvis_ui_conversaciones.alternar(self)
             )
             self.compact_button = self._ui_button(self.header_actions, "▣  COMPACTO", self._enter_compact_mode)
             self.compact_button.pack(side="right", padx=(8, 0))
@@ -234,6 +238,12 @@ class JarvisUIMixin:
                 font=("Consolas", 8, "bold"), wraplength=210, justify="center",
             )
             self.orb_status.pack(fill="x", padx=16, pady=(4, 14))
+            # Lo que está haciendo Jarvis; los gestos se muestran entre el núcleo y esto.
+            self.status = tk.Label(
+                sidebar, text="●  SISTEMA LISTO", bg=PANEL, fg=CYAN, font=("Consolas", 8, "bold"),
+                wraplength=210, justify="center",
+            )
+            self.status.pack(fill="x", padx=16, pady=(0, 12), after=self.orb_status)
             # «✋ GESTOS · ÍNDICE»: solo visible con los gestos activados (_refresh_gesture_indicator).
             self.gesture_indicator = tk.Label(sidebar, text="", bg=PANEL, fg=MUTED,
                                               font=("Consolas", 8, "bold"), wraplength=210, justify="center")
@@ -332,9 +342,11 @@ class JarvisUIMixin:
             self._contornear(self._pages[nombre])
             if nombre == "chat":
                 self.new_chat_button.pack(side="right")
+                self.conversations_button.pack(side="right", padx=(0, 8))
                 self.input.focus_set()
             else:
                 self.new_chat_button.pack_forget()
+                self.conversations_button.pack_forget()
             if nombre == "rutinas":
                 self._load_routines_page()
             if nombre == "ajustes":

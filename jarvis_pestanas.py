@@ -270,7 +270,8 @@ _ORDINALES = {"primera": 1, "segunda": 2, "tercera": 3, "cuarta": 4, "quinta": 5
               "octava": 8, "novena": 9, "decima": 10}
 _NUMEROS = {"una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8,
             "nueve": 9, "diez": 10}
-_IR = r"(?:(?:anda|ve|vamos|ir|pasa|pasate|cambia|cambiate|salta|volve|vuelve|abre|abri|mostrame|muestrame|trae|traeme)\s+)?(?:a\s+)?"
+# «vea / vean»: así transcribe la voz «ve a» (2026-11-24, iba a la IA).
+_IR = r"(?:(?:anda|ve|vea|vean|vamos|ir|pasa|pasate|cambia|cambiate|salta|volve|vuelve|abre|abri|mostrame|muestrame|trae|traeme)\s+)?(?:a\s+)?"
 _SIGUIENTE = re.compile(rf"^{_IR}(?:la\s+)?(?:siguiente|proxima|otra)\s+{_P}$|^{_IR}(?:la\s+)?{_P}\s+(?:siguiente|de\s+la\s+derecha)$")
 _ANTERIOR = re.compile(rf"^{_IR}(?:la\s+)?{_P}\s+(?:anterior|de\s+la\s+izquierda)$|^{_IR}(?:la\s+)?anterior\s+{_P}$")
 _ORDINAL = re.compile(rf"^{_IR}(?:la\s+)?(?P<ord>" + "|".join(_ORDINALES) + rf"|ultima)\s+{_P}$")

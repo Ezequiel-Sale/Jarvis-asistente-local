@@ -527,6 +527,22 @@ def _con_avisos(answer: str, fallos: Sequence[str]) -> str:
     return f"{answer}\n\nAtención: " + "; ".join(fallos) + "."
 
 
+_CORREO = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_NUMERO_LARGO = re.compile(r"\+?\d[\d\s-]{4,}\d")
+_PARAMETROS_URL = re.compile(r"(https?://[^\s?#]+)[?#]\S*")
+LARGO_FRASE_LOG = 160
+
+
+def frase_para_log(texto: str) -> str:
+    """La orden para el registro (2026-11-24, pedido del usuario: saber qué fue a la IA y pasarlo a orden
+    directa), sin correos, teléfonos ni números largos, ni los parámetros de las direcciones."""
+    frase = " ".join(str(texto).split())
+    frase = _CORREO.sub("[correo]", frase)
+    frase = _PARAMETROS_URL.sub(r"\1?…", frase)
+    frase = _NUMERO_LARGO.sub("[número]", frase)
+    return frase if len(frase) <= LARGO_FRASE_LOG else frase[:LARGO_FRASE_LOG - 1] + "…"
+
+
 def procesar_con_herramientas(
     texto: str,
     conversacion_id: str,
@@ -554,6 +570,7 @@ def procesar_con_herramientas(
     if not max_total_seconds > 0:
         raise ValueError("El tiempo máximo total debe ser positivo.")
     completadas: list[str] = []
+    logging.info("Va a la IA: «%s».", frase_para_log(texto))
     try:
         return _procesar_con_herramientas(
             texto,

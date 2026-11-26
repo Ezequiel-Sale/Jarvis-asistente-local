@@ -1254,6 +1254,28 @@ class OrdenesMixin:
                     dormir(reintento)
         raise AssertionError("inalcanzable")
 
+    def _open_conversation(self, conversacion_id: str) -> bool:
+        """Abre en el chat otra conversación guardada (bandeja «☰ CONVERSACIONES»). True si la abrió."""
+        if self.busy or self.recorder is not None:
+            self._set_status("ESPERÁ A QUE TERMINE", CYAN)
+            return False
+        if conversacion_id == self.conversation_id:
+            return True
+        try:
+            core.tocar_conversacion(conversacion_id)
+            historial = core.obtener_historial_con_fecha(conversacion_id)
+        except Exception as error:
+            logging.exception("No se pudo abrir la conversación.")
+            self._add_message("assistant", f"No pude abrir esa conversación: {error}")
+            return False
+        self.conversation_id = conversacion_id
+        for child in self.messages.winfo_children():
+            child.destroy()
+        for role, content, momento in historial:
+            self._add_message(role, content, momento=momento)
+        self._set_status("CONVERSACIÓN ABIERTA", CYAN)
+        return True
+
     def _new_conversation(self) -> None:
         if self.busy or self.recorder is not None:
             return

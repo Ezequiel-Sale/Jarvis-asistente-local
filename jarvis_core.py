@@ -1,5 +1,6 @@
 import argparse
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import logging
@@ -419,6 +420,50 @@ def crear_conversacion() -> str:
             (conversacion_id,),
         )
     return conversacion_id
+
+
+@dataclass(frozen=True)
+class ResumenConversacion:
+    id: str
+    titulo: str
+    actualizado: datetime | None  # hora local
+    mensajes: int
+
+
+def _hora_local(valor) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(valor)).replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def listar_conversaciones(limite: int = 200) -> list[ResumenConversacion]:
+    """Las conversaciones con mensajes, la más reciente primero (bandeja del chat, 2026-11-25)."""
+    with conexion_db() as connection:
+        rows = connection.execute(
+            "SELECT c.id, c.titulo, c.actualizado, COUNT(m.id) FROM conversaciones c "
+            "JOIN mensajes m ON m.conversacion_id = c.id "
+            "GROUP BY c.id ORDER BY c.actualizado DESC, c.id DESC LIMIT ?",
+            (limite,),
+        ).fetchall()
+    return [ResumenConversacion(str(i), str(t), _hora_local(a), int(n)) for i, t, a, n in rows]
+
+
+def tocar_conversacion(conversacion_id: str) -> None:
+    """La marca como la más reciente: al reiniciar, Jarvis vuelve a ella (``obtener_conversacion_actual``)."""
+    with conexion_db() as connection:
+        cambiadas = connection.execute(
+            "UPDATE conversaciones SET actualizado = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?",
+            (conversacion_id,),
+        ).rowcount
+    if not cambiadas:
+        raise ValueError(f"No existe la conversación {conversacion_id}.")
+
+
+def borrar_conversacion(conversacion_id: str) -> None:
+    with conexion_db() as connection:
+        connection.execute("DELETE FROM mensajes WHERE conversacion_id = ?", (conversacion_id,))
+        connection.execute("DELETE FROM conversaciones WHERE id = ?", (conversacion_id,))
 
 
 def obtener_conversacion_actual() -> str:

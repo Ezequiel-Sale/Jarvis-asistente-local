@@ -621,9 +621,27 @@ def _dias_recurrentes(texto: str) -> tuple[str | None, str]:
 
 _DIA = r"(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bados?|domingos?)"
 _FRASE_DIAS = re.compile(
-    rf"\b(?:(?:los|el)\s+)?{_DIA}(?:\s*(?:,|y)\s*(?:(?:los|el)\s+)?{_DIA})*\b",
+    rf"\b(?:(?:todos\s+)?(?:los|el)\s+|cada\s+)?{_DIA}(?:\s*(?:,|y)\s*(?:(?:los|el)\s+)?{_DIA})*\b",
     re.IGNORECASE,
 )
+
+
+_DIAS_EN_NOMBRE = re.compile(
+    rf"[\s.,;:]+(?=(?:de\s+)?lunes\s+a\s+viernes\b|todos\s+los\s+d[ií]as\b|cada\s+d[ií]a\b"
+    rf"|(?:(?:todos\s+)?(?:los|el)\s+|cada\s+)?{_DIA}\b)",
+    re.IGNORECASE,
+)
+
+
+_DE_FRASE_DIAS = re.compile(r"(?:\b(?:de|a)\s+)?" + _FRASE_DIAS.pattern, re.IGNORECASE)
+
+
+def _separar_dias_del_nombre(nombre: str) -> tuple[str, str]:
+    """(nombre, días) si el nombre termina con una expresión de días; si no, (nombre, "")."""
+    m = _DIAS_EN_NOMBRE.search(nombre)
+    if m is None or not nombre[:m.start()].strip(" ,.;:"):
+        return nombre, ""
+    return nombre[:m.start()], nombre[m.end():]
 
 
 def _nombre_libre(base: str) -> str:
@@ -772,7 +790,10 @@ def parsear_solicitud_creacion(
             "«Programa una rutina llamada Inicio a las 09:00»."
         )
 
-    name = _validate_name(match.group("name").strip(" ,.;:"))
+    # «llamada Publicación LinkedIn. Todos los miércoles y los viernes a las 17:00»: los días que quedaron
+    # dentro del nombre son días, no nombre (2026-11-25: la rutina salió «todos los días»).
+    nombre, dias_en_nombre = _separar_dias_del_nombre(match.group("name"))
+    name = _validate_name(nombre.strip(" ,.;:"))
     hour = int(match.group("hour"))
     if match.group("minute"):
         minute = int(match.group("minute"))
@@ -787,7 +808,7 @@ def parsear_solicitud_creacion(
         raise ValueError("La hora debe estar entre 00:00 y 23:59.")
     scheduled_time = f"{hour:02d}:{minute:02d}"
 
-    remainder = text[match.end() :]
+    remainder = dias_en_nombre + " " + text[match.end() :]
     automatic = _AUTOMATIC_WORDS.search(remainder) is not None
     remainder = _AUTOMATIC_WORDS.sub(" ", remainder)
     day_range = _DAY_RANGE.search(remainder)
@@ -821,8 +842,9 @@ def parsear_solicitud_creacion(
                 day_name = day_name[:-1]  # «los sábados», «los domingos»
             selected.add(day_numbers[day_name])
         days = ",".join(map(str, sorted(selected)))
-        remainder = _FRASE_DIAS.sub(" ", remainder)  # también «los» de «los sábados»
-        remainder = re.sub(r"\b(?:de|a)\b", " ", remainder, flags=re.IGNORECASE)
+        # También «los» de «los sábados» y el «de»/«a» que los precede («a las 8 de los lunes»), no
+        # todos los «a» de la frase (2026-11-25: «navegar a linkedin.com» perdía el «a»).
+        remainder = _DE_FRASE_DIAS.sub(" ", remainder)
     else:
         days = _ALL_DAYS
 

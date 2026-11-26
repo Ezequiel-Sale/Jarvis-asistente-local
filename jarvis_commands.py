@@ -37,7 +37,8 @@ AUDIO_TOGGLE_COMMAND_PATTERN = re.compile(
 )
 
 GAME_LAUNCH_COMMAND_PATTERN = re.compile(
-    r"^\s*(?:(?:jarvis(?:\s*[,;:]\s*|\s+)|"
+    # «Ajarvis abre el navegador»: así quedó «Ah, Jarvis…» en la voz (2026-11-25).
+    r"^\s*(?:(?:(?:a\s*)?jarvis(?:\s*[,;:]\s*|\s+)|"
     r"(?:por favor|puedes|podrias|quiero)(?:\s*[,;:]\s*|\s+)))*"
     # 2026-11-17: también en voseo («abrí», «iniciá», que con tilde no coincidían) y «jugá al …».
     r"(?:abre|abri|abrí|abrir|abrime|inicia|iniciá|iniciar"
@@ -51,13 +52,13 @@ WINDOW_ACTION_PATTERNS = {
         r"(?:(?:jarvis|por favor|puedes|podrias|quiero)\s+)*"
         r"(?:minimiza(?:r)?|minimice)"
         r"(?:\s+(?:(?:la|el|esta)\s+)?(?:ventana(?:\s+(?:de|del))?\s+)?)"
-        r"(?:brave|navegador)(?:\s+por favor)?"
+        r"(?:brave|breve|navegador)(?:\s+por favor)?"
     ),
     "brave_maximize": re.compile(
         r"(?:(?:jarvis|por favor|puedes|podrias|quiero)\s+)*"
         r"(?:maximiza(?:r)?|maximice)"
         r"(?:\s+(?:(?:la|el|esta)\s+)?(?:ventana(?:\s+(?:de|del))?\s+)?)"
-        r"(?:brave|navegador)(?:\s+por favor)?"
+        r"(?:brave|breve|navegador)(?:\s+por favor)?"  # «maximice breve» (voz, 2026-11-25)
     ),
     "minimize": re.compile(
         r"(?:(?:jarvis|por favor|puedes|podrias|quiero)\s+)*"
@@ -79,7 +80,7 @@ WINDOW_ACTION_PATTERNS = {
 
 BROWSER_NEW_TAB_PATTERN = re.compile(
     r"^(?:a[\s,]+)?(?:(?:jarvis|por favor|puedes|podrias|quiero)[,\s]+)*"
-    r"(?:(?:abre|abrir|crea|crear)\s+)?"
+    r"(?:(?:abre|abri|abrir|abro|abra|crea|crear)\s+)?"  # «abro»: como lo transcribe la voz (2026-11-24)
     r"(?:(?:una|la)\s+)?(?:nueva\s+)?pesta(?:na|ña)"
     r"(?:\s+nueva)?(?:\s+(?:en\s+)?brave)?(?:\s+por favor)?$",
     re.IGNORECASE,
@@ -377,7 +378,7 @@ _EN_MONITOR = re.compile(
     r"|(?:monitor|pantalla)\s+(?:n[uú]mero\s+)?(?P<n>\d|uno|dos|tres|cuatro))(?=$|[\s,.;!?])", re.IGNORECASE)
 # «abre una nueva pestaña y luego navega Twitch.tv» (2026-11-24: la IA abrió una ventana nueva).
 _PESTANA_Y_NAVEGA = re.compile(
-    r"^(?:abr[eií]r?|crea|cre[aá])\s+(?:una\s+)?(?:nueva\s+pesta[nñ]a|pesta[nñ]a\s+nueva|otra\s+pesta[nñ]a)"
+    r"^(?:abr[eiíoa]r?|crea|cre[aá])\s+(?:una\s+)?(?:nueva\s+pesta[nñ]a|pesta[nñ]a\s+nueva|otra\s+pesta[nñ]a)"
     r"[\s,]+(?:y\s+)?(?:luego\s+|despu[eé]s\s+|entonces\s+)?(?P<resto>.+)$", re.IGNORECASE)
 _NAVEGA = re.compile(
     r"^(?:(?:jarvis|por favor|puedes|podr[ií]as|quiero)[,\s]+)*"

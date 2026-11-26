@@ -1147,7 +1147,8 @@ def _app(m):
     return "tv_open_app", {"app": _APPS_DICHAS[m.group("app")]}
 
 
-@_frase(rf"^(?:pon|pone|cambia|pasa)\s+(?:{_TELE}\s+)?(?:(?:a|en)\s+)?(?:la\s+)?(?:entrada\s+)?hdmi\s*(?P<n>[1-4])"
+# Sin verbo también: «HDMI 3 en la tele» (2026-11-25, iba a la IA).
+@_frase(rf"^(?:(?:pon|pone|cambia|pasa)\s+)?(?:{_TELE}\s+)?(?:(?:a|en)\s+)?(?:la\s+)?(?:entrada\s+)?hdmi\s*(?P<n>[1-4])"
         rf"(?:\s+(?:en|de)\s+{_TELE})?$")
 def _hdmi(m):
     return "tv_control", {"action": f"hdmi{m.group('n')}"}

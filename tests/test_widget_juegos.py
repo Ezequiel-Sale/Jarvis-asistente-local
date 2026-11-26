@@ -214,6 +214,27 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual(otra.ventana.winfo_width(), w.ANCHO + 300)  # el tamaño guardado al soltar
         otra.ocultar()
 
+    def test_top_left_corner_keeps_the_opposite_side(self):
+        """2026-11-25: en 4K la agarradera de abajo a la derecha quedaba fuera de la pantalla."""
+        app = _App(self.root, [_juego("Juego")], {})
+        widget = w.WidgetJuegos(app)
+        widget.mostrar()
+        self.assertEqual(set(widget.agarraderas), {"nw", "ne", "sw", "se"})
+        widget.ventana.geometry(f"{w.ANCHO}x{w.ALTO}+300+200")
+        self.root.update()
+        derecha = widget.ventana.winfo_x() + widget.ventana.winfo_width()
+        abajo = widget.ventana.winfo_y() + widget.ventana.winfo_height()
+        evento = lambda x, y: SimpleNamespace(x_root=x, y_root=y)
+        widget._empezar_estirar(evento(300, 200), "nw")
+        widget._estirar(evento(250, 260))  # 50 más ancho, 60 más bajo
+        self.root.update()
+        widget._soltar_estirar(evento(250, 260))
+        self.assertEqual((widget.ventana.winfo_width(), widget.ventana.winfo_height()), (w.ANCHO + 50, w.ALTO - 60))
+        self.assertEqual(widget.ventana.winfo_x() + widget.ventana.winfo_width(), derecha)
+        self.assertEqual(widget.ventana.winfo_y() + widget.ventana.winfo_height(), abajo)
+        self.assertEqual(self.prefs[w.PREF_POSICION], f"{widget.ventana.winfo_x()},{widget.ventana.winfo_y()}")
+        widget.ocultar()
+
     def test_only_the_background_is_transparent(self):
         self.prefs[w.PREF_OPACIDAD_VIEJA] = "0.80"  # la versión anterior: 20 % de toda la ventana
         app = _App(self.root, [_juego("Elden Ring")], {})

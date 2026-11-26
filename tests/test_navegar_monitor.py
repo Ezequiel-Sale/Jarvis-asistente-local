@@ -19,6 +19,8 @@ class NavegarTests(unittest.TestCase):
             "abrí una pestaña nueva y andá a youtube.com en el monitor 2":
                 {"url": "youtube.com", "monitor": 2, "new_tab": True},
             "navega Twitch.tv": {"url": "Twitch.tv"},
+            # Como lo transcribió la voz el 2026-11-24 (fue a la IA).
+            "Abro una nueva pestaña y navega a youtube.com": {"url": "youtube.com", "new_tab": True},
         }
         for frase, argumentos in casos.items():
             with self.subTest(frase=frase):

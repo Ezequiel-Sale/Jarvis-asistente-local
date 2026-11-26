@@ -302,6 +302,11 @@ def interactuar_con_ventana_brave(
         scan_code = ord(character)
         keybd_event(0, scan_code, 0x0004, 0)
         keybd_event(0, scan_code, 0x0004 | 0x0002, 0)
+    # Supr borra lo que Brave autocompleta del historial: 2026-11-24, «youtube.com» + Enter abrió una
+    # canción vista antes en vez de la página principal.
+    time.sleep(0.05)
+    keybd_event(0x2E, 0, 0x0001, 0)  # KEYEVENTF_EXTENDEDKEY
+    keybd_event(0x2E, 0, 0x0001 | 0x0002, 0)
     keybd_event(0x0D, 0, 0, 0)
     keybd_event(0x0D, 0, 0x0002, 0)
     return True
