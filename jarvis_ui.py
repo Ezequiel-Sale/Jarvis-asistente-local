@@ -214,11 +214,46 @@ class JarvisUIMixin:
             entrada.focus_set()
 
         def _build_sidebar(self) -> None:
-            sidebar = tk.Frame(self.root, bg=PANEL, width=250)
-            sidebar.grid(row=0, column=0, sticky="ns")
-            sidebar.grid_propagate(False)
-            sidebar.pack_propagate(False)
+            # Con la ventana baja, las secciones de abajo quedaban fuera de la vista (2026-11-27): la barra
+            # va dentro de un lienzo que se desplaza (rueda o barrita) solo cuando no entra entera.
+            import jarvis_ui_kit
+
+            contenedor = tk.Frame(self.root, bg=PANEL, width=250)
+            contenedor.grid(row=0, column=0, sticky="ns")
+            contenedor.grid_propagate(False)
+            contenedor.pack_propagate(False)
             tk.Frame(self.root, bg=BORDER, width=1).grid(row=0, column=0, sticky="nse")
+            lienzo = tk.Canvas(contenedor, bg=PANEL, highlightthickness=0, bd=0)
+            barra = ttk.Scrollbar(contenedor, orient="vertical", command=lienzo.yview,
+                                  style="Jarvis.Vertical.TScrollbar")
+            lienzo.configure(yscrollcommand=barra.set)
+            lienzo.pack(side="left", fill="both", expand=True)
+            sidebar = tk.Frame(lienzo, bg=PANEL)
+            item = lienzo.create_window((0, 0), window=sidebar, anchor="nw")
+            self._sidebar_lienzo, self._sidebar_barra, self._sidebar = lienzo, barra, sidebar
+
+            def ajustar() -> None:
+                if not lienzo.winfo_exists():
+                    return
+                visible, necesario = lienzo.winfo_height(), sidebar.winfo_reqheight()
+                alto = max(visible, necesario)  # sobra lugar: la ayuda de abajo queda abajo
+                lienzo.itemconfigure(item, width=lienzo.winfo_width(), height=alto)
+                lienzo.configure(scrollregion=(0, 0, lienzo.winfo_width(), alto))
+                if necesario > visible + 1:
+                    if not barra.winfo_ismapped():
+                        barra.pack(side="right", fill="y", before=lienzo)
+                    sidebar.jarvis_scroll = lienzo  # rueda del ratón (ver _on_mousewheel)
+                else:
+                    if barra.winfo_ismapped():
+                        barra.pack_forget()
+                    lienzo.yview_moveto(0)
+                    sidebar.__dict__.pop("jarvis_scroll", None)  # sin desborde, la rueda mueve el chat
+
+            self._ajustar_sidebar = ajustar
+            lienzo.bind("<Configure>", lambda _e: jarvis_ui_kit.postergar(lienzo, ajustar, 60, clave="barra"),
+                        add="+")
+            sidebar.bind("<Configure>", lambda _e: jarvis_ui_kit.postergar(lienzo, ajustar, 60, clave="barra"),
+                         add="+")
 
             marca = tk.Frame(sidebar, bg=PANEL, padx=22, pady=18)
             marca.pack(fill="x")

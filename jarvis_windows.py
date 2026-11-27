@@ -462,11 +462,20 @@ def colocar_ventana(app: str, posicion: str, monitor=None) -> str:
     return ventana.programa or ventana.titulo
 
 
-def mover_ventanas(app: str, monitor) -> tuple[int, int, list[str]]:
-    """(movidas, total, programas) de las ventanas de ``app`` hacia ``monitor``."""
+def mover_ventanas(app: str, monitor, desde=None, desde_numero: int | None = None) -> tuple[int, int, list[str]]:
+    """(movidas, total, programas) de las ventanas de ``app`` hacia ``monitor``.
+
+    ``desde`` (``jarvis_vision.Monitor``): solo las que están en ese monitor (2026-11-26: «mueve Brave del
+    monitor 2 al monitor 3» con una ventana de Brave en el 1 y otra en el 2)."""
     _ventanas, elegidas = _elegir_o_de_la_bandeja(app)
     if not elegidas:
         raise ErrorVentana(f"No encontré ninguna ventana abierta de «{app}».")
+    if desde is not None:
+        user32 = _user32()
+        origen = _monitor_destino(user32, desde)
+        elegidas = [v for v in elegidas if user32.MonitorFromWindow(v.hwnd, 2) == origen]
+        if not elegidas:
+            raise ErrorVentana(f"No encontré ninguna ventana de «{app}» en el monitor {desde_numero}.")
     movidas = 0
     for ventana in elegidas:
         try:

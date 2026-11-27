@@ -36,5 +36,34 @@ class CerrarEnMonitorTests(unittest.TestCase):
                              en_monitor=lambda v: False, mostrar=lambda v, c: True)
 
 
+
+class MoverDesdeMonitorTests(unittest.TestCase):
+    """«Mueve Brave del monitor 2 al monitor 3» (2026-11-26): una ventana de Brave en el 1 y otra en el 2."""
+
+    def test_phrases(self) -> None:
+        from jarvis_commands import detectar_mover_ventana
+
+        self.assertEqual(detectar_mover_ventana("Mueve Brave del monitor 2 al monitor 3"),
+                         ("move_window", {"app": "brave", "monitor": 3, "from_monitor": 2}))
+        self.assertEqual(detectar_mover_ventana("Mueve el navegador del monitor 2 al monitor 3"),
+                         ("move_window", {"app": "brave", "monitor": 3, "from_monitor": 2}))
+        self.assertEqual(detectar_mover_ventana("mueve brave al monitor 2"),
+                         ("move_window", {"app": "brave", "monitor": 2}))
+
+    def test_only_the_window_on_that_monitor_moves(self) -> None:
+        from unittest.mock import patch
+
+        en_1 = SimpleNamespace(hwnd=1, titulo="A - Brave", programa="brave", pid=10)
+        en_2 = SimpleNamespace(hwnd=2, titulo="B - Brave", programa="brave", pid=10)
+        user32 = SimpleNamespace(MonitorFromWindow=lambda h, _f: {1: "M1", 2: "M2"}[h])
+        movidas = []
+        with patch.object(w, "_elegir_o_de_la_bandeja", return_value=([], [en_1, en_2])),                 patch.object(w, "_user32", return_value=user32),                 patch.object(w, "_monitor_destino", return_value="M2"),                 patch.object(w, "mover", side_effect=lambda v, _m: movidas.append(v.hwnd) or True):
+            self.assertEqual(w.mover_ventanas("brave", "destino", desde="monitor 2", desde_numero=2),
+                             (1, 1, ["brave"]))
+            self.assertEqual(movidas, [2])
+            with self.assertRaises(w.ErrorVentana):
+                with patch.object(w, "_monitor_destino", return_value="M3"):
+                    w.mover_ventanas("brave", "destino", desde="monitor 3", desde_numero=3)
+
 if __name__ == "__main__":
     unittest.main()

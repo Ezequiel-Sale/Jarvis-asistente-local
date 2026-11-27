@@ -890,6 +890,7 @@ def crear_registro_herramientas(
                 "monitor": {"type": "integer", "minimum": 1, "maximum": 9},
                 "screen_name": {"type": "string"},
                 "position": {"type": "string", "enum": list(POSICIONES_VENTANA)},
+                "from_monitor": {"type": "integer", "minimum": 1, "maximum": 9},
             },
             "required": ["app"],
             "additionalProperties": False,

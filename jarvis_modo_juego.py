@@ -141,7 +141,7 @@ ALIAS = {
     "google chrome": "chrome", "microsoft edge": "msedge", "edge": "msedge", "brave browser": "brave",
     "mozilla firefox": "firefox", "bloc de notas": "notepad", "explorador de archivos": "explorer",
     "visual studio code": "code", "vs code": "code", "calculadora": "win32calc",
-    "claude code": "claude", "claude desktop": "claude",
+    "claude code": "claude", "claude coder": "claude", "claude desktop": "claude",
 }
 
 

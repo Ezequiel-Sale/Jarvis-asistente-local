@@ -96,6 +96,10 @@ def _numeracion_fija_monitores() -> dict[int, int]:
     return equivalencias
 
 
+# Orígenes cuyas acciones exitosas no dejan tarjeta en el chat (solo los errores).
+ORIGENES_SIN_TARJETA = ("celular", "gestos", "control")
+
+
 class JarvisApp(
     OrdenesMixin,
     VozMixin,
@@ -425,6 +429,8 @@ class JarvisApp(
         jarvis_vision.configurar_numeracion(_numeracion_fija_monitores)
         self._init_gestures()
         self._refresh_gesture_indicator()
+        if not self._audio_preferido():
+            self._set_audio_enabled(False)
         self._continuous_transcribing = False
         if self._wakeword_preferida():
             self._start_wakeword()
@@ -1095,6 +1101,10 @@ class JarvisApp(
                         try:
                             if action == "set_audio":
                                 self._set_audio_enabled(value)
+                                try:
+                                    core.guardar_preferencia(self._PREFERENCIA_AUDIO, "1" if value else "0")
+                                except Exception:
+                                    logging.exception("No se pudo guardar la preferencia de las respuestas habladas.")
                                 result = (
                                     "Audio de Jarvis activado."
                                     if value
@@ -1360,9 +1370,11 @@ class JarvisApp(
                         self._set_idle()
                         self._refrescar_tras_accion()
                     elif event[0] == "action_result":
-                        if event[1].origen in ("celular", "gestos") and event[1].exitosa:
-                            # Deslizadores y botones de la pestaña Música (celular) o el scroll con
-                            # la mano (gestos): ya se ven y quedan en el registro; en el chat, ruido.
+                        if event[1].origen in ORIGENES_SIN_TARJETA and event[1].exitosa:
+                            # Deslizadores y botones de la pestaña Música (celular), el scroll con la
+                            # mano (gestos) o los botones del control de la tele (2026-11-26: llenaban el
+                            # chat al navegar): ya se ven y quedan en el registro; en el chat, ruido.
+                            # Los errores sí se muestran.
                             continue
                         self._show_action_result(event[1])
                         try:

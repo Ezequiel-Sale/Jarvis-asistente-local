@@ -284,8 +284,22 @@ class VozMixin:
     def _tool_set_jarvis_audio(self, enabled: bool) -> str:
         return self._request_tool_ui_action("set_audio", enabled)
 
+    # «Respuestas habladas» (2026-11-26: no se guardaba y al reiniciar volvía a hablar).
+    _PREFERENCIA_AUDIO = "respuestas_habladas"
+
+    def _audio_preferido(self) -> bool:
+        try:
+            return core.obtener_preferencia(self._PREFERENCIA_AUDIO) != "0"
+        except Exception:
+            logging.exception("No se pudo leer la preferencia de las respuestas habladas.")
+            return True
+
     def _execute_audio_toggle(self, enabled: bool, command: str) -> None:
         self._set_audio_enabled(enabled)
+        try:
+            core.guardar_preferencia(self._PREFERENCIA_AUDIO, "1" if enabled else "0")
+        except Exception:
+            logging.exception("No se pudo guardar la preferencia de las respuestas habladas.")
         respuesta = (
             "Audio de Jarvis activado."
             if enabled

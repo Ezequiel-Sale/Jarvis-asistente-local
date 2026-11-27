@@ -912,8 +912,16 @@ MANOS = {"derecha": "Left", "izquierda": "Right", "cualquiera": None}
 MANO_POR_DEFECTO = "derecha"
 
 
-def elegir_mano(resultado, permitida: str | None) -> int | None:
-    """Índice de la mano a seguir entre las detectadas (la de más confianza si hay varias), o None."""
+# Una mano que aparece a menos de esto (fracción de la imagen) de donde estaba la que se seguía es la misma.
+DISTANCIA_MISMA_MANO = 0.15
+
+
+def elegir_mano(resultado, permitida: str | None, anterior: tuple[float, float] | None = None) -> int | None:
+    """Índice de la mano a seguir entre las detectadas (la de más confianza si hay varias), o None.
+
+    ``anterior``: la muñeca de la mano que se venía siguiendo (hace muy poco). 2026-11-27: con poca luz
+    MediaPipe etiqueta la misma mano a veces «Left» y a veces «Right», y al cambiar se dejaba de seguir
+    («no detecta los puntos»); si hay una mano en ese lugar, se sigue aunque cambie la etiqueta."""
     manos = getattr(resultado, "hand_landmarks", None) or []
     if not manos:
         return None
@@ -922,7 +930,18 @@ def elegir_mano(resultado, permitida: str | None) -> int | None:
     lados = getattr(resultado, "handedness", None) or []
     candidatas = [(cat[0].score, i) for i, cat in enumerate(lados[:len(manos)])
                   if cat and cat[0].category_name == permitida]
-    return max(candidatas)[1] if candidatas else None
+    if candidatas:
+        return max(candidatas)[1]
+    if anterior is not None:
+        cercanas = []
+        for i, mano in enumerate(manos):
+            muneca = mano[0]
+            distancia = ((muneca.x - anterior[0]) ** 2 + (muneca.y - anterior[1]) ** 2) ** 0.5
+            if distancia <= DISTANCIA_MISMA_MANO:
+                cercanas.append((distancia, i))
+        if cercanas:
+            return min(cercanas)[1]
+    return None
 
 
 def ruta_modelo(carpeta: Path) -> Path:
@@ -978,6 +997,7 @@ class DetectorGestos(threading.Thread):
         self._estado_puntero: str | None = None
         self.al_atajo = al_atajo  # fase 4: pausa, atrás/adelante, pulgares (la app decide qué hacer)
         self.mano = mano  # «Right», «Left» o None (cualquiera); la app la puede cambiar en marcha
+        self._muneca_seguida: tuple[tuple[float, float], float] | None = None  # (muñeca, cuándo)
         self._mano_vista: str | None = None  # para el log: qué mano se vio por última vez
         self.atajos = Atajos()
         # Fase 6: gestos enseñados (la app los reemplaza al enseñar o borrar uno).
@@ -1104,10 +1124,13 @@ class DetectorGestos(threading.Thread):
                 imagen = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 resultado = modelo.detect_for_video(imagen, int((time.perf_counter() - inicio) * 1000))
                 puntos = mundo = None
-                indice = elegir_mano(resultado, self.mano)
+                seguida = self._muneca_seguida
+                vigente = seguida is not None and time.monotonic() - seguida[1] <= 1.0
+                indice = elegir_mano(resultado, self.mano, seguida[0] if vigente else None)
                 self._anotar_mano(resultado, indice)
                 if indice is not None:
                     puntos = [(p.x, p.y) for p in resultado.hand_landmarks[indice]]
+                    self._muneca_seguida = (puntos[0], time.monotonic())
                     mundos = getattr(resultado, "hand_world_landmarks", None)
                     if mundos and len(mundos) > indice:
                         mundo = [(p.x, p.y, p.z) for p in mundos[indice]]  # metros

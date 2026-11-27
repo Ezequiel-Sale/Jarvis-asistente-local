@@ -642,7 +642,8 @@ _CORRECCIONES_VOZ = (
     (r"\byou\s+tube\b", "YouTube"),
     (r"\ben\s+la\s+tel(?:ena|eta|el)\b", "en la tele"),  # «Abre triplay en la telena» (2026-11-13)
     (r"\bpanta(?:ja|ya|lia|la|da)\b", "pantalla"),  # «Pantaja completa» (2026-11-16)
-    (r"\bcloud\s*code\b", "Claude Code"),  # «Abre CloudCode» iba a «Abrir juego» (2026-11-17)
+    # «Abre CloudCode» iba a «Abrir juego» (2026-11-17); «cierra Claude Coder» (2026-11-27).
+    (r"\b(?:cloud|claude)\s*coder?\b", "Claude Code"),
     # «Busca la obra del partido entre Argentina y Costa Rica» (2026-11-16)
     (r"\b(la|a\s+qu[eé])\s+obra\s+(del?\s+(?:partido|juego|evento|show|concierto|recital|vuelo|"
      r"pel[ií]cula|estreno|clase|reuni[oó]n|turno|cita|carrera|pelea|final))\b", r"\1 hora \2"),
@@ -1051,6 +1052,13 @@ def detectar_mover_ventana(texto: str) -> tuple[str, dict[str, object]] | None:
         return None
     if not app or re.fullmatch(r"(?:el\s+|la\s+)?(?:monitor|pantalla|escritorio)(?:\s+.*)?", app):
         return None
+    # «mueve Brave del monitor 2 al monitor 3» (2026-11-26): solo la ventana que está en el 2.
+    origen: dict[str, object] = {}
+    if (de := _DESDE_MONITOR.fullmatch(app)) is not None:
+        app = de.group("app").strip()
+        origen = {"from_monitor": _numero_monitor(de.group("n"))}
+        if app in _NAVEGADOR:
+            app = "brave"
     import jarvis_pestanas
 
     # «mueve la pestaña número 3 al monitor 2» (2026-11-24): la pestaña sola, no la ventana de Brave.
@@ -1059,8 +1067,14 @@ def detectar_mover_ventana(texto: str) -> tuple[str, dict[str, object]] | None:
         donde = {"screen_name": "tv"} if match.group("tv") else {"monitor": _numero_monitor(match.group(3))}
         return "browser_tab", {**pestana, **donde}
     if match.group("tv"):
-        return "move_window", {"app": app, "screen_name": "tv"}
-    return "move_window", {"app": app, "monitor": _numero_monitor(match.group(3))}
+        return "move_window", {"app": app, "screen_name": "tv", **origen}
+    return "move_window", {"app": app, "monitor": _numero_monitor(match.group(3)), **origen}
+
+
+_DESDE_MONITOR = re.compile(
+    r"^(?P<app>.+?)\s+(?:del|de\s+la|que\s+esta\s+en\s+el|que\s+esta\s+en\s+la)\s+(?:monitor|pantalla)\s+"
+    r"(?:numero\s+)?(?P<n>\d|uno|dos|tres|cuatro)$"
+)
 
 
 _DONDE_NAVEGADOR = r"(?:\s+(?:en|de)\s+(?:brave|el\s+navegador))?"

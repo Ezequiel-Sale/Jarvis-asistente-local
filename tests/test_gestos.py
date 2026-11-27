@@ -921,6 +921,13 @@ class HandSideTests(unittest.TestCase):
         # Dos «derechas» (un error de MediaPipe): la de más confianza.
         self.assertEqual(g.elegir_mano(self._resultado(("Right", 0.6), ("Right", 0.9)), "Right"), 1)
 
+    def test_same_hand_with_the_other_label_keeps_being_followed(self) -> None:
+        """2026-11-27: con poca luz la misma mano salía «Left» y «Right» alternadas y se perdía."""
+        sola = self._resultado(("Right", 0.6))  # muñeca en (0.5, 0.5)
+        self.assertEqual(g.elegir_mano(sola, "Left", anterior=(0.55, 0.45)), 0)  # donde estaba: es la misma
+        self.assertIsNone(g.elegir_mano(sola, "Left", anterior=(0.9, 0.9)))  # en otro lugar: es la otra
+        self.assertIsNone(g.elegir_mano(sola, "Left"))  # sin mano reciente: como antes
+
     def test_left_hand_is_ignored_by_the_thread(self) -> None:
         eventos: queue.Queue = queue.Queue()
         detector = g.DetectorGestos(eventos, lambda: True, Path("."),
