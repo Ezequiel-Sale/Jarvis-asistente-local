@@ -21,6 +21,7 @@ DOCUMENTOS = "documentos"
 PAGINA = "pagina"
 WHATSAPP = "whatsapp"
 CORREO = "correo"
+SISTEMA = "sistema"
 
 # Medido 2026-11-19 (bonsai-2:27b): ocultar las de tele, GPU, monitores y rutinas empeoró casos ajenos
 # («Abrí una pestaña nueva y andá a github.com»: 3/3 bien con todas, 0/3 sin ellas). Por eso solo se
@@ -74,6 +75,11 @@ TEMAS: dict[str, tuple[frozenset[str], re.Pattern[str]]] = {
         frozenset({"whatsapp_unread", "whatsapp_read", "whatsapp_send"}),
         re.compile(r"\b(?:whats\s*app|wasap|guasap|mensajes?|chats?|escribio|escribieron|mandale|enviale|escribile|"
                    r"decile|contesta\w*|responde\w*)\b"),
+    ),
+    SISTEMA: (
+        frozenset({"screenshot", "screen_record", "service_status", "service_control", "process_control"}),
+        re.compile(r"\b(?:captur\w*|screenshot|pantallazo|grab\w*|servicios?|procesos?|colgad\w*|"
+                   r"responde\w*|prioridad|forz\w*|mata\w*)\b"),
     ),
     CORREO: (
         frozenset({"email_unread", "email_read", "email_send", "calendar_events", "calendar_create", "connect_account"}),

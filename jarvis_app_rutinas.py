@@ -82,9 +82,12 @@ class RutinasMixin:
         automatic: bool = False,
         once: bool = False,
         program: str = "",
+        phrases: str = "",
     ) -> str:
         disparador = jarvis_routines._validate_trigger(trigger)
         programas = (program,) if program and disparador in jarvis_routines.DISPARADORES_PROGRAMA else ()
+        if disparador == jarvis_routines.DISPARADOR_FRASE:
+            programas = tuple(f.strip() for f in (phrases or name).split(",") if f.strip())
         jarvis_routines.crear_rutina(
             name,
             time,
@@ -236,6 +239,14 @@ class RutinasMixin:
                  or detectar_comando_compacto(texto) or detectar_comando_widget_juegos(texto)
                  or jarvis_reminders.detectar_comando(texto)
                  or jarvis_pestanas.detectar(texto) or detectar_cerrar_programa(texto))
+        if orden is None:
+            import jarvis_sistema_avanzado
+
+            # Sin las que preguntan (servicios, cierre forzado): las encadenadas no se confirman.
+            candidata = jarvis_sistema_avanzado.detectar(texto)
+            if candidata is not None and candidata[0] != "service_control" \
+                    and candidata[1].get("action") != "kill_hung":
+                orden = candidata
         if orden is not None:
             return orden
         if (porcentaje := detectar_comando_volumen(texto)) is not None:

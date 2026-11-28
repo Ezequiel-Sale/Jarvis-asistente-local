@@ -93,6 +93,12 @@ class WidgetTests(unittest.TestCase):
             self.skipTest(f"Sin Tk: {error}")
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
+        # Medidas de un monitor al 100 % con Tk a 96 DPI, sea cual sea el monitor de esta PC.
+        for parche in (patch.object(w, "dpi_en", return_value=96),
+                       patch.object(w.WidgetJuegos, "_dpi_tk", return_value=96.0)):
+            parche.start()
+            self.addCleanup(parche.stop)
+        self.addCleanup(w.poner_escala, 96, 96)
         carpeta = tempfile.TemporaryDirectory()
         self.addCleanup(carpeta.cleanup)
         self.dir = Path(carpeta.name)
@@ -284,6 +290,25 @@ class WidgetTests(unittest.TestCase):
         widget.reconstruir()  # cambio de tema
         self.assertIn("1 juego · Jarvis", self._textos(widget.ventana))
         widget.ocultar()
+
+
+
+class EscalaTests(unittest.TestCase):
+    """2026-11-28: en la tele 4K al 300 % el widget se veía diminuto."""
+
+    def tearDown(self) -> None:
+        w.poner_escala(96, 96)
+
+    def test_scale_by_monitor_dpi(self):
+        self.assertTrue(w.poner_escala(288, 96))  # Jarvis arrancó con un monitor de 96: todo ×3
+        self.assertEqual((w._px(w.ANCHO_TARJETA), w._f(9)), (w.ANCHO_TARJETA * 3, 27))
+        self.assertEqual(w.columnas_para(1600), 3)
+        self.assertEqual(w.tamano_de("9000x9000"), (w.MAXIMO[0] * 3, w.MAXIMO[1] * 3))
+        self.assertTrue(w.poner_escala(288, 288))  # Tk ya a 288: las fuentes no se agrandan otra vez
+        self.assertEqual((w._px(w.ANCHO_TARJETA), w._f(9)), (w.ANCHO_TARJETA * 3, 9))
+        self.assertFalse(w.poner_escala(288, 288))
+        w.poner_escala(96, 96)
+        self.assertEqual((w._px(w.ANCHO_TARJETA), w._f(9)), (w.ANCHO_TARJETA, 9))
 
 
 if __name__ == "__main__":

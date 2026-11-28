@@ -9,6 +9,8 @@ import audio_capture
 import jarvis_actions
 import jarvis_apuntar
 import jarvis_pestanas
+import jarvis_sistema_avanzado
+import jarvis_guia_ordenes
 import jarvis_aprendizaje
 import jarvis_buenos_dias
 import jarvis_buscar_archivos
@@ -21,6 +23,7 @@ import jarvis_routines
 import jarvis_control
 import jarvis_ajustes
 import jarvis_doctor
+import jarvis_red
 import jarvis_gestor_archivos
 import jarvis_correo
 import jarvis_whatsapp
@@ -316,6 +319,19 @@ class OrdenesMixin:
         exacto = self.__dict__.get("_texto_exacto") is True
         if not exacto:
             text = OrdenesMixin._corregir_palabras(self, text)
+        pensar, pedido = jarvis_guia_ordenes.separar_pensar(text)
+        if pensar:  # «pensá y …»: directo a la IA con razonamiento (2026-11-27)
+            self.input.delete("1.0", "end")
+            self._add_message("user", text)
+            core.marcar_mensaje_usuario(self.conversation_id, pedido)
+            self._start_busy("PENSANDO… (PUEDE TARDAR UN POCO)")
+            threading.Thread(
+                target=self._answer_worker,
+                args=(pedido, "chat", time.perf_counter(), self.conversation_id, self.cancel_token),
+                kwargs={"pensar": True},
+                daemon=True,
+            ).start()
+            return
         if self._es_orden_de_grabacion(text) is True:  # «mirá cómo lo hago», «listo, guardalo como …»
             self.input.delete("1.0", "end")
             self._add_message("user", text)
@@ -349,7 +365,8 @@ class OrdenesMixin:
         if orden_tele is not None:
             self._start_direct_tool_action(*orden_tele, text)
             return
-        ajuste = (jarvis_ajustes.detectar(text)  # «desactivá la luz nocturna», «sacá Discord del inicio»
+        ajuste = (jarvis_red.detectar(text)  # «desactiva el cable Internet» (siempre pregunta)
+                  or jarvis_ajustes.detectar(text)  # «desactivá la luz nocturna», «sacá Discord del inicio»
                   or jarvis_doctor.detectar(text)  # «¿por qué se colgó la PC?», «¿están sanos los discos?»
                   or jarvis_gestor_archivos.detectar(text)  # «ordená Descargas», «pegá lo que copié antes»
                   or jarvis_winget.detectar(text)  # «instalá VLC», «actualizá todos los programas»
@@ -425,6 +442,8 @@ class OrdenesMixin:
             or jarvis_reminders.detectar_comando(text)
             or detectar_consulta_bateria(text)
             or detectar_comando_multimedia(text)
+            or jarvis_sistema_avanzado.detectar(text)
+            or jarvis_routines.detectar_lista_rutinas(text)
             or detectar_consulta_sistema(text)
             or detectar_comando_monitores(text)
             or detectar_comando_tema(text)
@@ -535,6 +554,13 @@ class OrdenesMixin:
                     self.events.put(("correccion_respuesta", *decision))
                     return
             transcript = OrdenesMixin._corregir_palabras(self, transcript)
+            pensar, pedido = jarvis_guia_ordenes.separar_pensar(transcript)
+            if pensar:  # «pensá y …»: directo a la IA con razonamiento (2026-11-27)
+                self.events.put(("transcript", transcript))
+                answer, audio = self._process_agent_query(pedido, "voz", started, conversation_id, cancel_token,
+                                                          pensar=True)
+                self.events.put(("answer", answer, audio, time.perf_counter() - started))
+                return
             if self._es_orden_de_grabacion(transcript) is True:
                 self.events.put(("transcript", transcript))
                 self.events.put(("grabacion", transcript))
@@ -564,7 +590,8 @@ class OrdenesMixin:
             if orden_tele is not None:
                 self.events.put(("system_query", *orden_tele, transcript))
                 return
-            ajuste = (jarvis_ajustes.detectar(transcript) or jarvis_doctor.detectar(transcript)
+            ajuste = (jarvis_red.detectar(transcript)  # «desactiva el cable Internet»
+                      or jarvis_ajustes.detectar(transcript) or jarvis_doctor.detectar(transcript)
                       or jarvis_gestor_archivos.detectar(transcript) or jarvis_winget.detectar(transcript)
                       or jarvis_whatsapp.detectar(transcript) or jarvis_correo.detectar(transcript))
             if ajuste is not None:
@@ -632,6 +659,8 @@ class OrdenesMixin:
                 or jarvis_reminders.detectar_comando(transcript)
                 or detectar_consulta_bateria(transcript)
                 or detectar_comando_multimedia(transcript)
+                or jarvis_sistema_avanzado.detectar(transcript)
+                or jarvis_routines.detectar_lista_rutinas(transcript)
                 or detectar_consulta_sistema(transcript)
                 or detectar_comando_monitores(transcript)
                 or detectar_comando_tema(transcript)
@@ -741,6 +770,7 @@ class OrdenesMixin:
         started: float,
         conversation_id: str,
         cancel_token: CancellationToken | None = None,
+        pensar: bool = False,
     ) -> None:
         try:
             answer, audio = self._process_agent_query(
@@ -749,6 +779,7 @@ class OrdenesMixin:
                 started,
                 conversation_id,
                 cancel_token,
+                pensar=pensar,
             )
             self.events.put(("answer", answer, audio, time.perf_counter() - started))
         except Exception as error:
@@ -762,35 +793,41 @@ class OrdenesMixin:
         started: float,
         conversation_id: str,
         cancel_token: CancellationToken | None = None,
+        pensar: bool = False,
     ) -> tuple[str | None, str | None]:
+        """``pensar`` («pensá y…»): solo la IA, con razonamiento; sin comandos de memoria ni el creador de
+        rutinas, que interceptaba «… cómo sería la orden para crear una rutina …»."""
         core.REQUEST_COUNTER.labels(tipo=kind).inc()
         hablador: jarvis_voz_stream.HabladorEnVivo | None = None
         try:
-            answer = jarvis_memory.procesar_comando(text)
-            if answer is None:
+            answer = None if pensar else jarvis_memory.procesar_comando(text)
+            if answer is None and not pensar:
                 answer = jarvis_aprendizaje.procesar_comando(text)
-            if answer is None:
+            if answer is None and not pensar:
                 answer = jarvis_actions.procesar_comando(text)
-            if answer is None:
+            if answer is None and not pensar:
                 answer = jarvis_routines.procesar_comando(text)
             plugins = getattr(self, "plugins", None)
-            if answer is None and isinstance(plugins, GestorPlugins):
+            if answer is None and not pensar and isinstance(plugins, GestorPlugins):
                 try:
                     answer = plugins.procesar_comando(text)
                 except (ValueError, OSError) as error:
                     answer = f"No pude completar la configuración: {error}"
             if answer is None:
                 try:
-                    routine_request = jarvis_routines.parsear_solicitud_creacion(
+                    routine_request = None if pensar else jarvis_routines.parsear_solicitud_creacion(
                         text,
                         self.tool_registry,
                     )
                 except ValueError as error:
                     # «Cuando abra Spotify, poné el volumen al 20»: los pasos con las órdenes directas;
                     # si tampoco, que la IA arme la rutina (schedule_routine) en vez de dar el error.
+                    # 2026-11-28: si el creador no entiende la frase («crea una rutina llamada música favorita,
+                    # abre … luego …», sin hora), la arma la IA (schedule_routine, con su tarjeta) en vez de
+                    # responder el ejemplo de formato.
                     routine_request = self._rutina_de_evento_con_ordenes(text)
-                    if routine_request is None and jarvis_routines.detectar_disparador(text) is None:
-                        answer = str(error)
+                    if routine_request is None:
+                        logging.info("El creador de rutinas no entendió la frase (%s): la arma la IA.", error)
                 if answer is None:
                     if routine_request is not None:
                         arguments = self.tool_registry.validate_arguments(
@@ -827,6 +864,7 @@ class OrdenesMixin:
                             cancel_token=cancel_token,
                             on_text=self._live_text_callback(hablador),
                             delegar_pantalla=self._delegar_al_piloto,
+                            pensar=pensar,
                         )
                         self._preparar_oferta_piloto(text, answer, conversation_id)
             core.guardar_turno(conversation_id, text, answer)
@@ -985,6 +1023,12 @@ class OrdenesMixin:
         "search_youtube": "ABRIENDO YOUTUBE…",
         "list_open_applications": "REVISANDO APLICACIONES ABIERTAS…",
         "list_top_processes": "MIDIENDO PROCESOS…",
+        "screenshot": "SACANDO LA CAPTURA…",
+        "list_routines": "LEYENDO TUS RUTINAS…",
+        "screen_record": "PREPARANDO LA GRABACIÓN…",
+        "service_status": "LEYENDO LOS SERVICIOS…",
+        "service_control": "CAMBIANDO EL SERVICIO…",
+        "process_control": "REVISANDO LOS PROGRAMAS…",
         "get_system_status": "REVISANDO EL EQUIPO…",
         "configure_display": "CAMBIANDO LA CONFIGURACIÓN DE MONITORES…",
         "restore_display_config": "VOLVIENDO A LA CONFIGURACIÓN DE MONITORES…",
@@ -1185,8 +1229,10 @@ class OrdenesMixin:
             # Riesgo alto: aunque sea un comando directo, siempre se confirma.
             self.events.put(("direct_action_error", tool_name, "Cancelé la acción; el equipo sigue igual."))
             return
-        if tool_name in ("autopilot", "whatsapp_send", "install_program", "uninstall_program", "update_programs",
-                         "network_adapter") \
+        pregunta = tool_name in ("autopilot", "whatsapp_send", "install_program", "uninstall_program",
+                                 "update_programs", "network_adapter", "service_control") \
+            or (tool_name == "process_control" and arguments.get("action") == "kill_hung")  # cierre forzado
+        if pregunta \
                 and not self._request_tool_confirmation(
             self.tool_registry.get(tool_name), arguments
         ):

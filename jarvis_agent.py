@@ -395,6 +395,15 @@ def descargar_modelo(modelos: Sequence[str] | None = None) -> list[str]:
     return descargados
 
 
+# «Pensá y…» (2026-11-27): esa consulta va con razonamiento. Una sola consulta a la IA a la vez (Jarvis
+# queda ocupado mientras), así que alcanza con un valor del módulo que procesar_con_herramientas
+# pone y restablece; las peticiones a Ollama corren en otro hilo y no verían un thread-local.
+_PENSANDO = False
+# El razonamiento cuenta en num_predict: con 1024 se cortaba antes de responder.
+MAX_TOKENS_PENSANDO = 6144
+FACTOR_TIEMPO_PENSANDO = 3
+
+
 def _request_chat(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
@@ -407,13 +416,13 @@ def _request_chat(
         "model": core.MODEL_LLM,
         "messages": messages,
         "stream": on_text is not None,
-        "think": core.LLM_PIENSA,
+        "think": core.LLM_PIENSA or _PENSANDO,
         "keep_alive": KEEP_ALIVE,
         "options": {
             # Las ~19 herramientas ocupan ~1.700 tokens; con instrucciones, historial
             # y el contenido de un archivo leído, 4096 se desbordaba (medido 2026-11-05).
             "num_ctx": NUM_CTX,
-            "num_predict": MAX_TOKENS_RESPUESTA,
+            "num_predict": MAX_TOKENS_PENSANDO if _PENSANDO else MAX_TOKENS_RESPUESTA,
             "temperature": 0.2,
         },
     }
@@ -505,7 +514,7 @@ def _solicitar_chat(
     try:
         return ejecutar_con_limites(
             lambda: _request_chat(messages, tools, on_text),
-            timeout=OLLAMA_TIMEOUT + 10,
+            timeout=OLLAMA_TIMEOUT * (FACTOR_TIEMPO_PENSANDO if _PENSANDO else 1) + 10,
             descripcion="consulta a Ollama",
             cancel_token=cancel_token,
         )
@@ -557,8 +566,11 @@ def procesar_con_herramientas(
     max_total_seconds: float = DEFAULT_MAX_TOTAL_SECONDS,
     on_text: TextCallback | None = None,
     delegar_pantalla: DelegarPantalla | None = None,
+    pensar: bool = False,
 ) -> str:
-    """``delegar_pantalla``: si el modelo propone tocar la pantalla o la página, recibe el pedido
+    """``pensar``: con razonamiento («pensá y…»): tarda más y tiene más tiempo y tokens.
+
+    ``delegar_pantalla``: si el modelo propone tocar la pantalla o la página, recibe el pedido
     entero y lo hace el piloto con una sola aprobación (devuelve su resultado, o None si no se
     aprobó).
 
@@ -570,7 +582,11 @@ def procesar_con_herramientas(
     if not max_total_seconds > 0:
         raise ValueError("El tiempo máximo total debe ser positivo.")
     completadas: list[str] = []
-    logging.info("Va a la IA: «%s».", frase_para_log(texto))
+    global _PENSANDO
+    logging.info("Va a la IA%s: «%s».", " (pensando)" if pensar else "", frase_para_log(texto))
+    _PENSANDO = pensar
+    if pensar:
+        max_total_seconds *= FACTOR_TIEMPO_PENSANDO
     try:
         return _procesar_con_herramientas(
             texto,
@@ -591,6 +607,8 @@ def procesar_con_herramientas(
     except OperacionCancelada:
         logging.info("El usuario canceló la consulta (%s caracteres).", len(texto))
         return "Cancelé la operación. " + _resumen_completadas(completadas)
+    finally:
+        _PENSANDO = False
 
 
 # Seguimientos cortos («¿qué más me puedes contar?», «sigue», «¿y eso?»): el modelo a

@@ -48,6 +48,7 @@ _TRIGGER_FROM_TOOL = {
     "program_stopped": DISPARADOR_PROGRAMA_CERRADO,
     "internet_lost": DISPARADOR_SIN_INTERNET,
     "internet_restored": DISPARADOR_CON_INTERNET,
+    "phrase": DISPARADOR_FRASE,  # 2026-11-28: la IA también arma rutinas que se activan al decir una frase
 }
 _TRIGGER_TO_TOOL = {value: key for key, value in _TRIGGER_FROM_TOOL.items()}
 _TRIGGER_LABELS = {
@@ -1253,6 +1254,71 @@ def listar_rutinas() -> list[tuple[int, str, str, tuple[int, ...], bool]]:
     return routines
 
 
+_DIAS_CORTOS = {1: "lun", 2: "mar", 3: "mié", 4: "jue", 5: "vie", 6: "sáb", 7: "dom"}
+_EVENTOS_TEXTO = {
+    DISPARADOR_AURICULARES_CONECTADOS: "al conectar los auriculares",
+    DISPARADOR_AURICULARES_DESCONECTADOS: "al desconectar los auriculares",
+    DISPARADOR_JUEGO_ABIERTO: "al abrir un juego", DISPARADOR_JUEGO_CERRADO: "al cerrar un juego",
+    DISPARADOR_USB_CONECTADO: "al conectar un USB", DISPARADOR_USB_DESCONECTADO: "al desconectar un USB",
+    DISPARADOR_SIN_INTERNET: "al quedarse sin internet", DISPARADOR_CON_INTERNET: "al volver internet",
+}
+
+
+def _cuando(disparador: str, hora: str, dias: str, frases_json: str) -> str:
+    try:
+        frases = [str(f) for f in json.loads(frases_json or "[]")]
+    except (TypeError, ValueError):
+        frases = []
+    if disparador == DISPARADOR_HORA:
+        numeros = _parse_days(dias)
+        if len(numeros) == 7:
+            cuando = "todos los días"
+        elif numeros == (1, 2, 3, 4, 5):
+            cuando = "de lunes a viernes"
+        else:
+            cuando = ", ".join(_DIAS_CORTOS[n] for n in numeros)
+        return f"a las {hora}, {cuando}"
+    if disparador == DISPARADOR_FRASE:
+        return "con la frase " + " / ".join(f"«{f}»" for f in frases[:3]) if frases else "con una frase"
+    if disparador in (DISPARADOR_PROGRAMA_ABIERTO, DISPARADOR_PROGRAMA_CERRADO):
+        programa = frases[0] if frases else "un programa"
+        return f"al {'abrir' if disparador == DISPARADOR_PROGRAMA_ABIERTO else 'cerrar'} {programa}"
+    return _EVENTOS_TEXTO.get(disparador, disparador)
+
+
+def resumen_rutinas() -> str:
+    """La herramienta ``list_routines`` (2026-11-27: la IA intentó listarlas con un script de PowerShell que
+    buscaba archivos JSON; las rutinas están en la base)."""
+    with core.conexion_db() as connection:
+        filas = connection.execute(
+            "SELECT nombre, hora, dias_semana, activa, disparador, frases FROM rutinas ORDER BY nombre COLLATE NOCASE"
+        ).fetchall()
+    if not filas:
+        return "No tenés rutinas guardadas. Podés crear una en la sección Rutinas o pidiéndomela."
+    activas = sum(1 for f in filas if f[3])
+    partes = [f"{i}) «{nombre}»: {_cuando(str(disparador), str(hora), str(dias), str(frases))}"
+              + ("" if activa else " (pausada)")
+              for i, (nombre, hora, dias, activa, disparador, frases) in enumerate(filas, 1)]
+    return f"Tenés {len(filas)} rutinas ({activas} activas): " + "; ".join(partes) + "."
+
+
+_PIDE_LISTA_RUTINAS = re.compile(
+    r"^(?:(?:dame|pasame|mostrame|muestrame|decime|dime|haceme|hazme)\s+(?:una\s+)?(?:lista|listado)\s+de\s+|"
+    r"(?:lista|listame|listar|enumera|nombra|nombrame|decime|dime|mostrame|muestrame|cuales\s+son)\s+)?"
+    r"(?:las\s+|mis\s+)?rutinas(?:\s+que\s+tengo)?(?:\s+(?:guardadas?|creadas?|programadas?))?$"
+    r"|^(?:que|cuales)\s+rutinas\s+(?:tengo|hay)(?:\s+(?:guardadas?|creadas?|programadas?))?$"
+    r"|^cuantas\s+rutinas\s+tengo$")
+
+
+def detectar_lista_rutinas(texto: str) -> tuple[str, dict] | None:
+    from jarvis_commands import _normalizar_consulta
+
+    consulta = _normalizar_consulta(texto)
+    if consulta in ("rutinas", "las rutinas", "mis rutinas"):
+        return None  # «Jarvis rutinas»: abre la sección (detectar_navegacion)
+    return ("list_routines", {}) if _PIDE_LISTA_RUTINAS.fullmatch(consulta) else None
+
+
 def _find_routine_id(name_or_id: str) -> int | None:
     candidate = name_or_id.strip().strip("\"'“”‘’")
     if candidate.isdecimal():
@@ -1424,7 +1490,8 @@ def registrar_herramienta(
             "headphones_disconnected (al desconectarlos), game_started (al abrir un juego), "
             "game_stopped (al cerrar el último juego), usb_connected / usb_disconnected (pendrive o "
             "disco USB), program_started / program_stopped (al abrir o cerrar el programa de program) "
-            "o internet_lost / internet_restored. "
+            "o internet_lost / internet_restored, o phrase (al decir una de las frases de phrases, separadas "
+            "por comas: «música favorita»; si el usuario no da una hora, usá phrase con el nombre de la rutina). "
             "steps_json debe ser una cadena JSON como "
             "'[{\"tool\":\"set_system_volume\",\"arguments\":{\"percentage\":30}}]'. "
             "automatic=true solo si el usuario pide que se ejecute sin preguntar; "
@@ -1454,6 +1521,7 @@ def registrar_herramienta(
                 "automatic": {"type": "boolean"},
                 "once": {"type": "boolean"},
                 "program": {"type": "string", "maxLength": 60},
+                "phrases": {"type": "string", "maxLength": 200},
             },
             "required": ["name", "steps_json"],
             "additionalProperties": False,

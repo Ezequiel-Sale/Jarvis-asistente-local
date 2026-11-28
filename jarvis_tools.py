@@ -811,7 +811,9 @@ def crear_registro_herramientas(
     )
     registry.register(
         "search_youtube",
-        "Busca una consulta en YouTube; opcionalmente abre un resultado ordinal.",
+        "Busca una consulta en YouTube; opcionalmente abre un resultado ordinal (play_index 1 = el primero, "
+        "para reproducir). Si el usuario pide «mi música favorita», usá query «mi música favorita» tal cual "
+        "(también en rutinas): Jarvis la cambia al buscar por lo que diga su recuerdo.",
         {
             "type": "object",
             "properties": {
@@ -1263,6 +1265,40 @@ def crear_registro_herramientas(
     _registrar_ajustes(registry, verificadores)
     _registrar_doctor(registry)
     _registrar_red(registry)
+    import jarvis_sistema_avanzado
+
+    jarvis_sistema_avanzado.registrar(registry, ToolRisk)  # capturas, servicios y procesos (2026-11-27)
+    import jarvis_guia_ordenes
+
+    jarvis_guia_ordenes.registrar(registry)  # frases exactas para la IA (2026-11-27)
+
+    def guardar_recuerdo(content: str) -> str:
+        import jarvis_memory
+
+        identificador, nuevo = jarvis_memory.guardar_recuerdo(content)
+        return (f"Guardé el recuerdo número {identificador}: «{content.strip()}»." if nuevo
+                else f"Ya tenía guardado ese recuerdo (número {identificador}).")
+
+    # 2026-11-28: «Recordar que mi música favorita es Cuarteto» fue a la IA, que respondió «lo guardé» sin
+    # poder guardarlo (no tenía herramienta).
+    registry.register(
+        "save_memory",
+        "Guarda un recuerdo del usuario (un dato suyo, una preferencia) cuando pide que lo recuerdes o lo "
+        "anotes. content: el dato en una oración, en primera persona del usuario («mi música favorita es "
+        "Cuarteto»). Nunca digas que guardaste algo sin usar esta herramienta.",
+        {"type": "object", "properties": {"content": {"type": "string", "minLength": 3, "maxLength": 500}},
+         "required": ["content"], "additionalProperties": False},
+        guardar_recuerdo,
+        label="Guardar un recuerdo", timeout_seconds=15,
+    )
+    registry.register(
+        "list_routines",
+        "Lista las rutinas guardadas de Jarvis: nombre, cuándo se activan (hora y días, frase o evento) y si "
+        "están pausadas. Usala para «qué rutinas tengo»; nunca un script.",
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        lambda: jarvis_routines.resumen_rutinas(),
+        label="Listar rutinas", timeout_seconds=15,
+    )
     _registrar_scripts(registry)
     _registrar_archivos(registry, host)
     _registrar_winget(registry)

@@ -52,6 +52,50 @@ PREF_OPACIDAD_VIEJA = "widget_juegos_opacidad"  # la de toda la ventana (versió
 MODOS = ("tarjetas", "lista")
 
 
+# Escala del monitor donde está el widget (2026-11-28, pedido del usuario: en la tele 4K al 300 % todo
+# se veía diminuto). Dos factores: los píxeles (portadas, tarjetas, columnas) van por DPI del monitor / 96;
+# las fuentes (en puntos) ya las escala Tk con el DPI que tenía al arrancar Jarvis, así que van por DPI del
+# monitor / ese DPI (si Jarvis arrancó con el monitor de 96 de principal y después quedó solo la tele, ×3).
+# El widget se rearma al pasar a un monitor con otro DPI.
+_ESCALA = 1.0  # píxeles
+_ESCALA_FUENTE = 1.0
+
+
+def _f(puntos: int) -> int:
+    """Tamaño de fuente escalado."""
+    return max(1, round(puntos * _ESCALA_FUENTE))
+
+
+def _px(pixeles: int) -> int:
+    return max(1, round(pixeles * _ESCALA))
+
+
+def dpi_en(x: int, y: int) -> int:
+    """DPI del monitor de ese punto (96 si no se puede saber)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        monitor = ctypes.windll.user32.MonitorFromPoint(wintypes.POINT(x, y), 2)  # MONITOR_DEFAULTTONEAREST
+        dpi_x, dpi_y = wintypes.UINT(), wintypes.UINT()
+        if ctypes.windll.shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) != 0:
+            return 96
+        return int(dpi_x.value) or 96
+    except Exception:
+        return 96
+
+
+def poner_escala(dpi_monitor: float, dpi_tk: float = 96.0) -> bool:
+    """Ajusta las escalas al DPI de ese monitor; True si cambiaron."""
+    global _ESCALA, _ESCALA_FUENTE
+    dpi_monitor = float(dpi_monitor) if dpi_monitor and dpi_monitor > 0 else 96.0
+    dpi_tk = float(dpi_tk) if dpi_tk and dpi_tk > 0 else 96.0
+    nueva = (round(dpi_monitor / 96 * 4) / 4, round(dpi_monitor / dpi_tk * 4) / 4)
+    cambio = nueva != (_ESCALA, _ESCALA_FUENTE)
+    _ESCALA, _ESCALA_FUENTE = nueva
+    return cambio
+
+
 def posicion_de(texto: str | None) -> tuple[int, int] | None:
     """«120,-40» → (120, -40); cualquier otra cosa → None."""
     try:
@@ -67,7 +111,8 @@ def tamano_de(texto: str | None) -> tuple[int, int]:
         ancho, alto = (int(parte) for parte in str(texto).lower().split("x"))
     except (TypeError, ValueError):
         return ANCHO, ALTO
-    return (min(MAXIMO[0], max(MINIMO[0], ancho)), min(MAXIMO[1], max(MINIMO[1], alto)))
+    maximo, minimo = (_px(MAXIMO[0]), _px(MAXIMO[1])), (_px(MINIMO[0]), _px(MINIMO[1]))
+    return (min(maximo[0], max(minimo[0], ancho)), min(maximo[1], max(minimo[1], alto)))
 
 
 def transparencia_de(texto) -> int:
@@ -90,7 +135,7 @@ def color_clave(fondo: str) -> str:
 
 def columnas_para(ancho_ventana: int) -> int:
     """Cuántas tarjetas entran por fila con la ventana de ese ancho."""
-    return max(1, (ancho_ventana - RELLENO + SEPARACION) // (ANCHO_TARJETA + 2 + SEPARACION))
+    return max(1, (ancho_ventana - _px(RELLENO) + _px(SEPARACION)) // (_px(ANCHO_TARJETA) + 2 + _px(SEPARACION)))
 
 
 def filtrar(juegos, filtro: str) -> list:
@@ -201,6 +246,7 @@ class WidgetJuegos:
             logging.debug("Esta ventana no admite un color transparente.", exc_info=True)
         self._aplicar_transparencia()
         x, y = self._posicion_inicial()
+        poner_escala(dpi_en(x + 40, y + 20), self._dpi_tk())
         ancho, alto = tamano_de(self._preferencia(PREF_TAMANO))
         self._columnas = columnas_para(ancho)  # antes de dibujar: si no, arranca con las de 380 px
         self._construir()
@@ -231,6 +277,34 @@ class WidgetJuegos:
                 capa.destroy()
         self.ventana = self.fondo = None
         self._guardar(PREF_VISIBLE, "0")
+
+    def _dpi_tk(self) -> float:
+        """Píxeles por pulgada con los que Tk convierte los puntos de las fuentes."""
+        try:
+            return float(self.app.root.winfo_fpixels("1i"))
+        except Exception:
+            return 96.0
+
+    def _ajustar_escala(self) -> None:
+        """Si el widget quedó en un monitor con otra escala, lo rearma con medidas de ese monitor y
+        cambia su tamaño en la misma proporción (para que no quede enorme o diminuto)."""
+        if not self.visible:
+            return
+        anterior = _ESCALA
+        if not poner_escala(dpi_en(self.ventana.winfo_x() + 40, self.ventana.winfo_y() + 20), self._dpi_tk()):
+            return
+        factor = _ESCALA / anterior
+        ancho, alto = tamano_de(f"{round(self.ventana.winfo_width() * factor)}x"
+                                f"{round(self.ventana.winfo_height() * factor)}")
+        x, y = self.ventana.winfo_x(), self.ventana.winfo_y()
+        logging.info("Widget de juegos: escala %.2f → %.2f (otro monitor).", anterior, _ESCALA)
+        self._fotos.clear()
+        self.reconstruir()
+        for capa in (self.fondo, self.ventana):
+            capa.geometry(f"{ancho}x{alto}+{x}+{y}")
+        self._columnas = columnas_para(ancho)
+        self._dibujar()
+        self._guardar(PREF_TAMANO, f"{ancho}x{alto}")
 
     def reconstruir(self) -> None:
         """Al cambiar el tema: se vuelve a armar con los colores nuevos, en el mismo lugar."""
@@ -327,13 +401,13 @@ class WidgetJuegos:
 
         cabecera = tk.Frame(interior, bg=self._clave, padx=10, pady=8, cursor="fleur")
         cabecera.pack(fill="x")
-        agarre = tk.Label(cabecera, text="⠿", bg=self._clave, fg=t.MUTED, font=("Segoe UI", 12))
+        agarre = tk.Label(cabecera, text="⠿", bg=self._clave, fg=t.MUTED, font=("Segoe UI", _f(12)))
         agarre.pack(side="left", padx=(0, 6))
         titulos = tk.Frame(cabecera, bg=self._clave)
         titulos.pack(side="left", fill="x", expand=True)
-        titulo = tk.Label(titulos, text="JUEGOS", bg=self._clave, fg=t.CYAN, font=("Segoe UI", 12, "bold"), anchor="w")
+        titulo = tk.Label(titulos, text="JUEGOS", bg=self._clave, fg=t.CYAN, font=("Segoe UI", _f(12), "bold"), anchor="w")
         titulo.pack(anchor="w")
-        self.contador = tk.Label(titulos, text="Buscando juegos…", bg=self._clave, fg=t.MUTED, font=("Segoe UI", 8),
+        self.contador = tk.Label(titulos, text="Buscando juegos…", bg=self._clave, fg=t.MUTED, font=("Segoe UI", _f(8)),
                                  anchor="w")
         self.contador.pack(anchor="w")
         for widget in (cabecera, agarre, titulos, titulo, self.contador):
@@ -345,17 +419,17 @@ class WidgetJuegos:
         self.boton_modo = self._boton(cabecera, "", self._cambiar_modo, ancho=3, pady=4)
         self.boton_modo.pack(side="right", padx=(0, 6))
         self.boton_apariencia = self._boton(cabecera, "◐", self._alternar_apariencia, ancho=3, pady=2,
-                                            font=("Segoe UI", 11))
+                                            font=("Segoe UI", _f(11)))
         self.boton_apariencia.pack(side="right", padx=(0, 6))
 
         caja = tk.Frame(interior, bg=t.PANEL_LIGHT, highlightthickness=1, highlightbackground=t.BORDER_STRONG)
         caja.pack(fill="x", padx=12, pady=(0, 8))
-        tk.Label(caja, text="⌕", bg=t.PANEL_LIGHT, fg=t.MUTED, font=("Segoe UI", 11)).pack(side="left", padx=(10, 2))
+        tk.Label(caja, text="⌕", bg=t.PANEL_LIGHT, fg=t.MUTED, font=("Segoe UI", _f(11))).pack(side="left", padx=(10, 2))
         self.filtro = tk.StringVar(master=ventana)
         entrada = tk.Entry(caja, textvariable=self.filtro, bg=t.PANEL_LIGHT, fg=t.TEXT, insertbackground=t.CYAN,
-                           relief="flat", font=("Segoe UI", 10))
+                           relief="flat", font=("Segoe UI", _f(10)))
         entrada.pack(side="left", fill="x", expand=True, ipady=5, padx=(0, 10))
-        pista = tk.Label(entrada, text="Buscar un juego", bg=t.PANEL_LIGHT, fg=t.MUTED, font=("Segoe UI", 10))
+        pista = tk.Label(entrada, text="Buscar un juego", bg=t.PANEL_LIGHT, fg=t.MUTED, font=("Segoe UI", _f(10)))
 
         def enfocar(_evento=None) -> None:
             # Una ventana sin bordes no toma el teclado sola.
@@ -378,7 +452,7 @@ class WidgetJuegos:
         pie = tk.Frame(interior, bg=self._clave, padx=14, pady=7)
         pie.pack(side="bottom", fill="x")
         tk.Frame(interior, bg=t.BORDER, height=1).pack(side="bottom", fill="x")
-        agarradera = tk.Label(pie, text="◢", bg=self._clave, fg=t.MUTED, font=("Segoe UI", 10), cursor="size_nw_se")
+        agarradera = tk.Label(pie, text="◢", bg=self._clave, fg=t.MUTED, font=("Segoe UI", _f(10)), cursor="size_nw_se")
         agarradera.pack(side="right", padx=(8, 0))
         agarradera.bind("<ButtonPress-1>", self._empezar_estirar)
         agarradera.bind("<B1-Motion>", self._estirar)
@@ -388,16 +462,16 @@ class WidgetJuegos:
         for esquina, texto, relx, rely, anchor, cursor in (
                 ("nw", "◤", 0, 0, "nw", "size_nw_se"), ("ne", "◥", 1, 0, "ne", "size_ne_sw"),
                 ("sw", "◣", 0, 1, "sw", "size_ne_sw")):
-            otra = tk.Label(interior, text=texto, bg=self._clave, fg=t.MUTED, font=("Segoe UI", 10),
+            otra = tk.Label(interior, text=texto, bg=self._clave, fg=t.MUTED, font=("Segoe UI", _f(10)),
                             cursor=cursor, bd=0, padx=1, pady=0)
             otra.place(relx=relx, rely=rely, anchor=anchor)
             otra.bind("<ButtonPress-1>", lambda e, q=esquina: self._empezar_estirar(e, q))
             otra.bind("<B1-Motion>", self._estirar)
             otra.bind("<ButtonRelease-1>", self._soltar_estirar)
             self.agarraderas[esquina] = otra
-        tk.Label(pie, text="● JARVIS", bg=self._clave, fg=t.CYAN, font=("Segoe UI", 8, "bold")).pack(side="right")
+        tk.Label(pie, text="● JARVIS", bg=self._clave, fg=t.CYAN, font=("Segoe UI", _f(8), "bold")).pack(side="right")
         # El aviso va último: con el widget angosto se recorta él, no «JARVIS» ni la agarradera.
-        self.aviso = tk.Label(pie, text="", bg=self._clave, fg=t.MUTED, font=("Segoe UI", 8), anchor="w")
+        self.aviso = tk.Label(pie, text="", bg=self._clave, fg=t.MUTED, font=("Segoe UI", _f(8)), anchor="w")
         self.aviso.pack(side="left", fill="x", expand=True, padx=(8, 0))  # deja lugar a «◣»
         self._aviso_normal()
 
@@ -482,13 +556,13 @@ class WidgetJuegos:
                 columna = i % columnas
                 self._tarjeta(rejilla, juego, abierto(juego, jugando)).grid(
                     row=i // columnas, column=columna, sticky="nsew",
-                    padx=(0, SEPARACION) if columna < columnas - 1 else 0, pady=(0, SEPARACION))
+                    padx=(0, _px(SEPARACION)) if columna < columnas - 1 else 0, pady=(0, _px(SEPARACION)))
         else:
             for juego in visibles:
                 self._fila(self.lista, juego, abierto(juego, jugando)).pack(fill="x", pady=(0, 4))
         if not cargando and not visibles:
             tk.Label(self.lista, text="Ningún juego con ese nombre." if self.filtro.get().strip() else
-                     "No encontré juegos.", bg=self._clave, fg=t.MUTED, font=("Segoe UI", 9)).pack(pady=14)
+                     "No encontré juegos.", bg=self._clave, fg=t.MUTED, font=("Segoe UI", _f(9))).pack(pady=14)
         self._dibujar_acciones()
 
     def _cantidad_acciones(self, nombre: str) -> int:
@@ -511,31 +585,31 @@ class WidgetJuegos:
         elegido = self.seleccionado == juego.nombre
         borde = t.VIOLET if elegido else (t.CYAN if corriendo else t.BORDER)
         tarjeta = tk.Frame(padre, bg=t.PANEL, highlightthickness=1, highlightbackground=borde)
-        foto = self._foto(juego.nombre, (ANCHO_TARJETA, ALTO_PORTADA))
+        foto = self._foto(juego.nombre, (_px(ANCHO_TARJETA), _px(ALTO_PORTADA)))
         if foto is not None:
-            portada = tk.Label(tarjeta, image=foto, bg=t.PANEL, bd=0, height=ALTO_PORTADA)
+            portada = tk.Label(tarjeta, image=foto, bg=t.PANEL, bd=0, height=_px(ALTO_PORTADA))
         else:
-            portada = tk.Frame(tarjeta, bg=t.PANEL_LIGHT, height=ALTO_PORTADA)
+            portada = tk.Frame(tarjeta, bg=t.PANEL_LIGHT, height=_px(ALTO_PORTADA))
             portada.pack_propagate(False)
             tk.Label(portada, text=_iniciales(juego.nombre), bg=t.PANEL_LIGHT, fg=t.ORB_BRIGHT,
-                     font=("Segoe UI", 16, "bold")).place(relx=0.5, rely=0.42, anchor="center")
+                     font=("Segoe UI", _f(16), "bold")).place(relx=0.5, rely=0.42, anchor="center")
             if jarvis_portadas.sin_resultado(juego.nombre):
                 self._boton(portada, "＋ PORTADA", lambda n=juego.nombre: self._subir_portada(n), fg=t.CYAN,
-                            bg=t.CYAN_DARK, padx=6, pady=1, font=("Segoe UI", 7, "bold")).place(
+                            bg=t.CYAN_DARK, padx=6, pady=1, font=("Segoe UI", _f(7), "bold")).place(
                     x=6, rely=1.0, y=-6, anchor="sw")
         portada.pack(fill="x")
         lapiz = self._boton(portada, "✎", None, bg=t.BG, fg=t.ORB_BRIGHT, padx=5, pady=0,
-                            font=("Segoe UI", 9, "bold"))
+                            font=("Segoe UI", _f(9), "bold"))
         lapiz.configure(command=lambda: self._menu_portada(juego, lapiz.winfo_rootx(),
                                                            lapiz.winfo_rooty() + lapiz.winfo_height()))
         lapiz.place(relx=1.0, x=-6, y=6, anchor="ne")
         self._clic_derecho(portada, juego)
         if corriendo:
-            tk.Label(portada, text="● ABIERTO", bg=t.BG, fg=t.CYAN, font=("Segoe UI", 7, "bold"),
+            tk.Label(portada, text="● ABIERTO", bg=t.BG, fg=t.CYAN, font=("Segoe UI", _f(7), "bold"),
                      padx=6).place(x=6, y=6)
         cuerpo = tk.Frame(tarjeta, bg=t.PANEL, padx=8, pady=6)
         cuerpo.pack(fill="x")
-        tk.Label(cuerpo, text=_recortar(juego.nombre), bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", 9, "bold"),
+        tk.Label(cuerpo, text=_recortar(juego.nombre), bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", _f(9), "bold"),
                  anchor="w").pack(fill="x", pady=(0, 5))
         botones = tk.Frame(cuerpo, bg=t.PANEL)
         botones.pack(fill="x")
@@ -547,27 +621,27 @@ class WidgetJuegos:
         elegido = self.seleccionado == juego.nombre
         fila = tk.Frame(padre, bg=t.PANEL, padx=6, pady=5, highlightthickness=1,
                         highlightbackground=t.VIOLET if elegido else (t.CYAN if corriendo else t.BORDER))
-        foto = self._foto(juego.nombre, MINIATURA)
+        foto = self._foto(juego.nombre, (_px(MINIATURA[0]), _px(MINIATURA[1])))
         if foto is not None:
             caja = tk.Label(fila, image=foto, bg=t.PANEL, bd=0)
             caja.pack(side="left")
         else:
-            caja = tk.Frame(fila, bg=t.PANEL_LIGHT, width=MINIATURA[0], height=MINIATURA[1])
+            caja = tk.Frame(fila, bg=t.PANEL_LIGHT, width=_px(MINIATURA[0]), height=_px(MINIATURA[1]))
             caja.pack_propagate(False)
             caja.pack(side="left")
             tk.Label(caja, text=_iniciales(juego.nombre), bg=t.PANEL_LIGHT, fg=t.ORB_BRIGHT,
-                     font=("Segoe UI", 8, "bold")).place(relx=0.5, rely=0.5, anchor="center")
+                     font=("Segoe UI", _f(8), "bold")).place(relx=0.5, rely=0.5, anchor="center")
         caja.configure(cursor="hand2")
         self._clic_derecho(caja, juego)
         caja.bind("<Button-1>", lambda e: self._menu_portada(juego, e.x_root, e.y_root))
         textos = tk.Frame(fila, bg=t.PANEL)
         textos.pack(side="left", fill="x", expand=True, padx=(8, 6))
-        tk.Label(textos, text=_recortar(juego.nombre, 24), bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", 9, "bold"),
+        tk.Label(textos, text=_recortar(juego.nombre, 24), bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", _f(9), "bold"),
                  anchor="w").pack(fill="x")
         cuantas = self._cantidad_acciones(juego.nombre)
         estado = "● Abierto" if corriendo else (f"{cuantas} {'acciones' if cuantas > 1 else 'acción'} al abrir"
                                                 if cuantas else "Sin acciones")
-        tk.Label(textos, text=estado, bg=t.PANEL, fg=t.CYAN if corriendo else t.MUTED, font=("Segoe UI", 8),
+        tk.Label(textos, text=estado, bg=t.PANEL, fg=t.CYAN if corriendo else t.MUTED, font=("Segoe UI", _f(8)),
                  anchor="w").pack(fill="x")
         self._boton_jugar(fila, juego, " ▶ ").pack(side="right", ipadx=4)
         self._boton_acciones(fila, juego).pack(side="right", padx=(0, 5))
@@ -585,9 +659,9 @@ class WidgetJuegos:
         nombre = self.seleccionado
         cabeza = tk.Frame(panel, bg=t.PANEL_LIGHT)
         cabeza.pack(fill="x")
-        tk.Label(cabeza, text="ACCIONES AL ABRIR", bg=t.PANEL_LIGHT, fg=t.VIOLET, font=("Segoe UI", 7, "bold"),
+        tk.Label(cabeza, text="ACCIONES AL ABRIR", bg=t.PANEL_LIGHT, fg=t.VIOLET, font=("Segoe UI", _f(7), "bold"),
                  anchor="w").pack(anchor="w")
-        tk.Label(cabeza, text=_recortar(nombre, 32), bg=t.PANEL_LIGHT, fg=t.TEXT, font=("Segoe UI", 10, "bold"),
+        tk.Label(cabeza, text=_recortar(nombre, 32), bg=t.PANEL_LIGHT, fg=t.TEXT, font=("Segoe UI", _f(10), "bold"),
                  anchor="w").pack(anchor="w")
         self._boton(cabeza, "✕", lambda: self._alternar(nombre), ancho=3, bg=t.PANEL).place(relx=1.0, y=0,
                                                                                          anchor="ne")
@@ -596,13 +670,13 @@ class WidgetJuegos:
         lista.pack(fill="x", pady=(8, 8))
         if not pasos:
             tk.Label(lista, text="Ninguna todavía: se abre el juego y nada más.", bg=t.PANEL_LIGHT, fg=t.MUTED,
-                     font=("Segoe UI", 8), anchor="w").pack(fill="x")
+                     font=("Segoe UI", _f(8)), anchor="w").pack(fill="x")
         for indice, paso in enumerate(pasos):
             fila = tk.Frame(lista, bg=t.PANEL, padx=8, pady=4)
             fila.pack(fill="x", pady=(0, 4))
-            tk.Label(fila, text=f"{indice + 1}.", bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", 8, "bold")).pack(
+            tk.Label(fila, text=f"{indice + 1}.", bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", _f(8), "bold")).pack(
                 side="left")
-            tk.Label(fila, text=_recortar(self._describir(paso), 38), bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", 9),
+            tk.Label(fila, text=_recortar(self._describir(paso), 38), bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", _f(9)),
                      anchor="w").pack(side="left", fill="x", expand=True, padx=(6, 4))
             self._boton(fila, "✕", lambda i=indice: self._quitar_accion(nombre, i), ancho=2, bg=t.PANEL,
                         fg=t.MUTED).pack(side="right")
@@ -721,14 +795,14 @@ class WidgetJuegos:
 
         cabeza = tk.Frame(caja, bg=t.PANEL)
         cabeza.pack(fill="x")
-        tk.Label(cabeza, text="APARIENCIA", bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(cabeza, text="APARIENCIA", bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", _f(10), "bold")).pack(side="left")
         self._boton(cabeza, "✕", self._cerrar_apariencia, ancho=3, pady=2).pack(side="right")
 
         fila = tk.Frame(caja, bg=t.PANEL)
         fila.pack(fill="x", pady=(14, 4))
         tk.Label(fila, text="Transparencia del fondo", bg=t.PANEL, fg=t.TEXT,
-                 font=("Segoe UI", 9, "bold")).pack(side="left")
-        self.valor_transparencia = tk.Label(fila, text="", bg=t.PANEL, fg=t.CYAN, font=("Segoe UI", 13, "bold"))
+                 font=("Segoe UI", _f(9), "bold")).pack(side="left")
+        self.valor_transparencia = tk.Label(fila, text="", bg=t.PANEL, fg=t.CYAN, font=("Segoe UI", _f(13), "bold"))
         self.valor_transparencia.pack(side="right")
         self.barra = tk.Canvas(caja, width=ANCHO_APARIENCIA - 34, height=26, bg=t.PANEL, highlightthickness=0,
                                bd=0, cursor="hand2")
@@ -738,8 +812,8 @@ class WidgetJuegos:
         self.barra.bind("<Configure>", lambda _e: self._pintar_apariencia())
         extremos = tk.Frame(caja, bg=t.PANEL)
         extremos.pack(fill="x")
-        tk.Label(extremos, text="Opaco", bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", 8)).pack(side="left")
-        tk.Label(extremos, text="Invisible", bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", 8)).pack(side="right")
+        tk.Label(extremos, text="Opaco", bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", _f(8))).pack(side="left")
+        tk.Label(extremos, text="Invisible", bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", _f(8))).pack(side="right")
         atajos = tk.Frame(caja, bg=t.PANEL)
         atajos.pack(fill="x", pady=(8, 6))
         atajos.grid_columnconfigure(tuple(range(len(ATAJOS))), weight=1, uniform="atajo")
@@ -749,11 +823,11 @@ class WidgetJuegos:
             boton.grid(row=0, column=i, sticky="ew", padx=(0, 6) if i < len(ATAJOS) - 1 else 0)
             self.botones_atajo[valor] = boton
         tk.Label(caja, text="Solo el fondo: las tarjetas, el buscador y los botones quedan siempre visibles.",
-                 bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", 8), justify="left", anchor="w",
-                 wraplength=ANCHO_APARIENCIA - 40).pack(fill="x")
+                 bg=t.PANEL, fg=t.MUTED, font=("Segoe UI", _f(8)), justify="left", anchor="w",
+                 wraplength=_px(ANCHO_APARIENCIA - 40)).pack(fill="x")
 
         tk.Frame(caja, bg=t.BORDER, height=1).pack(fill="x", pady=12)
-        tk.Label(caja, text="Vista", bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x")
+        tk.Label(caja, text="Vista", bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", _f(9), "bold"), anchor="w").pack(fill="x")
         vistas = tk.Frame(caja, bg=t.PANEL_LIGHT, padx=3, pady=3)
         vistas.pack(fill="x", pady=(6, 0))
         vistas.grid_columnconfigure((0, 1), weight=1, uniform="vista")
@@ -768,10 +842,10 @@ class WidgetJuegos:
         borde.pack(fill="x")
         textos = tk.Frame(borde, bg=t.PANEL)
         textos.pack(side="left", fill="x", expand=True)
-        tk.Label(textos, text="Borde del widget", bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", 9, "bold"),
+        tk.Label(textos, text="Borde del widget", bg=t.PANEL, fg=t.TEXT, font=("Segoe UI", _f(9), "bold"),
                  anchor="w").pack(fill="x")
         tk.Label(textos, text="Para ubicarlo con el fondo invisible", bg=t.PANEL, fg=t.MUTED,
-                 font=("Segoe UI", 8), anchor="w").pack(fill="x")
+                 font=("Segoe UI", _f(8)), anchor="w").pack(fill="x")
         self.interruptor = tk.Canvas(borde, width=46, height=26, bg=t.PANEL, highlightthickness=0, bd=0,
                                      cursor="hand2")
         self.interruptor.pack(side="right")
@@ -928,6 +1002,7 @@ class WidgetJuegos:
         if self._arrastre is None:
             return
         self._arrastre = None
+        self._ajustar_escala()
         self._guardar(PREF_POSICION, f"{self.ventana.winfo_x()},{self.ventana.winfo_y()}")
         self.al_fondo()
 

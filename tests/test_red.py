@@ -149,4 +149,4 @@ class PlacaTests(unittest.TestCase):
         self.assertEqual(historial.sacar().argumentos, {"name": "Ethernet", "state": "on"})
         self.assertIs(crear_registro_herramientas(Mock()).get("network_adapter").risk, ToolRisk.HIGH)
         fuente = (Path(__file__).resolve().parent.parent / "jarvis_app_ordenes.py").read_text("utf-8")
-        self.assertIn('"network_adapter")', fuente)  # por botón o por voz, siempre pregunta
+        self.assertIn('"network_adapter", "service_control")', fuente)  # por botón o por voz, siempre pregunta

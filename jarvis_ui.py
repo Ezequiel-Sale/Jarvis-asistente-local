@@ -53,6 +53,7 @@ class JarvisUIMixin:
             self.root.bind("<Escape>", self._cancel_current_operation)
 
             self._build_sidebar()
+            self.root.after(1500, self._vigilar_dpi)  # textos al tamaño del monitor (ver _aplicar_dpi)
 
             content = tk.Frame(self.root, bg=BG)
             content.grid(row=0, column=1, sticky="nsew")
@@ -219,6 +220,7 @@ class JarvisUIMixin:
             import jarvis_ui_kit
 
             contenedor = tk.Frame(self.root, bg=PANEL, width=250)
+            self._sidebar_contenedor = contenedor  # su ancho sigue al DPI del monitor (_aplicar_dpi)
             contenedor.grid(row=0, column=0, sticky="ns")
             contenedor.grid_propagate(False)
             contenedor.pack_propagate(False)
@@ -303,6 +305,84 @@ class JarvisUIMixin:
                 text="F9  hablar / detener\nESC  cancelar\nX  seguir en la bandeja",
                 bg=PANEL, fg=MUTED, justify="left", font=("Consolas", 8),
             ).pack(side="bottom", anchor="w", padx=22, pady=18)
+
+        # --- DPI del monitor (2026-11-28) -------------------------------------------------------------
+        # Jarvis corre con DPI por monitor: Windows no agranda su ventana. Tk convierte los puntos de las
+        # fuentes con el DPI que había al arrancar; si después la ventana queda en otro monitor (o solo
+        # queda la tele 4K al 300 %), los textos se veían diminutos. Cada 2 s se mira el DPI de la
+        # ventana y, si cambió, se ajusta «tk scaling», se vuelven a resolver las fuentes y se escalan
+        # el ancho de la barra lateral y sus textos. Un monitor al 100 % (96 DPI) queda como siempre.
+        INTERVALO_DPI_MS = 2000
+
+        def _dpi_ventana(self) -> int:
+            try:
+                import ctypes
+
+                return int(ctypes.windll.user32.GetDpiForWindow(int(self.root.wm_frame(), 16))) or 96
+            except Exception:
+                return 96
+
+        def _vigilar_dpi(self) -> None:
+            try:
+                if not self.root.winfo_exists():
+                    return
+                dpi = self._dpi_ventana()
+                if dpi != self.__dict__.get("_dpi_aplicado"):
+                    self._aplicar_dpi(dpi)
+            except Exception:
+                logging.exception("No se pudo ajustar la ventana al DPI del monitor.")
+            self.root.after(self.INTERVALO_DPI_MS, self._vigilar_dpi)
+
+        def _aplicar_dpi(self, dpi: int) -> None:
+            anterior = self.__dict__.get("_dpi_aplicado")
+            self._dpi_aplicado = dpi
+            escala = dpi / 96
+            if abs(float(self.root.winfo_fpixels("1i")) - dpi) > 1:
+                self.root.tk.call("tk", "scaling", dpi / 72)
+            self._refrescar_fuentes(dpi)
+            contenedor = self.__dict__.get("_sidebar_contenedor")
+            if contenedor is not None:
+                contenedor.configure(width=round(250 * escala))
+            for nombre in ("orb_status", "status", "gesture_indicator"):
+                etiqueta = self.__dict__.get(nombre)
+                if etiqueta is not None:
+                    etiqueta.configure(wraplength=round(210 * escala))
+            lienzo = self.__dict__.get("orb_canvas")
+            if lienzo is not None:
+                lienzo.configure(height=round(210 * escala))
+            widget = self.__dict__.get("_games_widget")
+            if widget is not None and getattr(widget, "visible", False):
+                widget._ajustar_escala()
+            if anterior is not None:
+                logging.info("DPI de la ventana: %s → %s (fuentes y barra lateral reajustadas).", anterior, dpi)
+
+        def _refrescar_fuentes(self, dpi: int) -> None:
+            """Cada fuente en puntos pasa a su tamaño en píxeles para ese DPI («Segoe UI 10» a 288 DPI →
+            «Segoe UI -40»). Tk guarda cada fuente resuelta con la escala de cuando se creó mientras algo
+            la use (textos del lienzo, etiquetas…), así que volver a poner la misma no alcanzaba. La
+            original queda en el widget (``_jarvis_fuente``) para el próximo cambio."""
+            pendientes = [self.root]
+            while pendientes:
+                widget = pendientes.pop()
+                pendientes.extend(widget.winfo_children())
+                try:
+                    actual = widget.cget("font")
+                except tk.TclError:
+                    continue
+                original = widget.__dict__.get("_jarvis_fuente") or str(actual)
+                try:
+                    partes = list(self.root.tk.splitlist(original))
+                    puntos = int(partes[1]) if len(partes) >= 2 else 0
+                except (tk.TclError, ValueError):
+                    continue
+                if puntos <= 0:
+                    continue  # fuente con nombre (TkDefaultFont) o ya en píxeles: Tk la maneja
+                widget._jarvis_fuente = original
+                nueva = (partes[0], -max(1, round(puntos * dpi / 72)), *partes[2:])
+                try:
+                    widget.configure(font=nueva)
+                except tk.TclError:
+                    pass
 
         _PAGE_TITLES = {"inicio": "INICIO", "chat": "CHAT", "rutinas": "RUTINAS Y AUTOMATIZACIONES",
                         "juegos": "JUEGOS", "tele": "TELEVISOR", "ajustes": "AJUSTES", **TITULOS_VISTAS}

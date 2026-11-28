@@ -106,7 +106,28 @@ async function moverPestana(numero) {
   return {titulo: tab.title || "", sola: false, ventana: nueva.id};
 }
 
+// Abrir una pestaña o navegar sin teclado (2026-11-28): con un video en pantalla completa los atajos
+// (Ctrl+T, Ctrl+L) no llegaban a Brave y Jarvis igual informaba que lo había hecho.
+async function abrirUrl(url, nueva) {
+  if (url && !/^https?:\/\//i.test(url)) throw new Error("Solo abro direcciones http o https.");
+  const ventana = await chrome.windows.getLastFocused({populate: true, windowTypes: ["normal"]}).catch(() => null);
+  if (nueva || !ventana) {
+    const datos = {active: true};
+    if (url) datos.url = url;
+    if (ventana) datos.windowId = ventana.id;
+    const tab = await chrome.tabs.create(datos);
+    if (ventana) await chrome.windows.update(ventana.id, {focused: true});
+    return {id: tab.id};
+  }
+  const activa = (ventana.tabs || []).find((t) => t.active);
+  if (!activa) throw new Error("No hay una pestaña activa en Brave.");
+  await chrome.tabs.update(activa.id, {url});
+  await chrome.windows.update(ventana.id, {focused: true});
+  return {id: activa.id};
+}
+
 async function ejecutar(orden) {
+  if (orden.accion === "abrir_url") return await abrirUrl(orden.url || "", !!orden.nueva);
   if (orden.accion === "mover_pestana") return await moverPestana(orden.numero);
   const tab = await pestanaActiva();
   if (orden.accion === "leer") {

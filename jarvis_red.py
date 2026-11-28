@@ -96,11 +96,45 @@ def placa_habilitada(name: str, *, leer=interfaces) -> bool:
     raise ValueError(f"No encontré la placa de red «{name}».")
 
 
+# «desactiva el cable Internet», «activa el cable Ethernet» (2026-11-27): iban a la IA (hasta 18 s).
+# El Wi-Fi ya tiene su orden (``jarvis_ajustes``, radio de Windows).
+_ORDEN_CABLE = re.compile(
+    r"^(?P<verbo>desactiva|desactive|desactivar|deshabilita|deshabilite|deshabilitar|desconecta|desconecte|"
+    r"desconectar|apaga|apague|apagar|activa|active|activar|habilita|habilite|habilitar|conecta|conecte|"
+    r"conectar|enciende|encienda|encender|prende|prenda|prender|reactiva|reactivar)\s+"
+    r"(?:el\s+|la\s+)?(?:cable(?:\s+de)?(?:\s+(?:internet|ethernet|red|lan))?"
+    r"|(?:placa|tarjeta|adaptador)\s+de\s+red(?:\s+(?:por\s+cable|ethernet|del\s+cable))?"
+    r"|ethernet|red\s+por\s+cable|internet\s+por\s+cable)$"
+)
+
+
+def detectar(texto: str) -> tuple[str, dict[str, object]] | None:
+    """Orden directa para la placa de red por cable → ``network_adapter`` (siempre pide confirmación)."""
+    from jarvis_commands import _normalizar_consulta
+
+    match = _ORDEN_CABLE.fullmatch(_normalizar_consulta(texto))
+    if match is None:
+        return None
+    apagar = match.group("verbo").startswith(("des", "apag"))
+    return "network_adapter", {"name": "Ethernet", "state": "off" if apagar else "on"}
+
+
+def _buscar_placa(name: str, placas: list[Interfaz]) -> Interfaz | None:
+    exacta = next((p for p in placas if p.nombre.casefold() == (name or "").casefold()), None)
+    if exacta is not None:
+        return exacta
+    # «Ethernet» sin una placa con ese nombre (p. ej. «Ethernet 2»): la primera por cable.
+    if (name or "").casefold() in ("ethernet", "cable"):
+        cables = [p for p in placas if not _WIFI.search(p.nombre)]
+        return next((p for p in cables if p.conectada), cables[0] if cables else None)
+    return None
+
+
 def cambiar_placa(name: str, state: str, *, leer=interfaces, netsh=_netsh, dormir=time.sleep) -> str:
     """Handler de ``network_adapter``: habilita (on) o deshabilita (off) una placa física (2026-11-20)."""
     if state not in ("on", "off"):
         raise ValueError("state debe ser on u off.")
-    placa = next((p for p in leer() if p.nombre.casefold() == (name or "").casefold()), None)
+    placa = _buscar_placa(name, leer())
     if placa is None:
         raise ValueError(f"No encontré la placa de red «{name}» (solo las físicas: Ethernet, Wi-Fi).")
     activar = state == "on"

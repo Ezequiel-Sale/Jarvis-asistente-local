@@ -1,6 +1,7 @@
 import ipaddress
 import json
 import re
+import time
 import unicodedata
 from urllib.parse import quote_plus, urlsplit
 
@@ -277,14 +278,21 @@ def obtener_primer_video_youtube(consulta: str, indice: int = 1) -> str:
     if indice < 1:
         raise ValueError("El número de resultado debe ser mayor que cero.")
     url = f"https://www.youtube.com/results?search_query={quote_plus(consulta)}"
-    response = requests.get(
-        url,
-        headers={"User-Agent": "Mozilla/5.0"},
-        timeout=15,
-    )
-    response.raise_for_status()
-
-    match = re.search(r"(?:var\s+)?ytInitialData\s*=\s*", response.text)
+    # 2026-11-28: a veces YouTube responde otra página (consentimiento, prueba de robot) sin ytInitialData:
+    # se reintenta con encabezados de navegador y la cookie de consentimiento.
+    encabezados = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/130.0 Safari/537.36",
+        "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+    }
+    match = None
+    for intento in range(3):
+        response = requests.get(url, headers=encabezados, cookies={"CONSENT": "YES+1", "SOCS": "CAI"}, timeout=15)
+        response.raise_for_status()
+        match = re.search(r"(?:var\s+)?ytInitialData\s*=\s*", response.text)
+        if match is not None:
+            break
+        time.sleep(0.4 * (intento + 1))
     if match is None:
         raise ValueError("YouTube no devolvió los datos de resultados esperados.")
     initial_data, _ = json.JSONDecoder().raw_decode(response.text, match.end())
@@ -912,7 +920,8 @@ _DISABLE_MONITOR = re.compile(
     + _MONITOR + _NUM_MONITOR + r"$"
 )
 _EXTEND_MONITOR = re.compile(
-    r"^(?:extiende|extender|activa|activar|enciende|encender|habilita|habilitar|reactiva|reactivar)"
+    # «extiendo»/«extienda»: así lo transcribe Whisper (2026-11-27: fue a la IA, que tardó 20 s y no hizo nada).
+    r"^(?:extiende|extender|extiendo|extienda|activa|activar|enciende|encender|habilita|habilitar|reactiva|reactivar)"
     r"(?:\s+(?:el\s+escritorio|la\s+pantalla))?\s+(?:a\s+|al\s+|en\s+)?"
     + r"(?:el\s+|la\s+)?(?:monitor|pantalla)\s+(?:numero\s+)?" + _NUM_MONITOR + r"$"
 )
@@ -942,6 +951,8 @@ _PRIMARY_MONITOR = (
         r"^(?:que\s+)?" + _MONITOR + _NUM_MONITOR
         + r"\s+(?:sea|pase\s+a\s+ser)\s+(?:el\s+|la\s+)?(?:(?:monitor|pantalla)\s+)?principal$"
     ),
+    # «Monitor 1 como principal» (2026-11-27: la IA contestó sin cambiar nada).
+    re.compile(r"^" + _MONITOR + _NUM_MONITOR + r"\s+(?:como|de)\s+(?:el\s+|la\s+)?(?:(?:monitor|pantalla)\s+)?principal$"),
 )
 
 
@@ -990,7 +1001,9 @@ _DONDE_MONITOR = (r"(?:en|sobre|de|del)\s+(?:el\s+|la\s+)?(?:(?P<tv>" + _PANTALL
 _ACOMODAR = re.compile(
     r"^(?:" + _DONDE_MONITOR.replace("?P<tv>", "?P<tv1>").replace("?P<num>", "?P<num1>") + r"\s+)?"
     r"(?:coloca|colocame|pon|ponme|acomoda|acomodame|ubica|ubicame|mueve|manda|lleva|deja|organiza|"
-    r"posiciona|posicioname|situa|situame|alinea|tira|pasa)\s+"
+    r"posiciona|posicioname|situa|situame|alinea|tira|pasa|"
+    # Infinitivos: «Mover WhatsApp a la izquierda del monitor 2» iba a la IA (2026-11-27).
+    r"colocar|poner|acomodar|ubicar|mover|mandar|llevar|dejar|posicionar|situar|alinear|pasar)\s+"
     r"(?P<cuerpo>.+?)(?:\s+" + _DONDE_MONITOR.replace("?P<tv>", "?P<tv2>").replace("?P<num>", "?P<num2>")
     + r")?$"
 )
@@ -1116,7 +1129,8 @@ _CAMBIA_A_VENTANA = re.compile(
     r"^(?:cambia|cambiate|pasa|pasate|ve|ir|vamos)\s+a\s+la\s+ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?(?P<app>.+)$"
 )
 _AL_FRENTE = re.compile(
-    r"^(?:trae|traeme|pon|ponme)\s+(?:(?:la|el)\s+)?(?:ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?"
+    # «traer»/«poner»: «Traer WhatsApp al frente» iba a la IA, que tardó 20 s (2026-11-27).
+    r"^(?:trae|traeme|traer|pon|ponme|poner)\s+(?:(?:la|el)\s+)?(?:ventana\s+(?:de\s+(?:la\s+|el\s+)?|del\s+)?)?"
     r"(?P<app>.+?)\s+(?:al\s+frente|adelante|encima|en\s+primer\s+plano)$"
 )
 # Traer al frente sí vale para el navegador (no tiene frase propia para eso): «pon Brave al frente»

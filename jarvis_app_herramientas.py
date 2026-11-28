@@ -372,6 +372,10 @@ class HerramientasMixin:
         if window or private:  # 2026-11-20: ventana nueva (o de incógnito) en la sesión abierta
             subprocess.Popen([str(brave), "--incognito" if private else "--new-window"], shell=False)
             return "Abrí una ventana de incógnito en Brave." if private else "Abrí una ventana nueva en Brave."
+        import jarvis_brave
+
+        if jarvis_brave.abrir_url("", nueva=True):  # sin teclado: anda aunque haya pantalla completa
+            return "Abrí una pestaña nueva en Brave."
         if not abrir_nueva_pestana_brave(brave):
             subprocess.Popen([str(brave), "about:blank"], shell=False)
         return "Abrí una pestaña nueva en Brave."
@@ -388,6 +392,10 @@ class HerramientasMixin:
             monitor = self._monitor_por_nombre(screen_name)
         if monitor is not None:
             return self._navegar_en_monitor(url, brave, monitor, new_tab)
+        import jarvis_brave
+
+        if jarvis_brave.abrir_url(url, nueva=new_tab):  # sin teclado (ver jarvis_brave.abrir_url)
+            return f"Abrí {url} en una pestaña nueva de Brave." if new_tab else f"Navegué a {url} en Brave."
         if new_tab:
             from jarvis_system import interactuar_con_ventana_brave
 
@@ -464,14 +472,31 @@ class HerramientasMixin:
             raise FileNotFoundError(
                 "No encontré Brave. Instálalo o agrega brave.exe al PATH."
             )
+        import jarvis_musica_favorita
+
+        # «mi música favorita» → lo que dice tu recuerdo (o lo que más buscaste), al momento de buscar.
+        query, origen = jarvis_musica_favorita.resolver(query)
+        if origen:
+            logging.info("«Música favorita» resuelta desde %s.", origen)
         if play_index is None:
             url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
             result = f"Abrí la búsqueda de «{query}» en YouTube."
         else:
-            video_id = obtener_primer_video_youtube(query, play_index)
-            url = f"https://www.youtube.com/watch?v={video_id}&autoplay=1"
-            result = f"Abrí el resultado {play_index} de «{query}» en YouTube."
-        if not navegar_en_ventana_brave(url, brave):
+            try:
+                video_id = obtener_primer_video_youtube(query, play_index)
+                url = f"https://www.youtube.com/watch?v={video_id}&autoplay=1"
+                result = f"Abrí el resultado {play_index} de «{query}» en YouTube."
+            except ValueError as error:
+                if "datos de resultados" not in str(error):
+                    raise
+                # YouTube no dio los resultados: al menos la búsqueda queda abierta (no un error).
+                logging.warning("No pude elegir el resultado de YouTube (%s): abro la búsqueda.", error)
+                url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+                result = (f"Abrí la búsqueda de «{query}» en YouTube (no pude elegir el resultado {play_index}: "
+                          "YouTube no devolvió la lista).")
+        import jarvis_brave
+
+        if not jarvis_brave.abrir_url(url) and not navegar_en_ventana_brave(url, brave):
             subprocess.Popen([str(brave), url], shell=False)
         return result
 

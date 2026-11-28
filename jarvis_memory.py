@@ -42,7 +42,11 @@ _STOP_WORDS = {
 }
 _SAVE_PATTERNS = (
     re.compile(
-        r"^(?:jarvis[,:\s]+)?recuerda(?:\s+que)?\s+(.+?)\s*[.!?]*$",
+        # «recordá / acordate de que / anotá que» (voseo): 2026-11-28 «Recordá que mi música favorita es el
+        # cuarteto» iba a la IA, que no lo guardaba.
+        # «Recordar que …»: así lo transcribió la voz el 2026-11-28 (la IA dijo «lo guardé» sin guardarlo).
+        r"^(?:jarvis[,:\s]+)?(?:recuerda|record[aá]r?|acu[eé]rdate(?:\s+de)?|acord[aá]te(?:\s+de)?)(?:\s+que)?"
+        r"\s+(.+?)\s*[.!?]*$",
         re.IGNORECASE,
     ),
     re.compile(
@@ -52,7 +56,7 @@ _SAVE_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"^(?:jarvis[,:\s]+)?guarda\s+en\s+tu\s+memoria(?:\s+que)?\s+"
+        r"^(?:jarvis[,:\s]+)?(?:guarda|guard[aá]|an[oó]ta|anot[aá])\s+(?:en\s+tu\s+memoria(?:\s+que)?|que)\s+"
         r"(.+?)\s*[.!?]*$",
         re.IGNORECASE,
     ),

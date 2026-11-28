@@ -213,6 +213,23 @@ def disponible() -> bool:
     return _puente is not None and _puente.conectado()
 
 
+def abrir_url(url: str = "", nueva: bool = False, puente: Puente | None = None) -> bool:
+    """Abre ``url`` en una pestaña nueva (o la vacía si no hay url) o en la activa, con la extensión.
+
+    True si la extensión lo hizo; False si no está conectada o falló (quien llama usa el teclado).
+    2026-11-28: con un video en pantalla completa los atajos no llegaban a Brave y la rutina «Eugenia»
+    informó que había abierto YouTube sin abrir nada."""
+    puente = puente or _puente
+    if puente is None or not puente.conectado():
+        return False
+    try:
+        puente.pedir("abrir_url", url=url, nueva=nueva)
+        return True
+    except ErrorBrave as error:
+        logging.warning("La extensión de Brave no pudo abrir la página (%s); uso el teclado.", error)
+        return False
+
+
 def leer(puente: Puente | None = None) -> Lectura:
     puente = puente or _activo()
     datos = puente.pedir("leer", max_texto=MAX_TEXTO)
