@@ -337,9 +337,12 @@ class JarvisUIMixin:
             anterior = self.__dict__.get("_dpi_aplicado")
             self._dpi_aplicado = dpi
             escala = dpi / 96
-            if abs(float(self.root.winfo_fpixels("1i")) - dpi) > 1:
+            cambia_escala = abs(float(self.root.winfo_fpixels("1i")) - dpi) > 1
+            if cambia_escala:
                 self.root.tk.call("tk", "scaling", dpi / 72)
-            self._refrescar_fuentes(dpi)
+            if cambia_escala or anterior is not None:
+                # Primera vez y Tk ya al DPI del monitor: las fuentes quedan como están (en puntos).
+                self._refrescar_fuentes(dpi)
             contenedor = self.__dict__.get("_sidebar_contenedor")
             if contenedor is not None:
                 contenedor.configure(width=round(250 * escala))
